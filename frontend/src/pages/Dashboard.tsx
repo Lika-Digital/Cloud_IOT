@@ -1,15 +1,10 @@
 import { useEffect } from 'react'
 import { useStore } from '../store'
 import { getPedestals, getPendingSessions, getActiveSessions } from '../api'
-import SocketCard from '../components/pedestal/SocketCard'
-import WaterCard from '../components/pedestal/WaterCard'
-import PendingApprovals from '../components/sessions/PendingApprovals'
-import ActiveSessions from '../components/sessions/ActiveSessions'
-
-const SOCKET_IDS = [1, 2, 3, 4]
+import PedestalView from '../components/pedestal/PedestalView'
 
 export default function Dashboard() {
-  const { pedestals, setPedestals, setPendingSessions, setActiveSessions } = useStore()
+  const { pedestals, setPedestals, setPendingSessions, setActiveSessions, pendingSessions, activeSessions } = useStore()
 
   useEffect(() => {
     getPedestals().then(setPedestals)
@@ -21,6 +16,7 @@ export default function Dashboard() {
 
   return (
     <div>
+      {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-white">Dashboard</h1>
@@ -33,32 +29,29 @@ export default function Dashboard() {
             </p>
           )}
         </div>
+
+        {/* Live session counts */}
+        <div className="flex gap-3">
+          {pendingSessions.length > 0 && (
+            <span className="badge-pending text-sm px-3 py-1">
+              {pendingSessions.length} Pending
+            </span>
+          )}
+          {activeSessions.length > 0 && (
+            <span className="badge-active text-sm px-3 py-1">
+              {activeSessions.length} Active
+            </span>
+          )}
+        </div>
       </div>
 
-      {/* Pending approvals banner */}
-      <PendingApprovals />
-
-      {/* Active sessions */}
-      <ActiveSessions />
-
-      {/* Socket grid */}
+      {/* Pedestal interactive view */}
       {pedestal ? (
-        <>
-          <h2 className="text-lg font-semibold text-gray-300 mb-3">Electricity Sockets</h2>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-            {SOCKET_IDS.map((id) => (
-              <SocketCard key={id} socketId={id} pedestalId={pedestal.id} />
-            ))}
-          </div>
-
-          <h2 className="text-lg font-semibold text-gray-300 mb-3">Water</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <WaterCard pedestalId={pedestal.id} />
-          </div>
-        </>
+        <PedestalView />
       ) : (
         <div className="card text-center py-12 text-gray-500">
-          <p>No pedestal configured. Go to Settings to get started.</p>
+          <p>No pedestal configured.</p>
+          <p className="text-sm mt-1">Go to Settings to get started.</p>
         </div>
       )}
     </div>

@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { useStore } from '../../store'
+import logo from '../../assets/logo.png'
 
 const NAV_ITEMS = [
   { to: '/dashboard', label: 'Dashboard', icon: '⚡' },
@@ -16,9 +17,9 @@ export default function Layout() {
       {/* Sidebar */}
       <aside className="w-56 bg-gray-900 border-r border-gray-800 flex flex-col">
         {/* Logo */}
-        <div className="p-5 border-b border-gray-800">
-          <h1 className="text-lg font-bold text-white">Marina Pedestal</h1>
-          <p className="text-xs text-gray-500 mt-0.5">IoT Dashboard</p>
+        <div className="p-4 border-b border-gray-800">
+          <img src={logo} alt="Company Logo" className="w-full h-12 object-contain rounded-lg" />
+          <p className="text-xs text-gray-500 mt-2 text-center">IoT Dashboard</p>
         </div>
 
         {/* Nav */}
@@ -61,9 +62,7 @@ export default function Layout() {
 function StatusDot({ label, active }: { label: string; active: boolean }) {
   return (
     <div className="flex items-center gap-2 text-xs text-gray-400">
-      <span
-        className={`w-2 h-2 rounded-full ${active ? 'bg-green-400 animate-pulse' : 'bg-gray-600'}`}
-      />
+      <span className={`w-2 h-2 rounded-full ${active ? 'bg-green-400 animate-pulse' : 'bg-gray-600'}`} />
       {label}
       <span className={active ? 'text-green-400' : 'text-gray-600'}>
         {active ? 'Online' : 'Offline'}

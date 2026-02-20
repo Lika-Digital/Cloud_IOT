@@ -1,5 +1,4 @@
 import logging
-import numpy as np
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -24,6 +23,7 @@ class PredictionService:
 
         if len(elec) >= MIN_SESSIONS:
             try:
+                import numpy as np
                 from sklearn.linear_model import LinearRegression
                 X = np.array([[(s.ended_at - s.started_at).total_seconds() / 60] for s in elec])
                 y = np.array([s.energy_kwh for s in elec])
@@ -38,6 +38,7 @@ class PredictionService:
 
         if len(water) >= MIN_SESSIONS:
             try:
+                import numpy as np
                 from sklearn.linear_model import LinearRegression
                 X = np.array([[(s.ended_at - s.started_at).total_seconds() / 60] for s in water])
                 y = np.array([s.water_liters for s in water])
@@ -55,6 +56,7 @@ class PredictionService:
     def predict_electricity(self, duration_minutes: float) -> dict | None:
         if not self._electricity_trained or self._electricity_model is None:
             return None
+        import numpy as np
         X = np.array([[duration_minutes]])
         predicted = float(self._electricity_model.predict(X)[0])
         return {
@@ -67,6 +69,7 @@ class PredictionService:
     def predict_water(self, duration_minutes: float) -> dict | None:
         if not self._water_trained or self._water_model is None:
             return None
+        import numpy as np
         X = np.array([[duration_minutes]])
         predicted = float(self._water_model.predict(X)[0])
         return {

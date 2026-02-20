@@ -75,6 +75,10 @@ interface AppStore {
   // WS connection
   wsConnected: boolean
   setWsConnected: (v: boolean) => void
+
+  // Selected pedestal for detail view
+  selectedPedestalId: number | null
+  setSelectedPedestalId: (id: number | null) => void
 }
 
 export const useStore = create<AppStore>((set) => ({
@@ -144,4 +148,7 @@ export const useStore = create<AppStore>((set) => ({
 
   wsConnected: false,
   setWsConnected: (wsConnected) => set({ wsConnected }),
+
+  selectedPedestalId: null,
+  setSelectedPedestalId: (selectedPedestalId) => set({ selectedPedestalId }),
 }))

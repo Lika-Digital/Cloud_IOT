@@ -16,7 +16,11 @@ const SOCKET_ZONES = [
 
 type ZoneId = number | 'water-left' | 'water-right'
 
-export default function PedestalView() {
+interface PedestalViewProps {
+  pedestalId: number
+}
+
+export default function PedestalView({ pedestalId }: PedestalViewProps) {
   const [selectedZone, setSelectedZone] = useState<ZoneId | null>(null)
 
   return (
@@ -35,6 +39,7 @@ export default function PedestalView() {
             <ZoneButton
               key={zone.id}
               zone={zone}
+              pedestalId={pedestalId}
               isSelected={selectedZone === zone.id}
               onClick={() => setSelectedZone((selectedZone === zone.id ? null : zone.id) as ZoneId | null)}
             />
@@ -48,9 +53,9 @@ export default function PedestalView() {
       {/* Detail panel */}
       <div className="flex-1 min-w-0">
         {selectedZone !== null ? (
-          <SocketDetailPanel zoneId={selectedZone} onClose={() => setSelectedZone(null)} />
+          <SocketDetailPanel zoneId={selectedZone} pedestalId={pedestalId} onClose={() => setSelectedZone(null)} />
         ) : (
-          <AllSessionsOverview />
+          <AllSessionsOverview pedestalId={pedestalId} />
         )}
       </div>
     </div>
@@ -61,10 +66,12 @@ export default function PedestalView() {
 
 function ZoneButton({
   zone,
+  pedestalId,
   isSelected,
   onClick,
 }: {
   zone: (typeof SOCKET_ZONES)[0]
+  pedestalId: number
   isSelected: boolean
   onClick: () => void
 }) {
@@ -74,12 +81,12 @@ function ZoneButton({
   const isWater = zone.type === 'water'
 
   const pending = isWater
-    ? pendingSessions.find((s) => s.type === 'water')
-    : pendingSessions.find((s) => s.socket_id === socketId && s.type === 'electricity')
+    ? pendingSessions.find((s) => s.pedestal_id === pedestalId && s.type === 'water')
+    : pendingSessions.find((s) => s.pedestal_id === pedestalId && s.socket_id === socketId && s.type === 'electricity')
 
   const active = isWater
-    ? activeSessions.find((s) => s.type === 'water')
-    : activeSessions.find((s) => s.socket_id === socketId && s.type === 'electricity')
+    ? activeSessions.find((s) => s.pedestal_id === pedestalId && s.type === 'water')
+    : activeSessions.find((s) => s.pedestal_id === pedestalId && s.socket_id === socketId && s.type === 'electricity')
 
   const status = active ? 'active' : pending ? 'pending' : 'idle'
 
@@ -128,7 +135,7 @@ function ZoneButton({
 
 // ─── Socket Detail Panel ─────────────────────────────────────────────────────
 
-function SocketDetailPanel({ zoneId, onClose }: { zoneId: ZoneId; onClose: () => void }) {
+function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pedestalId: number; onClose: () => void }) {
   const { pendingSessions, activeSessions, socketLiveData, waterLiveData, updateSession } = useStore()
 
   const isWater = zoneId === 'water-left' || zoneId === 'water-right'
@@ -136,12 +143,12 @@ function SocketDetailPanel({ zoneId, onClose }: { zoneId: ZoneId; onClose: () =>
   const zone = SOCKET_ZONES.find((z) => z.id === zoneId)!
 
   const pendingSession = isWater
-    ? pendingSessions.find((s) => s.type === 'water')
-    : pendingSessions.find((s) => s.socket_id === socketId && s.type === 'electricity')
+    ? pendingSessions.find((s) => s.pedestal_id === pedestalId && s.type === 'water')
+    : pendingSessions.find((s) => s.pedestal_id === pedestalId && s.socket_id === socketId && s.type === 'electricity')
 
   const activeSession = isWater
-    ? activeSessions.find((s) => s.type === 'water')
-    : activeSessions.find((s) => s.socket_id === socketId && s.type === 'electricity')
+    ? activeSessions.find((s) => s.pedestal_id === pedestalId && s.type === 'water')
+    : activeSessions.find((s) => s.pedestal_id === pedestalId && s.socket_id === socketId && s.type === 'electricity')
 
   const liveData = !isWater && socketId ? socketLiveData[socketId] : null
 
@@ -236,9 +243,11 @@ function SocketDetailPanel({ zoneId, onClose }: { zoneId: ZoneId; onClose: () =>
 
 // ─── Overview (no zone selected) ─────────────────────────────────────────────
 
-function AllSessionsOverview() {
+function AllSessionsOverview({ pedestalId }: { pedestalId: number }) {
   const { pendingSessions, activeSessions } = useStore()
-  const total = pendingSessions.length + activeSessions.length
+  const pending = pendingSessions.filter((s) => s.pedestal_id === pedestalId)
+  const active  = activeSessions.filter((s) => s.pedestal_id === pedestalId)
+  const total   = pending.length + active.length
 
   return (
     <div className="space-y-4">
@@ -248,7 +257,7 @@ function AllSessionsOverview() {
           <p className="text-gray-500 text-sm">All sockets idle. Click a socket on the pedestal to manage it.</p>
         ) : (
           <div className="space-y-2">
-            {pendingSessions.map((s) => (
+            {pending.map((s) => (
               <div key={s.id} className="flex items-center gap-2 text-sm">
                 <span className="badge-pending">Pending</span>
                 <span className="text-gray-300">
@@ -256,7 +265,7 @@ function AllSessionsOverview() {
                 </span>
               </div>
             ))}
-            {activeSessions.map((s) => (
+            {active.map((s) => (
               <div key={s.id} className="flex items-center gap-2 text-sm">
                 <span className="badge-active">Active</span>
                 <span className="text-gray-300">

@@ -11,7 +11,7 @@ router = APIRouter(prefix="/api/pedestals", tags=["pedestals"])
 
 @router.get("", response_model=list[PedestalResponse])
 def list_pedestals(db: DBSession = Depends(get_db)):
-    return db.query(Pedestal).all()
+    return db.query(Pedestal).order_by(Pedestal.id).all()
 
 
 @router.post("", response_model=PedestalResponse, status_code=201)
@@ -21,6 +21,45 @@ def create_pedestal(body: PedestalCreate, db: DBSession = Depends(get_db)):
     db.commit()
     db.refresh(pedestal)
     return pedestal
+
+
+@router.post("/configure", response_model=list[PedestalResponse])
+def configure_pedestals(
+    count: int = Query(..., ge=1, le=20, description="Number of pedestals to monitor"),
+    db: DBSession = Depends(get_db),
+):
+    """Create or remove pedestals to match the requested count."""
+    existing = db.query(Pedestal).order_by(Pedestal.id).all()
+    existing_count = len(existing)
+
+    if count > existing_count:
+        for i in range(existing_count + 1, count + 1):
+            p = Pedestal(
+                name=f"Pedestal {i}",
+                location=f"Marina Berth {chr(64 + i)}",
+                data_mode="synthetic",
+            )
+            db.add(p)
+        db.commit()
+    elif count < existing_count:
+        # Remove pedestals from the end that have no active/pending sessions
+        to_remove = existing[count:]
+        for p in to_remove:
+            db.delete(p)
+        db.commit()
+
+    # Restart simulator if running with updated pedestal list
+    if simulator_manager.is_running:
+        all_pedestals = db.query(Pedestal).order_by(Pedestal.id).all()
+        pedestal_ids = [p.id for p in all_pedestals]
+        simulator_manager.stop()
+        simulator_manager.start(
+            pedestal_ids=pedestal_ids,
+            broker_host=settings.mqtt_broker_host,
+            broker_port=settings.mqtt_broker_port,
+        )
+
+    return db.query(Pedestal).order_by(Pedestal.id).all()
 
 
 @router.get("/{pedestal_id}", response_model=PedestalResponse)
@@ -56,8 +95,10 @@ def set_mode(
 
     if mode == "synthetic":
         pedestal.data_mode = "synthetic"
+        all_pedestals = db.query(Pedestal).order_by(Pedestal.id).all()
+        pedestal_ids = [p.id for p in all_pedestals]
         simulator_manager.start(
-            pedestal_id=pedestal_id,
+            pedestal_ids=pedestal_ids,
             broker_host=settings.mqtt_broker_host,
             broker_port=settings.mqtt_broker_port,
         )

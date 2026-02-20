@@ -20,6 +20,8 @@ export const createPedestal = (data: { name: string; location?: string }) =>
   api.post<Pedestal>('/pedestals', data).then((r) => r.data)
 export const getSimulatorStatus = (id: number) =>
   api.get<{ running: boolean }>(`/pedestals/${id}/simulator/status`).then((r) => r.data)
+export const configurePedestals = (count: number) =>
+  api.post<Pedestal[]>(`/pedestals/configure`, null, { params: { count } }).then((r) => r.data)
 
 // Sessions
 export const getSessions = (params?: {
@@ -47,6 +49,8 @@ export const getSessionSummary = (pedestal_id?: number) =>
   api.get<SessionSummary>('/analytics/sessions/summary', { params: { pedestal_id } }).then((r) => r.data)
 export const getConsumptionBySocket = (pedestal_id?: number) =>
   api.get('/analytics/consumption/by-socket', { params: { pedestal_id } }).then((r) => r.data)
+export const getConsumptionByPedestal = () =>
+  api.get<PedestalConsumption[]>('/analytics/consumption/by-pedestal').then((r) => r.data)
 
 // Predictions
 export const trainModels = (pedestal_id?: number) =>
@@ -72,6 +76,13 @@ export interface SessionSummary {
   total_energy_kwh: number
   total_water_liters: number
   completed_sessions: number
+}
+
+export interface PedestalConsumption {
+  pedestal_id: number
+  total_energy_kwh: number
+  total_water_liters: number
+  session_count: number
 }
 
 export interface PredictionResult {

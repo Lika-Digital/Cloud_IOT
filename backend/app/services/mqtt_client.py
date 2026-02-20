@@ -12,6 +12,9 @@ TOPICS = [
     "pedestal/+/socket/+/power",
     "pedestal/+/water/flow",
     "pedestal/+/heartbeat",
+    "pedestal/+/sensors/temperature",
+    "pedestal/+/sensors/moisture",
+    "pedestal/+/diagnostics/response",
 ]
 
 

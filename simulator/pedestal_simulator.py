@@ -38,8 +38,9 @@ WATER_INTERVAL     = 2.0
 HEARTBEAT_INTERVAL = 10.0
 SENSOR_INTERVAL    = 15.0
 
-SOCKET_CONTROL_RE = re.compile(r"pedestal/(\d+)/socket/(\d+)/control")
-WATER_CONTROL_RE  = re.compile(r"pedestal/(\d+)/water/control")
+SOCKET_CONTROL_RE   = re.compile(r"pedestal/(\d+)/socket/(\d+)/control")
+WATER_CONTROL_RE    = re.compile(r"pedestal/(\d+)/water/control")
+DIAGNOSTICS_REQ_RE  = re.compile(r"pedestal/(\d+)/diagnostics/request")
 
 
 class VirtualPedestal:
@@ -91,6 +92,7 @@ class PedestalSimulator:
             for pid in self._pedestals:
                 client.subscribe(f"pedestal/{pid}/socket/+/control", qos=1)
                 client.subscribe(f"pedestal/{pid}/water/control", qos=1)
+                client.subscribe(f"pedestal/{pid}/diagnostics/request", qos=1)
             # Publish initial sensor readings immediately on connect
             for pid, vp in self._pedestals.items():
                 vp.last_sensor_time = 0.0  # triggers publish on first tick
@@ -122,6 +124,23 @@ class PedestalSimulator:
             if vp:
                 vp.water_state.on_control(command)
                 logger.info(f"P{pid} Water: {command}")
+
+        elif m := DIAGNOSTICS_REQ_RE.match(topic):
+            pid = int(m.group(1))
+            if pid in self._pedestals:
+                # All sensors OK in simulator — real pedestal would check hardware
+                response = {
+                    "socket_1":    "ok",
+                    "socket_2":    "ok",
+                    "socket_3":    "ok",
+                    "socket_4":    "ok",
+                    "water":       "ok",
+                    "temperature": "ok",
+                    "moisture":    "ok",
+                    "camera":      "ok",
+                }
+                self._pub(f"pedestal/{pid}/diagnostics/response", response)
+                logger.info(f"P{pid} Diagnostics: responded OK to request")
 
     # ─── Main loop ────────────────────────────────────────────────────────────
 

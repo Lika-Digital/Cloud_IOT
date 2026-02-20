@@ -95,6 +95,7 @@ def set_mode(
 
     if mode == "synthetic":
         pedestal.data_mode = "synthetic"
+        pedestal.initialized = False  # reset — real pedestal check no longer valid
         all_pedestals = db.query(Pedestal).order_by(Pedestal.id).all()
         pedestal_ids = [p.id for p in all_pedestals]
         simulator_manager.start(
@@ -104,6 +105,7 @@ def set_mode(
         )
     else:
         pedestal.data_mode = "real"
+        pedestal.initialized = False  # must re-run diagnostics after connecting
         if ip_address:
             pedestal.ip_address = ip_address
         simulator_manager.stop()

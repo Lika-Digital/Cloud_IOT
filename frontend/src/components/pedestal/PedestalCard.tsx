@@ -40,6 +40,15 @@ export default function PedestalCard({ pedestal, onClick }: PedestalCardProps) {
           >
             {pedestal.data_mode}
           </span>
+          {pedestal.data_mode === 'real' && (
+            <span className={`text-xs px-2 py-0.5 rounded-full border ${
+              pedestal.initialized
+                ? 'bg-green-900/30 text-green-400 border-green-700/40'
+                : 'bg-amber-900/30 text-amber-400 border-amber-700/40'
+            }`}>
+              {pedestal.initialized ? '✓ Ready' : '○ Not initialized'}
+            </span>
+          )}
           {hasAlarm && (
             <span className="text-xs px-2 py-0.5 rounded-full bg-red-900/50 text-red-400 border border-red-700/50 animate-pulse">
               ALARM

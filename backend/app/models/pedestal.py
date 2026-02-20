@@ -1,4 +1,4 @@
-from sqlalchemy import String, Integer
+from sqlalchemy import String, Integer, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ..database import Base
 
@@ -12,6 +12,7 @@ class Pedestal(Base):
     ip_address: Mapped[str] = mapped_column(String(50), nullable=True)
     camera_ip: Mapped[str] = mapped_column(String(50), nullable=True)
     data_mode: Mapped[str] = mapped_column(String(20), default="synthetic")
+    initialized: Mapped[bool] = mapped_column(Boolean, default=False)
 
     sessions: Mapped[list["Session"]] = relationship(  # noqa: F821
         "Session", back_populates="pedestal"

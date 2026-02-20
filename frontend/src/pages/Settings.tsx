@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import ConfigPanel from '../components/config/ConfigPanel'
+import FieldHelp from '../components/config/FieldHelp'
 import { getPedestals, configurePedestals } from '../api'
 import { useStore } from '../store'
 
@@ -58,6 +59,7 @@ export default function Settings() {
                   onChange={(e) => setPedestalCount(Math.max(1, Math.min(20, Number(e.target.value))))}
                   className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm"
                 />
+                <FieldHelp example="1 – 20" hint="Whole number · new pedestals are auto-created" />
               </div>
               <div className="text-center">
                 <p className="text-xs text-gray-500 mb-1">Currently</p>

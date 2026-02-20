@@ -52,6 +52,12 @@ export const getConsumptionBySocket = (pedestal_id?: number) =>
 export const getConsumptionByPedestal = () =>
   api.get<PedestalConsumption[]>('/analytics/consumption/by-pedestal').then((r) => r.data)
 
+// Diagnostics
+export const runDiagnostics = (pedestalId: number) =>
+  api.post<DiagnosticsResult>(`/pedestals/${pedestalId}/diagnostics/run`).then((r) => r.data)
+export const resetInitialization = (pedestalId: number) =>
+  api.post<{ pedestal_id: number; initialized: boolean }>(`/pedestals/${pedestalId}/diagnostics/reset`).then((r) => r.data)
+
 // Camera
 export const getCameraDetections = (pedestalId: number) =>
   api.get<CameraDetectionResponse>(`/camera/${pedestalId}/detections`).then((r) => r.data)
@@ -88,6 +94,14 @@ export interface PedestalConsumption {
   total_energy_kwh: number
   total_water_liters: number
   session_count: number
+}
+
+export interface DiagnosticsResult {
+  pedestal_id: number
+  sensors: Record<string, 'ok' | 'fail' | 'missing'>
+  all_ok: boolean
+  initialized: boolean
+  error: string | null
 }
 
 export interface DetectionBox {

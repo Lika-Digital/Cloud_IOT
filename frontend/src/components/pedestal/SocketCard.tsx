@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import { useStore } from '../../store'
 import { allowSession, denySession, stopSession } from '../../api'
 
@@ -121,5 +122,3 @@ function SessionTimer({ startedAt }: { startedAt: string }) {
     </div>
   )
 }
-
-import { useState, useEffect } from 'react'

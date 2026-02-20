@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { usePrediction } from '../../hooks/usePrediction'
 import {
   ResponsiveContainer,
@@ -16,9 +16,9 @@ export default function PredictionPanel() {
   const [sessionType, setSessionType] = useState<'electricity' | 'water'>('electricity')
   const [duration, setDuration] = useState(30)
 
-  useState(() => {
+  useEffect(() => {
     checkStatus()
-  })
+  }, [])
 
   // Generate forecast curve data (0 to 2x input duration)
   const forecastData =

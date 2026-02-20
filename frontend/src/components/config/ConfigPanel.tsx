@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getPedestals, setMode, getSimulatorStatus } from '../../api'
+import { getPedestals, setMode, getSimulatorStatus, updatePedestal as apiUpdatePedestal } from '../../api'
 import { useStore } from '../../store'
 import type { Pedestal } from '../../store'
 
@@ -9,6 +9,7 @@ export default function ConfigPanel() {
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [mode, setModeState] = useState<'synthetic' | 'real'>('synthetic')
   const [ipAddress, setIpAddress] = useState('')
+  const [cameraIp, setCameraIp] = useState('')
   const [simRunning, setSimRunning] = useState(false)
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
@@ -21,6 +22,7 @@ export default function ConfigPanel() {
         setSelectedId(data[0].id)
         setModeState(data[0].data_mode as 'synthetic' | 'real')
         setIpAddress(data[0].ip_address ?? '')
+        setCameraIp(data[0].camera_ip ?? '')
       }
     })
   }, [])
@@ -42,7 +44,14 @@ export default function ConfigPanel() {
     setLoading(true)
     setMessage(null)
     try {
-      const updated = await setMode(selectedId, mode, mode === 'real' ? ipAddress : undefined)
+      // Set mode (and pedestal IP for real mode)
+      let updated = await setMode(selectedId, mode, mode === 'real' ? ipAddress : undefined)
+
+      // Save camera IP separately if changed
+      if (cameraIp !== (updated.camera_ip ?? '')) {
+        updated = await apiUpdatePedestal(selectedId, { camera_ip: cameraIp || undefined })
+      }
+
       updatePedestal(updated)
       setPedestalsList((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
 
@@ -78,6 +87,7 @@ export default function ConfigPanel() {
               if (p) {
                 setModeState(p.data_mode as 'synthetic' | 'real')
                 setIpAddress(p.ip_address ?? '')
+                setCameraIp(p.camera_ip ?? '')
               }
             }}
           >
@@ -140,6 +150,21 @@ export default function ConfigPanel() {
           </p>
         </div>
       )}
+
+      {/* Camera IP — available in both modes */}
+      <div>
+        <label className="block text-sm text-gray-400 mb-1">Camera IP Address</label>
+        <input
+          type="text"
+          placeholder="e.g. 192.168.1.20"
+          value={cameraIp}
+          onChange={(e) => setCameraIp(e.target.value)}
+          className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600"
+        />
+        <p className="text-xs text-gray-500 mt-1">
+          IP camera for live stream (real mode). In synthetic mode the demo video is used.
+        </p>
+      </div>
 
       {/* Simulator status */}
       {mode === 'synthetic' && (

@@ -10,7 +10,7 @@ from .database import init_db, SessionLocal
 from .models.pedestal import Pedestal
 from .services.mqtt_client import mqtt_service
 from .services.simulator_manager import simulator_manager
-from .routers import pedestals, sessions, controls, analytics, predictions, websocket
+from .routers import pedestals, sessions, controls, analytics, predictions, websocket, camera
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -69,6 +69,7 @@ app.include_router(controls.router)
 app.include_router(analytics.router)
 app.include_router(predictions.router)
 app.include_router(websocket.router)
+app.include_router(camera.router)
 
 
 @app.get("/health")

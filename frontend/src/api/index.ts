@@ -52,6 +52,11 @@ export const getConsumptionBySocket = (pedestal_id?: number) =>
 export const getConsumptionByPedestal = () =>
   api.get<PedestalConsumption[]>('/analytics/consumption/by-pedestal').then((r) => r.data)
 
+// Camera
+export const getCameraDetections = (pedestalId: number) =>
+  api.get<CameraDetectionResponse>(`/camera/${pedestalId}/detections`).then((r) => r.data)
+export const getCameraStreamUrl = (pedestalId: number) => `/api/camera/${pedestalId}/stream`
+
 // Predictions
 export const trainModels = (pedestal_id?: number) =>
   api.post('/predictions/train', null, { params: { pedestal_id } }).then((r) => r.data)
@@ -83,6 +88,26 @@ export interface PedestalConsumption {
   total_energy_kwh: number
   total_water_liters: number
   session_count: number
+}
+
+export interface DetectionBox {
+  label: string
+  confidence: number
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+}
+
+export interface DetectionFrame {
+  time_s: number
+  detections: DetectionBox[]
+}
+
+export interface CameraDetectionResponse {
+  pedestal_id: number
+  mode: string
+  frames: DetectionFrame[]
 }
 
 export interface PredictionResult {

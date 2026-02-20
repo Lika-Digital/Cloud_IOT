@@ -4,6 +4,41 @@ import math
 import time
 
 
+class TemperatureGenerator:
+    """
+    Simulates pedestal enclosure temperature.
+    Baseline 25°C, rises when sockets are active, drops when idle.
+    Range 20–70°C. Alarm threshold is 50°C.
+    """
+
+    def __init__(self):
+        self._value = random.uniform(22.0, 30.0)
+
+    def next_reading(self, active_socket_count: int = 0) -> dict:
+        # Heat up with load, cool down otherwise
+        target = 25.0 + active_socket_count * 8.0
+        self._value += (target - self._value) * 0.05 + random.gauss(0, 0.5)
+        self._value = max(20.0, min(70.0, self._value))
+        return {"value": round(self._value, 1)}
+
+
+class MoistureGenerator:
+    """
+    Simulates enclosure moisture/humidity.
+    Range 60–95%. Rises when water is flowing, falls otherwise.
+    Alarm threshold is 90%.
+    """
+
+    def __init__(self):
+        self._value = random.uniform(62.0, 75.0)
+
+    def next_reading(self, water_active: bool = False) -> dict:
+        target = 88.0 if water_active else 65.0
+        self._value += (target - self._value) * 0.03 + random.gauss(0, 0.4)
+        self._value = max(60.0, min(95.0, self._value))
+        return {"value": round(self._value, 1)}
+
+
 class PowerGenerator:
     """Simulates realistic power consumption for a socket."""
 

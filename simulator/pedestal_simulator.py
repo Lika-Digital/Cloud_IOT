@@ -24,7 +24,10 @@ from datetime import datetime, timezone
 import paho.mqtt.client as mqtt
 
 sys.path.insert(0, str(__file__).replace("pedestal_simulator.py", ""))
-from generators import PowerGenerator, WaterGenerator, SocketStateManager, WaterStateManager
+from generators import (
+    PowerGenerator, WaterGenerator, SocketStateManager, WaterStateManager,
+    TemperatureGenerator, MoistureGenerator,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [SIM] %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -33,6 +36,7 @@ TICK_INTERVAL      = 0.5
 POWER_INTERVAL     = 2.0
 WATER_INTERVAL     = 2.0
 HEARTBEAT_INTERVAL = 10.0
+SENSOR_INTERVAL    = 15.0
 
 SOCKET_CONTROL_RE = re.compile(r"pedestal/(\d+)/socket/(\d+)/control")
 WATER_CONTROL_RE  = re.compile(r"pedestal/(\d+)/water/control")
@@ -47,9 +51,12 @@ class VirtualPedestal:
         self.water_state      = WaterStateManager()
         self.power_generators = [PowerGenerator(i + 1) for i in range(4)]
         self.water_generator  = WaterGenerator()
+        self.temp_generator   = TemperatureGenerator()
+        self.moist_generator  = MoistureGenerator()
         self.last_power_time  = 0.0
         self.last_water_time  = 0.0
         self.last_heartbeat   = 0.0
+        self.last_sensor_time = 0.0
 
 
 class PedestalSimulator:
@@ -84,6 +91,9 @@ class PedestalSimulator:
             for pid in self._pedestals:
                 client.subscribe(f"pedestal/{pid}/socket/+/control", qos=1)
                 client.subscribe(f"pedestal/{pid}/water/control", qos=1)
+            # Publish initial sensor readings immediately on connect
+            for pid, vp in self._pedestals.items():
+                vp.last_sensor_time = 0.0  # triggers publish on first tick
             logger.info("Subscribed to all control topics")
         else:
             logger.error(f"Connection failed: {reason_code}")
@@ -175,6 +185,20 @@ class PedestalSimulator:
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                             "online": True,
                         })
+
+                    # ── Temperature & Moisture sensors ─────────────────────
+                    if now - vp.last_sensor_time >= SENSOR_INTERVAL:
+                        vp.last_sensor_time = now
+                        active_count = sum(1 for s in vp.socket_states if s.is_active)
+                        water_active = vp.water_state.is_active
+                        self._pub(
+                            f"pedestal/{pid}/sensors/temperature",
+                            vp.temp_generator.next_reading(active_count),
+                        )
+                        self._pub(
+                            f"pedestal/{pid}/sensors/moisture",
+                            vp.moist_generator.next_reading(water_active),
+                        )
 
                 time.sleep(TICK_INTERVAL)
 

@@ -2,19 +2,21 @@ import { useState, useEffect } from 'react'
 import { useStore } from '../../store'
 import { allowSession, denySession, stopSession } from '../../api'
 import pedestalImg from '../../assets/pedestal.jpg'
+import CameraModal from './CameraModal'
 
 // Zone definitions — positions as % of image dimensions
 // Each zone is positioned over the actual socket/pipe on the image
 const SOCKET_ZONES = [
-  { id: 1, label: 'Socket 1', type: 'electricity' as const, color: 'blue',  left: '3%',  top: '37%', size: 52 },
-  { id: 2, label: 'Socket 2', type: 'electricity' as const, color: 'red',   left: '3%',  top: '52%', size: 52 },
-  { id: 3, label: 'Socket 3', type: 'electricity' as const, color: 'blue',  right: '3%', top: '37%', size: 52 },
-  { id: 4, label: 'Socket 4', type: 'electricity' as const, color: 'red',   right: '3%', top: '52%', size: 52 },
-  { id: 'water-left',  label: 'Water L', type: 'water' as const, color: 'gray', left: '4%',  top: '87%', size: 40 },
-  { id: 'water-right', label: 'Water R', type: 'water' as const, color: 'gray', right: '4%', top: '87%', size: 40 },
+  { id: 1,             label: 'Socket 1', type: 'electricity' as const, color: 'blue',  left: '3%',   top: '37%', size: 52 },
+  { id: 2,             label: 'Socket 2', type: 'electricity' as const, color: 'red',   left: '3%',   top: '52%', size: 52 },
+  { id: 3,             label: 'Socket 3', type: 'electricity' as const, color: 'blue',  right: '3%',  top: '37%', size: 52 },
+  { id: 4,             label: 'Socket 4', type: 'electricity' as const, color: 'red',   right: '3%',  top: '52%', size: 52 },
+  { id: 'water-left',  label: 'Water L',  type: 'water'       as const, color: 'gray',  left: '4%',   top: '87%', size: 40 },
+  { id: 'water-right', label: 'Water R',  type: 'water'       as const, color: 'gray',  right: '4%',  top: '87%', size: 40 },
+  { id: 'camera',      label: 'Camera',   type: 'camera'      as const, color: 'black', right: '3%',  top: '10%', size: 38 },
 ]
 
-type ZoneId = number | 'water-left' | 'water-right'
+type ZoneId = number | 'water-left' | 'water-right' | 'camera'
 
 interface PedestalViewProps {
   pedestalId: number
@@ -22,43 +24,87 @@ interface PedestalViewProps {
 
 export default function PedestalView({ pedestalId }: PedestalViewProps) {
   const [selectedZone, setSelectedZone] = useState<ZoneId | null>(null)
+  const [cameraOpen, setCameraOpen] = useState(false)
+
+  const { pedestals, temperatureData, moistureData } = useStore()
+  const pedestal = pedestals.find((p) => p.id === pedestalId)
+
+  const temp = temperatureData[pedestalId]
+  const moist = moistureData[pedestalId]
+
+  const handleZoneClick = (zoneId: ZoneId) => {
+    if (zoneId === 'camera') {
+      setCameraOpen(true)
+      return
+    }
+    setSelectedZone(selectedZone === zoneId ? null : zoneId)
+  }
 
   return (
-    <div className="flex gap-6 items-start">
-      {/* Pedestal image with clickable zones */}
-      <div className="flex-shrink-0">
-        <div className="relative inline-block select-none" style={{ height: 520 }}>
-          <img
-            src={pedestalImg}
-            alt="Pedestal"
-            className="h-full w-auto object-contain rounded-xl shadow-2xl"
-            draggable={false}
-          />
-          {/* Clickable overlay zones */}
-          {SOCKET_ZONES.map((zone) => (
-            <ZoneButton
-              key={zone.id}
-              zone={zone}
-              pedestalId={pedestalId}
-              isSelected={selectedZone === zone.id}
-              onClick={() => setSelectedZone((selectedZone === zone.id ? null : zone.id) as ZoneId | null)}
-            />
-          ))}
-        </div>
-        <p className="text-xs text-gray-500 text-center mt-2">
-          Click a socket or water pipe to manage
-        </p>
-      </div>
+    <>
+      {cameraOpen && pedestal && (
+        <CameraModal
+          pedestalId={pedestalId}
+          dataMode={pedestal.data_mode}
+          cameraIp={pedestal.camera_ip}
+          onClose={() => setCameraOpen(false)}
+        />
+      )}
 
-      {/* Detail panel */}
-      <div className="flex-1 min-w-0">
-        {selectedZone !== null ? (
-          <SocketDetailPanel zoneId={selectedZone} pedestalId={pedestalId} onClose={() => setSelectedZone(null)} />
-        ) : (
-          <AllSessionsOverview pedestalId={pedestalId} />
-        )}
+      <div className="flex gap-6 items-start">
+        {/* Pedestal image with clickable zones */}
+        <div className="flex-shrink-0">
+          <div className="relative inline-block select-none" style={{ height: 520 }}>
+            <img
+              src={pedestalImg}
+              alt="Pedestal"
+              className="h-full w-auto object-contain rounded-xl shadow-2xl"
+              draggable={false}
+            />
+            {/* Clickable overlay zones */}
+            {SOCKET_ZONES.map((zone) => (
+              <ZoneButton
+                key={zone.id}
+                zone={zone}
+                pedestalId={pedestalId}
+                isSelected={selectedZone === zone.id}
+                onClick={() => handleZoneClick(zone.id as ZoneId)}
+              />
+            ))}
+          </div>
+          <p className="text-xs text-gray-500 text-center mt-2">
+            Click sockets, water pipes, or camera to manage
+          </p>
+
+          {/* Sensor readings bar */}
+          <div className="flex gap-3 mt-3 justify-center">
+            <SensorBadge
+              icon="🌡️"
+              label="Temp"
+              value={temp ? `${temp.value}°C` : '—'}
+              alarm={temp?.alarm ?? false}
+              alarmText=">50°C"
+            />
+            <SensorBadge
+              icon="💧"
+              label="Moisture"
+              value={moist ? `${moist.value}%` : '—'}
+              alarm={moist?.alarm ?? false}
+              alarmText=">90%"
+            />
+          </div>
+        </div>
+
+        {/* Detail panel */}
+        <div className="flex-1 min-w-0">
+          {selectedZone !== null ? (
+            <SocketDetailPanel zoneId={selectedZone} pedestalId={pedestalId} onClose={() => setSelectedZone(null)} />
+          ) : (
+            <AllSessionsOverview pedestalId={pedestalId} />
+          )}
+        </div>
       </div>
-    </div>
+    </>
   )
 }
 
@@ -79,28 +125,33 @@ function ZoneButton({
 
   const socketId = typeof zone.id === 'number' ? zone.id : null
   const isWater = zone.type === 'water'
+  const isCamera = zone.type === 'camera'
 
-  const pending = isWater
-    ? pendingSessions.find((s) => s.pedestal_id === pedestalId && s.type === 'water')
+  const pending = isCamera || isWater
+    ? (!isCamera ? pendingSessions.find((s) => s.pedestal_id === pedestalId && s.type === 'water') : undefined)
     : pendingSessions.find((s) => s.pedestal_id === pedestalId && s.socket_id === socketId && s.type === 'electricity')
 
-  const active = isWater
-    ? activeSessions.find((s) => s.pedestal_id === pedestalId && s.type === 'water')
+  const active = isCamera || isWater
+    ? (!isCamera ? activeSessions.find((s) => s.pedestal_id === pedestalId && s.type === 'water') : undefined)
     : activeSessions.find((s) => s.pedestal_id === pedestalId && s.socket_id === socketId && s.type === 'electricity')
 
   const status = active ? 'active' : pending ? 'pending' : 'idle'
 
-  const ringColor = {
-    active: 'ring-green-400 shadow-green-400/60',
-    pending: 'ring-amber-400 shadow-amber-400/60',
-    idle: 'ring-gray-600 shadow-transparent',
-  }[status]
+  const ringColor = isCamera
+    ? 'ring-gray-500 shadow-transparent'
+    : {
+        active: 'ring-green-400 shadow-green-400/60',
+        pending: 'ring-amber-400 shadow-amber-400/60',
+        idle: 'ring-gray-600 shadow-transparent',
+      }[status]
 
-  const bgColor = {
-    active: 'bg-green-500/30',
-    pending: 'bg-amber-500/30',
-    idle: 'bg-white/10',
-  }[status]
+  const bgColor = isCamera
+    ? 'bg-black/70'
+    : {
+        active: 'bg-green-500/30',
+        pending: 'bg-amber-500/30',
+        idle: 'bg-white/10',
+      }[status]
 
   const posStyle: React.CSSProperties = {
     position: 'absolute',
@@ -125,10 +176,13 @@ function ZoneButton({
         rounded-full border-2 cursor-pointer transition-all duration-200
         ring-2 shadow-lg ${ringColor} ${bgColor}
         ${isSelected ? 'scale-110 ring-4' : 'hover:scale-105'}
-        ${status === 'pending' ? 'animate-pulse' : ''}
+        ${status === 'pending' && !isCamera ? 'animate-pulse' : ''}
       `}
     >
-      <span className="sr-only">{zone.label}</span>
+      {isCamera && (
+        <span className="flex items-center justify-center w-full h-full text-white text-xs">📷</span>
+      )}
+      {!isCamera && <span className="sr-only">{zone.label}</span>}
     </button>
   )
 }
@@ -139,7 +193,11 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
   const { pendingSessions, activeSessions, socketLiveData, waterLiveData, updateSession } = useStore()
 
   const isWater = zoneId === 'water-left' || zoneId === 'water-right'
+  const isCamera = zoneId === 'camera'
   const socketId = typeof zoneId === 'number' ? zoneId : null
+
+  // Camera zone is handled by modal; this panel shouldn't appear for it
+  if (isCamera) return null
   const zone = SOCKET_ZONES.find((z) => z.id === zoneId)!
 
   const pendingSession = isWater
@@ -293,6 +351,37 @@ function LiveMetric({ label, value, big }: { label: string; value: string; big?:
     <div className="flex justify-between items-center">
       <span className="text-gray-400 text-sm">{label}</span>
       <span className={`font-mono font-bold ${big ? 'text-2xl text-white' : 'text-gray-200'}`}>{value}</span>
+    </div>
+  )
+}
+
+function SensorBadge({
+  icon,
+  label,
+  value,
+  alarm,
+  alarmText,
+}: {
+  icon: string
+  label: string
+  value: string
+  alarm: boolean
+  alarmText: string
+}) {
+  return (
+    <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm border ${
+      alarm
+        ? 'bg-red-900/30 border-red-700/50 text-red-300'
+        : 'bg-gray-800 border-gray-700 text-gray-300'
+    }`}>
+      <span>{icon}</span>
+      <span className="text-gray-400 text-xs">{label}</span>
+      <span className="font-mono font-bold">{value}</span>
+      {alarm && (
+        <span className="text-xs bg-red-600 text-white px-1.5 py-0.5 rounded-full animate-pulse">
+          ALARM {alarmText}
+        </span>
+      )}
     </div>
   )
 }

@@ -10,6 +10,7 @@ class Pedestal(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     location: Mapped[str] = mapped_column(String(200), nullable=True)
     ip_address: Mapped[str] = mapped_column(String(50), nullable=True)
+    camera_ip: Mapped[str] = mapped_column(String(50), nullable=True)
     data_mode: Mapped[str] = mapped_column(String(20), default="synthetic")
 
     sessions: Mapped[list["Session"]] = relationship(  # noqa: F821

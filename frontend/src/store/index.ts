@@ -7,7 +7,14 @@ export interface Pedestal {
   name: string
   location: string | null
   ip_address: string | null
+  camera_ip: string | null
   data_mode: 'synthetic' | 'real'
+}
+
+export interface SensorReading {
+  value: number
+  alarm: boolean
+  timestamp: string
 }
 
 export interface Session {
@@ -67,6 +74,11 @@ interface AppStore {
   setSocketLiveData: (socketId: number, data: SocketLiveData) => void
   waterLiveData: { lpm: number; total_liters: number; lastUpdated: string } | null
   setWaterLiveData: (data: { lpm: number; total_liters: number; lastUpdated: string }) => void
+
+  // Sensor data per pedestal
+  temperatureData: Record<number, SensorReading>
+  moistureData: Record<number, SensorReading>
+  setSensorReading: (type: 'temperature' | 'moisture', pedestalId: number, reading: SensorReading) => void
 
   // Heartbeat
   pedestalOnline: boolean
@@ -142,6 +154,15 @@ export const useStore = create<AppStore>((set) => ({
 
   waterLiveData: null,
   setWaterLiveData: (data) => set({ waterLiveData: data }),
+
+  temperatureData: {},
+  moistureData: {},
+  setSensorReading: (type, pedestalId, reading) =>
+    set((s) =>
+      type === 'temperature'
+        ? { temperatureData: { ...s.temperatureData, [pedestalId]: reading } }
+        : { moistureData: { ...s.moistureData, [pedestalId]: reading } }
+    ),
 
   pedestalOnline: false,
   setOnline: (online) => set({ pedestalOnline: online }),

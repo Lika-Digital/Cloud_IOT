@@ -6,7 +6,7 @@ interface PedestalCardProps {
 }
 
 export default function PedestalCard({ pedestal, onClick }: PedestalCardProps) {
-  const { pendingSessions, activeSessions } = useStore()
+  const { pendingSessions, activeSessions, temperatureData, moistureData } = useStore()
 
   const pending = pendingSessions.filter((s) => s.pedestal_id === pedestal.id)
   const active  = activeSessions.filter((s) => s.pedestal_id === pedestal.id)
@@ -14,11 +14,15 @@ export default function PedestalCard({ pedestal, onClick }: PedestalCardProps) {
   const hasPending = pending.length > 0
   const hasActive  = active.length > 0
 
+  const temp  = temperatureData[pedestal.id]
+  const moist = moistureData[pedestal.id]
+  const hasAlarm = (temp?.alarm || moist?.alarm) ?? false
+
   return (
     <button
       onClick={onClick}
       className={`card text-left w-full transition-all duration-200 hover:scale-[1.02] hover:border-blue-600/50 active:scale-[0.98]
-        ${hasPending ? 'border-amber-600/50' : hasActive ? 'border-green-600/50' : 'border-gray-800'}
+        ${hasAlarm ? 'border-red-600/60' : hasPending ? 'border-amber-600/50' : hasActive ? 'border-green-600/50' : 'border-gray-800'}
       `}
     >
       {/* Header */}
@@ -27,20 +31,43 @@ export default function PedestalCard({ pedestal, onClick }: PedestalCardProps) {
           <h3 className="font-bold text-white text-lg">{pedestal.name}</h3>
           <p className="text-gray-500 text-sm">{pedestal.location ?? '—'}</p>
         </div>
-        <span className={`text-xs px-2 py-1 rounded-full border
-          ${pedestal.data_mode === 'synthetic'
-            ? 'bg-blue-900/30 text-blue-400 border-blue-700/40'
-            : 'bg-green-900/30 text-green-400 border-green-700/40'
-          }`}
-        >
-          {pedestal.data_mode}
-        </span>
+        <div className="flex flex-col items-end gap-1">
+          <span className={`text-xs px-2 py-1 rounded-full border
+            ${pedestal.data_mode === 'synthetic'
+              ? 'bg-blue-900/30 text-blue-400 border-blue-700/40'
+              : 'bg-green-900/30 text-green-400 border-green-700/40'
+            }`}
+          >
+            {pedestal.data_mode}
+          </span>
+          {hasAlarm && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-red-900/50 text-red-400 border border-red-700/50 animate-pulse">
+              ALARM
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Symbolic pedestal icon */}
       <div className="flex justify-center mb-4">
-        <PedestalIcon pending={hasPending} active={hasActive} />
+        <PedestalIcon pending={hasPending} active={hasActive} alarm={hasAlarm} />
       </div>
+
+      {/* Sensor readings */}
+      {(temp || moist) && (
+        <div className="flex gap-2 mb-3">
+          {temp && (
+            <div className={`flex-1 text-center text-xs py-1 rounded-lg ${temp.alarm ? 'bg-red-900/30 text-red-300' : 'bg-gray-800 text-gray-400'}`}>
+              🌡️ {temp.value}°C{temp.alarm && ' ⚠'}
+            </div>
+          )}
+          {moist && (
+            <div className={`flex-1 text-center text-xs py-1 rounded-lg ${moist.alarm ? 'bg-red-900/30 text-red-300' : 'bg-gray-800 text-gray-400'}`}>
+              💧 {moist.value}%{moist.alarm && ' ⚠'}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Session counts */}
       <div className="grid grid-cols-2 gap-2">
@@ -67,9 +94,11 @@ export default function PedestalCard({ pedestal, onClick }: PedestalCardProps) {
   )
 }
 
-function PedestalIcon({ pending, active }: { pending: boolean; active: boolean }) {
-  const color = pending ? '#f59e0b' : active ? '#22c55e' : '#4b5563'
-  const glow  = pending
+function PedestalIcon({ pending, active, alarm }: { pending: boolean; active: boolean; alarm: boolean }) {
+  const color = alarm ? '#ef4444' : pending ? '#f59e0b' : active ? '#22c55e' : '#4b5563'
+  const glow  = alarm
+    ? 'drop-shadow(0 0 8px rgba(239,68,68,0.7))'
+    : pending
     ? 'drop-shadow(0 0 8px rgba(245,158,11,0.6))'
     : active
     ? 'drop-shadow(0 0 8px rgba(34,197,94,0.6))'

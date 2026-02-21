@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useStore } from '../../store'
+import { useAuthStore } from '../../store/authStore'
 import { allowSession, denySession, stopSession } from '../../api'
 import pedestalImg from '../../assets/pedestal.jpg'
 import CameraModal from './CameraModal'
@@ -191,6 +192,8 @@ function ZoneButton({
 
 function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pedestalId: number; onClose: () => void }) {
   const { pendingSessions, activeSessions, socketLiveData, waterLiveData, updateSession } = useStore()
+  const { role } = useAuthStore()
+  const isAdmin = role === 'admin'
 
   const isWater = zoneId === 'water-left' || zoneId === 'water-right'
   const isCamera = zoneId === 'camera'
@@ -258,10 +261,14 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
           <p className="text-xs text-gray-400">
             Started: {new Date(pendingSession.started_at).toLocaleTimeString()}
           </p>
-          <div className="flex gap-3">
-            <button className="btn-success flex-1" onClick={handleAllow}>Allow</button>
-            <button className="btn-danger flex-1" onClick={handleDeny}>Deny</button>
-          </div>
+          {isAdmin ? (
+            <div className="flex gap-3">
+              <button className="btn-success flex-1" onClick={handleAllow}>Allow</button>
+              <button className="btn-danger flex-1" onClick={handleDeny}>Deny</button>
+            </div>
+          ) : (
+            <p className="text-xs text-gray-500 italic">Monitor role — contact an admin to approve</p>
+          )}
         </div>
       )}
 
@@ -283,7 +290,9 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
             )}
             <SessionTimer startedAt={activeSession.started_at} />
           </div>
-          <button className="btn-warning w-full" onClick={handleStop}>Stop Session</button>
+          {isAdmin && (
+            <button className="btn-warning w-full" onClick={handleStop}>Stop Session</button>
+          )}
         </div>
       )}
 

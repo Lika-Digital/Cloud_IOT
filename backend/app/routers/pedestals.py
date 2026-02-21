@@ -5,6 +5,8 @@ from ..models.pedestal import Pedestal
 from ..schemas.pedestal import PedestalCreate, PedestalUpdate, PedestalResponse
 from ..services.simulator_manager import simulator_manager
 from ..config import settings
+from ..auth.dependencies import require_admin, require_any_role
+from ..auth.models import User
 
 router = APIRouter(prefix="/api/pedestals", tags=["pedestals"])
 
@@ -15,7 +17,7 @@ def list_pedestals(db: DBSession = Depends(get_db)):
 
 
 @router.post("", response_model=PedestalResponse, status_code=201)
-def create_pedestal(body: PedestalCreate, db: DBSession = Depends(get_db)):
+def create_pedestal(body: PedestalCreate, db: DBSession = Depends(get_db), _: User = Depends(require_admin)):
     pedestal = Pedestal(**body.model_dump())
     db.add(pedestal)
     db.commit()
@@ -27,6 +29,7 @@ def create_pedestal(body: PedestalCreate, db: DBSession = Depends(get_db)):
 def configure_pedestals(
     count: int = Query(..., ge=1, le=20, description="Number of pedestals to monitor"),
     db: DBSession = Depends(get_db),
+    _: User = Depends(require_admin),
 ):
     """Create or remove pedestals to match the requested count."""
     existing = db.query(Pedestal).order_by(Pedestal.id).all()
@@ -71,7 +74,7 @@ def get_pedestal(pedestal_id: int, db: DBSession = Depends(get_db)):
 
 
 @router.patch("/{pedestal_id}", response_model=PedestalResponse)
-def update_pedestal(pedestal_id: int, body: PedestalUpdate, db: DBSession = Depends(get_db)):
+def update_pedestal(pedestal_id: int, body: PedestalUpdate, db: DBSession = Depends(get_db), _: User = Depends(require_admin)):
     pedestal = db.get(Pedestal, pedestal_id)
     if not pedestal:
         raise HTTPException(status_code=404, detail="Pedestal not found")
@@ -88,6 +91,7 @@ def set_mode(
     mode: str = Query(..., pattern="^(synthetic|real)$"),
     ip_address: str | None = None,
     db: DBSession = Depends(get_db),
+    _: User = Depends(require_admin),
 ):
     pedestal = db.get(Pedestal, pedestal_id)
     if not pedestal:

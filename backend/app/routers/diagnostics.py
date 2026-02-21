@@ -17,13 +17,15 @@ from ..database import get_db
 from ..models.pedestal import Pedestal
 from ..services.diagnostics_manager import diagnostics_manager, EXPECTED_SENSORS
 from ..services.mqtt_client import mqtt_service
+from ..auth.dependencies import require_admin
+from ..auth.models import User
 
 router = APIRouter(prefix="/api/pedestals", tags=["diagnostics"])
 logger = logging.getLogger(__name__)
 
 
 @router.post("/{pedestal_id}/diagnostics/run")
-async def run_diagnostics(pedestal_id: int, db: DBSession = Depends(get_db)):
+async def run_diagnostics(pedestal_id: int, db: DBSession = Depends(get_db), _: User = Depends(require_admin)):
     """
     Send a diagnostics request to the pedestal via MQTT and wait for its response.
 
@@ -89,7 +91,7 @@ async def run_diagnostics(pedestal_id: int, db: DBSession = Depends(get_db)):
 
 
 @router.post("/{pedestal_id}/diagnostics/reset")
-def reset_initialization(pedestal_id: int, db: DBSession = Depends(get_db)):
+def reset_initialization(pedestal_id: int, db: DBSession = Depends(get_db), _: User = Depends(require_admin)):
     """Mark a pedestal as not initialized (e.g. after hardware change)."""
     pedestal = db.get(Pedestal, pedestal_id)
     if not pedestal:

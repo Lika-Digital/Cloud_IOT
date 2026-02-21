@@ -14,6 +14,9 @@ SOCKET_STATUS_RE = re.compile(r"pedestal/(\d+)/socket/(\d+)/status")
 SOCKET_POWER_RE = re.compile(r"pedestal/(\d+)/socket/(\d+)/power")
 WATER_FLOW_RE = re.compile(r"pedestal/(\d+)/water/flow")
 HEARTBEAT_RE = re.compile(r"pedestal/(\d+)/heartbeat")
+SENSOR_TEMP_RE = re.compile(r"pedestal/(\d+)/sensors/temperature")
+SENSOR_MOIST_RE = re.compile(r"pedestal/(\d+)/sensors/moisture")
+DIAGNOSTICS_RE  = re.compile(r"pedestal/(\d+)/diagnostics/response")
 
 
 async def handle_message(topic: str, payload: str):
@@ -26,6 +29,12 @@ async def handle_message(topic: str, payload: str):
             await _handle_water_flow(int(m.group(1)), payload)
         elif m := HEARTBEAT_RE.match(topic):
             await _handle_heartbeat(int(m.group(1)), payload)
+        elif m := SENSOR_TEMP_RE.match(topic):
+            await _handle_temperature(int(m.group(1)), payload)
+        elif m := SENSOR_MOIST_RE.match(topic):
+            await _handle_moisture(int(m.group(1)), payload)
+        elif m := DIAGNOSTICS_RE.match(topic):
+            await _handle_diagnostics(int(m.group(1)), payload)
     except Exception as e:
         logger.error(f"Error handling MQTT message on {topic}: {e}")
 
@@ -159,3 +168,63 @@ async def _handle_heartbeat(pedestal_id: int, payload: str):
         })
     except Exception as e:
         logger.warning(f"Invalid heartbeat payload: {e}")
+
+
+async def _handle_temperature(pedestal_id: int, payload: str):
+    try:
+        data = json.loads(payload)
+        value = float(data["value"])
+        alarm = value > 50.0
+        db = SessionLocal()
+        try:
+            session_service.add_reading(db, None, pedestal_id, None, "temperature", value, "°C")
+        finally:
+            db.close()
+        await ws_manager.broadcast({
+            "event": "temperature_reading",
+            "data": {
+                "pedestal_id": pedestal_id,
+                "value": round(value, 1),
+                "alarm": alarm,
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+        })
+    except (json.JSONDecodeError, KeyError, ValueError) as e:
+        logger.warning(f"Invalid temperature payload: {payload} — {e}")
+
+
+async def _handle_moisture(pedestal_id: int, payload: str):
+    try:
+        data = json.loads(payload)
+        value = float(data["value"])
+        alarm = value > 90.0
+        db = SessionLocal()
+        try:
+            session_service.add_reading(db, None, pedestal_id, None, "moisture", value, "%")
+        finally:
+            db.close()
+        await ws_manager.broadcast({
+            "event": "moisture_reading",
+            "data": {
+                "pedestal_id": pedestal_id,
+                "value": round(value, 1),
+                "alarm": alarm,
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+        })
+    except (json.JSONDecodeError, KeyError, ValueError) as e:
+        logger.warning(f"Invalid moisture payload: {payload} — {e}")
+
+
+async def _handle_diagnostics(pedestal_id: int, payload: str):
+    """Receive diagnostics response from pedestal and resolve the waiting API call."""
+    try:
+        from ..services.diagnostics_manager import diagnostics_manager
+        data = json.loads(payload)
+        diagnostics_manager.complete_request(pedestal_id, data)
+        await ws_manager.broadcast({
+            "event": "diagnostics_result",
+            "data": {"pedestal_id": pedestal_id, "results": data},
+        })
+    except (json.JSONDecodeError, Exception) as e:
+        logger.warning(f"Invalid diagnostics response: {payload} — {e}")

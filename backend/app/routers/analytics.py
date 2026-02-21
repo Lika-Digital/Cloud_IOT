@@ -94,6 +94,32 @@ def session_summary(pedestal_id: int | None = None, db: DBSession = Depends(get_
     }
 
 
+@router.get("/consumption/by-pedestal")
+def consumption_by_pedestal(db: DBSession = Depends(get_db)):
+    """Cross-pedestal comparison — total energy, water and sessions per pedestal."""
+    rows = (
+        db.query(
+            Session.pedestal_id,
+            func.sum(Session.energy_kwh).label("total_energy_kwh"),
+            func.sum(Session.water_liters).label("total_water_liters"),
+            func.count(Session.id).label("session_count"),
+        )
+        .filter(Session.status == "completed")
+        .group_by(Session.pedestal_id)
+        .order_by(Session.pedestal_id)
+        .all()
+    )
+    return [
+        {
+            "pedestal_id": row.pedestal_id,
+            "total_energy_kwh": round(row.total_energy_kwh or 0.0, 3),
+            "total_water_liters": round(row.total_water_liters or 0.0, 2),
+            "session_count": row.session_count,
+        }
+        for row in rows
+    ]
+
+
 @router.get("/readings/recent")
 def recent_readings(
     pedestal_id: int | None = None,

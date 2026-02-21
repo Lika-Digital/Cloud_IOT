@@ -13,6 +13,7 @@ export function useWebSocket() {
     updateSession,
     setSocketLiveData,
     setWaterLiveData,
+    setSensorReading,
     setOnline,
     setWsConnected,
   } = useStore()
@@ -99,6 +100,22 @@ export function useWebSocket() {
             lpm: msg.data.lpm as number,
             total_liters: msg.data.total_liters as number,
             lastUpdated: msg.data.timestamp as string,
+          })
+          break
+        }
+        case 'temperature_reading': {
+          setSensorReading('temperature', msg.data.pedestal_id as number, {
+            value: msg.data.value as number,
+            alarm: msg.data.alarm as boolean,
+            timestamp: msg.data.timestamp as string,
+          })
+          break
+        }
+        case 'moisture_reading': {
+          setSensorReading('moisture', msg.data.pedestal_id as number, {
+            value: msg.data.value as number,
+            alarm: msg.data.alarm as boolean,
+            timestamp: msg.data.timestamp as string,
           })
           break
         }

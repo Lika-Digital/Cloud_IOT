@@ -12,15 +12,17 @@ class SimulatorManager:
     def __init__(self):
         self._process: subprocess.Popen | None = None
 
-    def start(self, pedestal_id: int = 1, broker_host: str = "localhost", broker_port: int = 1883):
+    def start(self, pedestal_ids: list[int] | None = None, broker_host: str = "localhost", broker_port: int = 1883):
         if self._process and self._process.poll() is None:
-            logger.info("Simulator already running")
-            return
+            self.stop()
+
+        ids = pedestal_ids or [1]
+        ids_str = ",".join(str(i) for i in ids)
 
         cmd = [
             sys.executable,
             str(SIMULATOR_PATH),
-            "--pedestal-id", str(pedestal_id),
+            "--pedestal-ids", ids_str,
             "--broker-host", broker_host,
             "--broker-port", str(broker_port),
         ]
@@ -30,7 +32,7 @@ class SimulatorManager:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-            logger.info(f"Simulator started (PID={self._process.pid})")
+            logger.info(f"Simulator started for pedestals [{ids_str}] (PID={self._process.pid})")
         except Exception as e:
             logger.error(f"Failed to start simulator: {e}")
             self._process = None

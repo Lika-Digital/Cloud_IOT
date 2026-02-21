@@ -6,6 +6,8 @@ from ..schemas.session import SessionResponse
 from ..services.session_service import session_service
 from ..services.mqtt_client import mqtt_service
 from ..services.websocket_manager import ws_manager
+from ..auth.dependencies import require_admin
+from ..auth.models import User
 import asyncio
 
 router = APIRouter(prefix="/api/controls", tags=["controls"])
@@ -25,7 +27,7 @@ def _control_topic(session: Session) -> str:
 
 
 @router.post("/{session_id}/allow", response_model=SessionResponse)
-async def allow_session(session_id: int, db: DBSession = Depends(get_db)):
+async def allow_session(session_id: int, db: DBSession = Depends(get_db), _: User = Depends(require_admin)):
     session = _get_session_or_404(session_id, db)
     if session.status != "pending":
         raise HTTPException(status_code=400, detail=f"Session is {session.status}, expected pending")
@@ -47,7 +49,7 @@ async def allow_session(session_id: int, db: DBSession = Depends(get_db)):
 
 
 @router.post("/{session_id}/deny", response_model=SessionResponse)
-async def deny_session(session_id: int, db: DBSession = Depends(get_db)):
+async def deny_session(session_id: int, db: DBSession = Depends(get_db), _: User = Depends(require_admin)):
     session = _get_session_or_404(session_id, db)
     if session.status != "pending":
         raise HTTPException(status_code=400, detail=f"Session is {session.status}, expected pending")
@@ -69,7 +71,7 @@ async def deny_session(session_id: int, db: DBSession = Depends(get_db)):
 
 
 @router.post("/{session_id}/stop", response_model=SessionResponse)
-async def stop_session(session_id: int, db: DBSession = Depends(get_db)):
+async def stop_session(session_id: int, db: DBSession = Depends(get_db), _: User = Depends(require_admin)):
     session = _get_session_or_404(session_id, db)
     if session.status != "active":
         raise HTTPException(status_code=400, detail=f"Session is {session.status}, expected active")

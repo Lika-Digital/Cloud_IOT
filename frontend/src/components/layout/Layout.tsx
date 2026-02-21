@@ -1,24 +1,35 @@
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useStore } from '../../store'
-
-const NAV_ITEMS = [
-  { to: '/dashboard', label: 'Dashboard', icon: '⚡' },
-  { to: '/analytics', label: 'Analytics', icon: '📊' },
-  { to: '/history', label: 'History', icon: '📋' },
-  { to: '/settings', label: 'Settings', icon: '⚙️' },
-]
+import { useAuthStore } from '../../store/authStore'
+import logo from '../../assets/logo.png'
 
 export default function Layout() {
   const { wsConnected, pedestalOnline } = useStore()
+  const { email, role, logout } = useAuthStore()
+  const navigate = useNavigate()
+
+  const isAdmin = role === 'admin'
+
+  const NAV_ITEMS = [
+    { to: '/dashboard', label: 'Dashboard', icon: '⚡' },
+    { to: '/analytics', label: 'Analytics', icon: '📊' },
+    { to: '/history', label: 'History', icon: '📋' },
+    ...(isAdmin ? [{ to: '/settings', label: 'Settings', icon: '⚙️' }] : []),
+  ]
+
+  const handleLogout = () => {
+    logout()
+    navigate('/login', { replace: true })
+  }
 
   return (
     <div className="flex h-screen bg-gray-950">
       {/* Sidebar */}
       <aside className="w-56 bg-gray-900 border-r border-gray-800 flex flex-col">
         {/* Logo */}
-        <div className="p-5 border-b border-gray-800">
-          <h1 className="text-lg font-bold text-white">Marina Pedestal</h1>
-          <p className="text-xs text-gray-500 mt-0.5">IoT Dashboard</p>
+        <div className="p-4 border-b border-gray-800">
+          <img src={logo} alt="Company Logo" className="w-full h-12 object-contain rounded-lg" />
+          <p className="text-xs text-gray-500 mt-2 text-center">IoT Dashboard</p>
         </div>
 
         {/* Nav */}
@@ -41,10 +52,29 @@ export default function Layout() {
           ))}
         </nav>
 
-        {/* Status indicators */}
-        <div className="p-4 border-t border-gray-800 space-y-2">
+        {/* Status + user info */}
+        <div className="p-4 border-t border-gray-800 space-y-3">
           <StatusDot label="WebSocket" active={wsConnected} />
           <StatusDot label="Pedestal" active={pedestalOnline} />
+
+          {/* User info */}
+          <div className="pt-2 border-t border-gray-800">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="w-7 h-7 rounded-full bg-blue-700 flex items-center justify-center text-white text-xs font-bold">
+                {email?.[0]?.toUpperCase() ?? '?'}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-gray-300 truncate">{email}</p>
+                <p className="text-xs text-gray-600 capitalize">{role}</p>
+              </div>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="w-full text-xs text-gray-500 hover:text-red-400 transition-colors py-1 rounded text-left"
+            >
+              Sign out
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -61,9 +91,7 @@ export default function Layout() {
 function StatusDot({ label, active }: { label: string; active: boolean }) {
   return (
     <div className="flex items-center gap-2 text-xs text-gray-400">
-      <span
-        className={`w-2 h-2 rounded-full ${active ? 'bg-green-400 animate-pulse' : 'bg-gray-600'}`}
-      />
+      <span className={`w-2 h-2 rounded-full ${active ? 'bg-green-400 animate-pulse' : 'bg-gray-600'}`} />
       {label}
       <span className={active ? 'text-green-400' : 'text-gray-600'}>
         {active ? 'Online' : 'Offline'}

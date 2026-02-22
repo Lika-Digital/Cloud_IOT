@@ -101,6 +101,10 @@ interface AppStore {
   setUnreadChatCount: (count: number) => void
   incrementUnreadChat: () => void
 
+  // Last incoming chat message — ChatPanel watches this for real-time updates
+  lastChatMessage: { customer_id: number; message: string; direction: string; created_at: string } | null
+  setLastChatMessage: (msg: { customer_id: number; message: string; direction: string; created_at: string }) => void
+
   // System health — new error count since last visit
   newErrorCount: number
   incrementNewErrors: () => void
@@ -190,6 +194,9 @@ export const useStore = create<AppStore>((set) => ({
   unreadChatCount: 0,
   setUnreadChatCount: (count) => set({ unreadChatCount: count }),
   incrementUnreadChat: () => set((s) => ({ unreadChatCount: s.unreadChatCount + 1 })),
+
+  lastChatMessage: null,
+  setLastChatMessage: (msg) => set({ lastChatMessage: msg }),
 
   newErrorCount: 0,
   incrementNewErrors: () => set((s) => ({ newErrorCount: s.newErrorCount + 1 })),

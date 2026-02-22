@@ -90,6 +90,7 @@ export default function Users() {
         <ChatPanel
           customerId={chatCustomer.id}
           customerName={chatCustomer.name}
+          customerEmail={chatCustomer.email}
           onClose={handleCloseChat}
         />
       )}

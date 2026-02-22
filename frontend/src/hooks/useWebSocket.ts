@@ -18,6 +18,7 @@ export function useWebSocket() {
     setOnline,
     setWsConnected,
     incrementUnreadChat,
+    setLastChatMessage,
     incrementNewErrors,
   } = useStore()
   const { role } = useAuthStore()
@@ -133,9 +134,17 @@ export function useWebSocket() {
           break
         }
         case 'chat_message': {
-          if (role === 'admin' && msg.data.direction === 'from_customer') {
+          const direction = msg.data.direction as string
+          if (role === 'admin' && direction === 'from_customer') {
             incrementUnreadChat()
           }
+          // Forward to store so open ChatPanel can append it in real-time
+          setLastChatMessage({
+            customer_id: msg.data.customer_id as number,
+            message: msg.data.message as string,
+            direction,
+            created_at: msg.data.created_at as string,
+          })
           break
         }
         case 'error_logged': {

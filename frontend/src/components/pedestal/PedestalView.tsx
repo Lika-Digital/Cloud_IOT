@@ -4,6 +4,7 @@ import { useAuthStore } from '../../store/authStore'
 import { allowSession, denySession, stopSession } from '../../api'
 import pedestalImg from '../../assets/pedestal.jpg'
 import CameraModal from './CameraModal'
+import DenyDialog from '../sessions/DenyDialog'
 
 // Zone definitions — positions as % of image dimensions
 // Each zone is positioned over the actual socket/pipe on the image
@@ -194,6 +195,8 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
   const { pendingSessions, activeSessions, socketLiveData, waterLiveData, updateSession } = useStore()
   const { role } = useAuthStore()
   const isAdmin = role === 'admin'
+  const [showDenyDialog, setShowDenyDialog] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   const isWater = zoneId === 'water-left' || zoneId === 'water-right'
   const isCamera = zoneId === 'camera'
@@ -215,23 +218,47 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
 
   const handleAllow = async () => {
     if (!pendingSession) return
-    const updated = await allowSession(pendingSession.id)
-    updateSession({ id: updated.id, status: 'active' })
+    setActionError(null)
+    try {
+      const updated = await allowSession(pendingSession.id)
+      updateSession({ id: updated.id, status: 'active' })
+    } catch {
+      setActionError('Allow failed — check connection and try again.')
+    }
   }
 
-  const handleDeny = async () => {
+  const handleDenyConfirm = async (reason?: string) => {
     if (!pendingSession) return
-    const updated = await denySession(pendingSession.id)
-    updateSession({ id: updated.id, status: 'denied' })
+    setActionError(null)
+    try {
+      const updated = await denySession(pendingSession.id, reason)
+      updateSession({ id: updated.id, status: 'denied', deny_reason: updated.deny_reason ?? null })
+      setShowDenyDialog(false)
+    } catch {
+      setActionError('Deny failed — check connection and try again.')
+    }
   }
 
   const handleStop = async () => {
     if (!activeSession) return
-    const updated = await stopSession(activeSession.id)
-    updateSession({ id: updated.id, status: 'completed' })
+    setActionError(null)
+    try {
+      const updated = await stopSession(activeSession.id)
+      updateSession({ id: updated.id, status: 'completed' })
+    } catch {
+      setActionError('Stop failed — check connection and try again.')
+    }
   }
 
   return (
+    <>
+      {showDenyDialog && pendingSession && (
+        <DenyDialog
+          sessionId={pendingSession.id}
+          onConfirm={handleDenyConfirm}
+          onCancel={() => setShowDenyDialog(false)}
+        />
+      )}
     <div className="card space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -252,19 +279,29 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
         <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-xl leading-none">✕</button>
       </div>
 
+      {/* Action error */}
+      {actionError && (
+        <div className="bg-red-900/30 border border-red-700/50 text-red-300 text-sm px-3 py-2 rounded-lg">
+          {actionError}
+        </div>
+      )}
+
       {/* Pending state */}
       {pendingSession && !activeSession && (
         <div className="bg-amber-900/20 border border-amber-700/40 rounded-lg p-4 space-y-3">
           <p className="text-amber-300 font-medium">
             {isWater ? 'Water flow detected' : 'Device plugged in'} — awaiting approval
           </p>
+          {pendingSession.customer_name && (
+            <p className="text-sm text-blue-300 font-medium">Customer: {pendingSession.customer_name}</p>
+          )}
           <p className="text-xs text-gray-400">
             Started: {new Date(pendingSession.started_at).toLocaleTimeString()}
           </p>
           {isAdmin ? (
             <div className="flex gap-3">
               <button className="btn-success flex-1" onClick={handleAllow}>Allow</button>
-              <button className="btn-danger flex-1" onClick={handleDeny}>Deny</button>
+              <button className="btn-danger flex-1" onClick={() => setShowDenyDialog(true)}>Deny</button>
             </div>
           ) : (
             <p className="text-xs text-gray-500 italic">Monitor role — contact an admin to approve</p>
@@ -305,6 +342,7 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
         </div>
       )}
     </div>
+    </>
   )
 }
 

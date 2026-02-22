@@ -5,6 +5,7 @@ from .config import settings
 engine = create_engine(
     settings.database_url,
     connect_args={"check_same_thread": False},
+    pool_pre_ping=True,   # verify connection is alive before use; auto-recycles stale ones
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -23,7 +24,7 @@ def get_db():
 
 
 def init_db():
-    from .models import pedestal, session, sensor_reading  # noqa: F401
+    from .models import pedestal, session, sensor_reading, error_log  # noqa: F401
     Base.metadata.create_all(bind=engine)
     _migrate_schema()
 
@@ -41,6 +42,8 @@ def _migrate_schema():
     migrations = [
         ("pedestals", "camera_ip",   "TEXT"),
         ("pedestals", "initialized", "INTEGER NOT NULL DEFAULT 0"),
+        ("sessions",  "customer_id", "INTEGER"),
+        ("sessions",  "deny_reason", "TEXT"),
     ]
 
     with engine.connect() as conn:

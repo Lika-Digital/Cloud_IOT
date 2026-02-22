@@ -11,12 +11,28 @@ logger = logging.getLogger(__name__)
 
 # Topic patterns
 SOCKET_STATUS_RE = re.compile(r"pedestal/(\d+)/socket/(\d+)/status")
-SOCKET_POWER_RE = re.compile(r"pedestal/(\d+)/socket/(\d+)/power")
-WATER_FLOW_RE = re.compile(r"pedestal/(\d+)/water/flow")
-HEARTBEAT_RE = re.compile(r"pedestal/(\d+)/heartbeat")
-SENSOR_TEMP_RE = re.compile(r"pedestal/(\d+)/sensors/temperature")
-SENSOR_MOIST_RE = re.compile(r"pedestal/(\d+)/sensors/moisture")
-DIAGNOSTICS_RE  = re.compile(r"pedestal/(\d+)/diagnostics/response")
+SOCKET_POWER_RE  = re.compile(r"pedestal/(\d+)/socket/(\d+)/power")
+WATER_FLOW_RE    = re.compile(r"pedestal/(\d+)/water/flow")
+HEARTBEAT_RE     = re.compile(r"pedestal/(\d+)/heartbeat")
+SENSOR_TEMP_RE   = re.compile(r"pedestal/(\d+)/sensors/temperature")
+SENSOR_MOIST_RE  = re.compile(r"pedestal/(\d+)/sensors/moisture")
+DIAGNOSTICS_RE   = re.compile(r"pedestal/(\d+)/diagnostics/response")
+
+
+def _hw_warn(source: str, message: str, details: str | None = None):
+    try:
+        from .error_log_service import log_warning
+        log_warning("hw", source, message, details=details)
+    except Exception:
+        pass
+
+
+def _hw_error(source: str, message: str, details: str | None = None):
+    try:
+        from .error_log_service import log_error
+        log_error("hw", source, message, details=details)
+    except Exception:
+        pass
 
 
 async def handle_message(topic: str, payload: str):
@@ -37,28 +53,14 @@ async def handle_message(topic: str, payload: str):
             await _handle_diagnostics(int(m.group(1)), payload)
     except Exception as e:
         logger.error(f"Error handling MQTT message on {topic}: {e}")
+        _hw_error("mqtt_handlers", f"Unhandled error on topic {topic}: {e}")
 
 
 async def _handle_socket_status(pedestal_id: int, socket_id: int, payload: str):
     status = payload.strip().strip('"')
     db = SessionLocal()
     try:
-        if status == "connected":
-            existing = session_service.get_active_for_socket(db, pedestal_id, socket_id)
-            if not existing:
-                session = session_service.create_pending(db, pedestal_id, socket_id, "electricity")
-                await ws_manager.broadcast({
-                    "event": "session_created",
-                    "data": {
-                        "session_id": session.id,
-                        "pedestal_id": pedestal_id,
-                        "socket_id": socket_id,
-                        "type": "electricity",
-                        "status": "pending",
-                        "started_at": session.started_at.isoformat(),
-                    },
-                })
-        elif status == "disconnected":
+        if status == "disconnected":
             session = session_service.get_active_for_socket(db, pedestal_id, socket_id)
             if session and session.status == "active":
                 session_service.complete(db, session)
@@ -69,8 +71,27 @@ async def _handle_socket_status(pedestal_id: int, socket_id: int, payload: str):
                         "pedestal_id": pedestal_id,
                         "socket_id": socket_id,
                         "energy_kwh": session.energy_kwh,
+                        "customer_id": session.customer_id,
                     },
                 })
+                if session.customer_id:
+                    from ..auth.user_database import UserSessionLocal
+                    from ..services.invoice_service import create_invoice_for_session
+                    user_db = UserSessionLocal()
+                    try:
+                        await create_invoice_for_session(db, user_db, session)
+                    except Exception as e:
+                        _hw_error(
+                            f"pedestal_{pedestal_id}",
+                            f"Invoice creation failed for session {session.id} on disconnect: {e}",
+                        )
+                    finally:
+                        user_db.close()
+        elif status not in ("connected", "disconnected"):
+            _hw_warn(
+                f"pedestal_{pedestal_id}",
+                f"Unknown socket status '{status}' on socket {socket_id}",
+            )
     finally:
         db.close()
 
@@ -82,12 +103,18 @@ async def _handle_socket_power(pedestal_id: int, socket_id: int, payload: str):
         kwh_total = float(data["kwh_total"])
     except (json.JSONDecodeError, KeyError, ValueError) as e:
         logger.warning(f"Invalid power payload: {payload} — {e}")
+        _hw_warn(
+            f"pedestal_{pedestal_id}",
+            f"Invalid power payload on socket {socket_id}: {e}",
+            details=payload[:200],
+        )
         return
 
     db = SessionLocal()
     try:
         session = session_service.get_active_for_socket(db, pedestal_id, socket_id)
         session_id = session.id if session and session.status == "active" else None
+        customer_id = session.customer_id if session else None
 
         session_service.add_reading(db, session_id, pedestal_id, socket_id, "power_watts", watts, "W")
         session_service.add_reading(db, session_id, pedestal_id, socket_id, "kwh_total", kwh_total, "kWh")
@@ -101,6 +128,7 @@ async def _handle_socket_power(pedestal_id: int, socket_id: int, payload: str):
                 "watts": watts,
                 "kwh_total": kwh_total,
                 "timestamp": datetime.utcnow().isoformat(),
+                "customer_id": customer_id,
             },
         })
     finally:
@@ -114,29 +142,18 @@ async def _handle_water_flow(pedestal_id: int, payload: str):
         total_liters = float(data["total_liters"])
     except (json.JSONDecodeError, KeyError, ValueError) as e:
         logger.warning(f"Invalid water payload: {payload} — {e}")
+        _hw_warn(
+            f"pedestal_{pedestal_id}",
+            f"Invalid water flow payload: {e}",
+            details=payload[:200],
+        )
         return
 
     db = SessionLocal()
     try:
         session = session_service.get_active_for_socket(db, pedestal_id, None)
         session_id = session.id if session and session.status == "active" else None
-
-        if session_id is None:
-            # Auto-create water session on first flow
-            if lpm > 0:
-                session = session_service.create_pending(db, pedestal_id, None, "water")
-                session_id = session.id
-                await ws_manager.broadcast({
-                    "event": "session_created",
-                    "data": {
-                        "session_id": session.id,
-                        "pedestal_id": pedestal_id,
-                        "socket_id": None,
-                        "type": "water",
-                        "status": "pending",
-                        "started_at": session.started_at.isoformat(),
-                    },
-                })
+        customer_id = session.customer_id if session else None
 
         session_service.add_reading(db, session_id, pedestal_id, None, "water_lpm", lpm, "L/min")
         session_service.add_reading(db, session_id, pedestal_id, None, "total_liters", total_liters, "L")
@@ -149,6 +166,7 @@ async def _handle_water_flow(pedestal_id: int, payload: str):
                 "lpm": lpm,
                 "total_liters": total_liters,
                 "timestamp": datetime.utcnow().isoformat(),
+                "customer_id": customer_id,
             },
         })
     finally:
@@ -168,6 +186,7 @@ async def _handle_heartbeat(pedestal_id: int, payload: str):
         })
     except Exception as e:
         logger.warning(f"Invalid heartbeat payload: {e}")
+        _hw_warn(f"pedestal_{pedestal_id}", f"Invalid heartbeat payload: {e}", details=payload[:200])
 
 
 async def _handle_temperature(pedestal_id: int, payload: str):
@@ -175,11 +194,19 @@ async def _handle_temperature(pedestal_id: int, payload: str):
         data = json.loads(payload)
         value = float(data["value"])
         alarm = value > 50.0
+
         db = SessionLocal()
         try:
             session_service.add_reading(db, None, pedestal_id, None, "temperature", value, "°C")
         finally:
             db.close()
+
+        if alarm:
+            _hw_warn(
+                f"pedestal_{pedestal_id}",
+                f"Temperature ALARM: {round(value, 1)}°C (threshold 50°C)",
+            )
+
         await ws_manager.broadcast({
             "event": "temperature_reading",
             "data": {
@@ -191,6 +218,7 @@ async def _handle_temperature(pedestal_id: int, payload: str):
         })
     except (json.JSONDecodeError, KeyError, ValueError) as e:
         logger.warning(f"Invalid temperature payload: {payload} — {e}")
+        _hw_warn(f"pedestal_{pedestal_id}", f"Invalid temperature payload: {e}", details=payload[:200])
 
 
 async def _handle_moisture(pedestal_id: int, payload: str):
@@ -198,11 +226,19 @@ async def _handle_moisture(pedestal_id: int, payload: str):
         data = json.loads(payload)
         value = float(data["value"])
         alarm = value > 90.0
+
         db = SessionLocal()
         try:
             session_service.add_reading(db, None, pedestal_id, None, "moisture", value, "%")
         finally:
             db.close()
+
+        if alarm:
+            _hw_warn(
+                f"pedestal_{pedestal_id}",
+                f"Moisture ALARM: {round(value, 1)}% (threshold 90%)",
+            )
+
         await ws_manager.broadcast({
             "event": "moisture_reading",
             "data": {
@@ -214,17 +250,28 @@ async def _handle_moisture(pedestal_id: int, payload: str):
         })
     except (json.JSONDecodeError, KeyError, ValueError) as e:
         logger.warning(f"Invalid moisture payload: {payload} — {e}")
+        _hw_warn(f"pedestal_{pedestal_id}", f"Invalid moisture payload: {e}", details=payload[:200])
 
 
 async def _handle_diagnostics(pedestal_id: int, payload: str):
-    """Receive diagnostics response from pedestal and resolve the waiting API call."""
     try:
         from ..services.diagnostics_manager import diagnostics_manager
         data = json.loads(payload)
         diagnostics_manager.complete_request(pedestal_id, data)
+
+        # Log any failed sensors as HW errors
+        failed = [k for k, v in data.items() if v != "ok"]
+        if failed:
+            _hw_error(
+                f"pedestal_{pedestal_id}",
+                f"Diagnostics: {len(failed)} sensor(s) failed — {', '.join(failed)}",
+                details=json.dumps(data),
+            )
+
         await ws_manager.broadcast({
             "event": "diagnostics_result",
             "data": {"pedestal_id": pedestal_id, "results": data},
         })
     except (json.JSONDecodeError, Exception) as e:
         logger.warning(f"Invalid diagnostics response: {payload} — {e}")
+        _hw_error(f"pedestal_{pedestal_id}", f"Diagnostics response parse error: {e}", details=payload[:200])

@@ -13,5 +13,7 @@ class SessionResponse(BaseModel):
     ended_at: Optional[datetime] = None
     energy_kwh: Optional[float] = None
     water_liters: Optional[float] = None
+    customer_id: Optional[int] = None
+    deny_reason: Optional[str] = None
 
     model_config = {"from_attributes": True}

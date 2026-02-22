@@ -4,6 +4,9 @@ import Dashboard from './pages/Dashboard'
 import Analytics from './pages/Analytics'
 import History from './pages/History'
 import Settings from './pages/Settings'
+import Billing from './pages/Billing'
+import Users from './pages/Users'
+import SystemHealth from './pages/SystemHealth'
 import LoginPage from './pages/LoginPage'
 import ProtectedRoute from './components/auth/ProtectedRoute'
 import { useWebSocket } from './hooks/useWebSocket'
@@ -30,6 +33,30 @@ function AppInner() {
           element={
             <ProtectedRoute adminOnly>
               <Settings />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="billing"
+          element={
+            <ProtectedRoute adminOnly>
+              <Billing />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="users"
+          element={
+            <ProtectedRoute adminOnly>
+              <Users />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="system-health"
+          element={
+            <ProtectedRoute adminOnly>
+              <SystemHealth />
             </ProtectedRoute>
           }
         />

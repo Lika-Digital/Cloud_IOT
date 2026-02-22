@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session as DBSession
 from ..database import get_db
 from ..models.pedestal import Pedestal
+from ..models.session import Session as SessionModel
 from ..schemas.pedestal import PedestalCreate, PedestalUpdate, PedestalResponse
 from ..services.simulator_manager import simulator_manager
 from ..config import settings
@@ -45,8 +46,22 @@ def configure_pedestals(
             db.add(p)
         db.commit()
     elif count < existing_count:
-        # Remove pedestals from the end that have no active/pending sessions
         to_remove = existing[count:]
+        # Block removal if any pedestal still has active or pending sessions
+        for p in to_remove:
+            busy = (
+                db.query(SessionModel)
+                .filter(
+                    SessionModel.pedestal_id == p.id,
+                    SessionModel.status.in_(["active", "pending"]),
+                )
+                .count()
+            )
+            if busy:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Pedestal '{p.name}' has active or pending sessions. Stop them first.",
+                )
         for p in to_remove:
             db.delete(p)
         db.commit()

@@ -1,10 +1,21 @@
 import logging
+import traceback
 from datetime import datetime
 from sqlalchemy.orm import Session as DBSession
 from ..models.session import Session
 from ..models.sensor_reading import SensorReading
 
 logger = logging.getLogger(__name__)
+
+
+def _log(category: str, source: str, msg: str, exc: Exception | None = None):
+    """Fire-and-forget to error_log_service without crashing the caller."""
+    try:
+        from .error_log_service import log_error
+        details = traceback.format_exc() if exc else None
+        log_error(category, source, msg, details=details)
+    except Exception:
+        pass
 
 
 class SessionService:
@@ -14,6 +25,7 @@ class SessionService:
         pedestal_id: int,
         socket_id: int | None,
         session_type: str,
+        customer_id: int | None = None,
     ) -> Session:
         session = Session(
             pedestal_id=pedestal_id,
@@ -21,24 +33,42 @@ class SessionService:
             type=session_type,
             status="pending",
             started_at=datetime.utcnow(),
+            customer_id=customer_id,
         )
-        db.add(session)
-        db.commit()
-        db.refresh(session)
+        try:
+            db.add(session)
+            db.commit()
+            db.refresh(session)
+        except Exception as e:
+            db.rollback()
+            _log("system", "session_service", f"Failed to create pending session (pedestal={pedestal_id}): {e}", e)
+            raise
         logger.info(f"Created pending session {session.id} for pedestal {pedestal_id} socket {socket_id}")
         return session
 
     def activate(self, db: DBSession, session: Session) -> Session:
-        session.status = "active"
-        db.commit()
-        db.refresh(session)
+        try:
+            session.status = "active"
+            db.commit()
+            db.refresh(session)
+        except Exception as e:
+            db.rollback()
+            _log("system", "session_service", f"Failed to activate session {session.id}: {e}", e)
+            raise
         return session
 
-    def deny(self, db: DBSession, session: Session) -> Session:
-        session.status = "denied"
-        session.ended_at = datetime.utcnow()
-        db.commit()
-        db.refresh(session)
+    def deny(self, db: DBSession, session: Session, reason: str | None = None) -> Session:
+        try:
+            session.status = "denied"
+            session.ended_at = datetime.utcnow()
+            if reason:
+                session.deny_reason = reason
+            db.commit()
+            db.refresh(session)
+        except Exception as e:
+            db.rollback()
+            _log("system", "session_service", f"Failed to deny session {session.id}: {e}", e)
+            raise
         return session
 
     def complete(self, db: DBSession, session: Session) -> Session:
@@ -60,8 +90,13 @@ class SessionService:
             if liter_readings:
                 session.water_liters = max(liter_readings) - min(liter_readings)
 
-        db.commit()
-        db.refresh(session)
+        try:
+            db.commit()
+            db.refresh(session)
+        except Exception as e:
+            db.rollback()
+            _log("system", "session_service", f"Failed to complete session {session.id}: {e}", e)
+            raise
         return session
 
     def get_active_for_socket(
@@ -95,9 +130,14 @@ class SessionService:
             value=value,
             unit=unit,
         )
-        db.add(reading)
-        db.commit()
-        db.refresh(reading)
+        try:
+            db.add(reading)
+            db.commit()
+            db.refresh(reading)
+        except Exception as e:
+            db.rollback()
+            _log("system", "session_service", f"Failed to persist sensor reading ({reading_type}): {e}", e)
+            raise
         return reading
 
 

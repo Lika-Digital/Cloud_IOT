@@ -16,6 +16,8 @@ class Session(Base):
     ended_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     energy_kwh: Mapped[float] = mapped_column(Float, nullable=True)
     water_liters: Mapped[float] = mapped_column(Float, nullable=True)
+    customer_id: Mapped[int] = mapped_column(Integer, nullable=True)
+    deny_reason: Mapped[str] = mapped_column(String(500), nullable=True)
 
     pedestal: Mapped["Pedestal"] = relationship("Pedestal", back_populates="sessions")  # noqa: F821
     sensor_readings: Mapped[list["SensorReading"]] = relationship(  # noqa: F821

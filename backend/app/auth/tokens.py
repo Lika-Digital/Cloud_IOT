@@ -16,6 +16,17 @@ def create_access_token(user_id: int, email: str, role: str) -> str:
     return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
 
 
+def create_customer_token(customer_id: int, email: str) -> str:
+    expires = datetime.now(timezone.utc) + timedelta(days=30)
+    payload = {
+        "sub": str(customer_id),
+        "email": email,
+        "role": "customer",
+        "exp": expires,
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
+
+
 def decode_token(token: str) -> Optional[dict]:
     try:
         return jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])

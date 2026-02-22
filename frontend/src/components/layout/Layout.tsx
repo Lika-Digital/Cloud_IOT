@@ -2,19 +2,35 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useStore } from '../../store'
 import { useAuthStore } from '../../store/authStore'
 import logo from '../../assets/logo.png'
+import { useEffect } from 'react'
+import { getUnreadCount } from '../../api/billing'
 
 export default function Layout() {
-  const { wsConnected, pedestalOnline } = useStore()
+  const { wsConnected, pedestalOnline, unreadChatCount, setUnreadChatCount, newErrorCount } = useStore()
   const { email, role, logout } = useAuthStore()
   const navigate = useNavigate()
 
   const isAdmin = role === 'admin'
 
+  useEffect(() => {
+    if (!isAdmin) return
+    getUnreadCount().then((r) => setUnreadChatCount(r.unread_customers)).catch(() => {})
+    const interval = setInterval(() => {
+      getUnreadCount().then((r) => setUnreadChatCount(r.unread_customers)).catch(() => {})
+    }, 30_000)
+    return () => clearInterval(interval)
+  }, [isAdmin])
+
   const NAV_ITEMS = [
-    { to: '/dashboard', label: 'Dashboard', icon: '⚡' },
-    { to: '/analytics', label: 'Analytics', icon: '📊' },
-    { to: '/history', label: 'History', icon: '📋' },
-    ...(isAdmin ? [{ to: '/settings', label: 'Settings', icon: '⚙️' }] : []),
+    { to: '/dashboard', label: 'Dashboard', icon: '⚡', badge: 0 },
+    { to: '/analytics', label: 'Analytics', icon: '📊', badge: 0 },
+    { to: '/history', label: 'History', icon: '📋', badge: 0 },
+    ...(isAdmin ? [
+      { to: '/billing', label: 'Billing', icon: '💰', badge: 0 },
+      { to: '/users', label: 'Customers', icon: '👥', badge: unreadChatCount },
+      { to: '/system-health', label: 'System Health', icon: '🔧', badge: newErrorCount },
+      { to: '/settings', label: 'Settings', icon: '⚙️', badge: 0 },
+    ] : []),
   ]
 
   const handleLogout = () => {
@@ -47,7 +63,12 @@ export default function Layout() {
               }
             >
               <span>{item.icon}</span>
-              {item.label}
+              <span className="flex-1">{item.label}</span>
+              {item.badge > 0 && (
+                <span className="bg-red-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
+                  {item.badge > 9 ? '9+' : item.badge}
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>

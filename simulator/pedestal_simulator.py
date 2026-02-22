@@ -46,10 +46,10 @@ DIAGNOSTICS_REQ_RE  = re.compile(r"pedestal/(\d+)/diagnostics/request")
 class VirtualPedestal:
     """All state machines and generators for one physical pedestal."""
 
-    def __init__(self, pedestal_id: int):
+    def __init__(self, pedestal_id: int, auto_connect: bool = True):
         self.pedestal_id = pedestal_id
-        self.socket_states    = [SocketStateManager(i + 1) for i in range(4)]
-        self.water_state      = WaterStateManager()
+        self.socket_states    = [SocketStateManager(i + 1, auto_connect=auto_connect) for i in range(4)]
+        self.water_state      = WaterStateManager(auto_connect=auto_connect)
         self.power_generators = [PowerGenerator(i + 1) for i in range(4)]
         self.water_generator  = WaterGenerator()
         self.temp_generator   = TemperatureGenerator()
@@ -61,13 +61,13 @@ class VirtualPedestal:
 
 
 class PedestalSimulator:
-    def __init__(self, pedestal_ids: list[int], broker_host: str, broker_port: int):
+    def __init__(self, pedestal_ids: list[int], broker_host: str, broker_port: int, auto_connect: bool = True):
         self.broker_host = broker_host
         self.broker_port = broker_port
         self._running    = False
 
         self._pedestals: dict[int, VirtualPedestal] = {
-            pid: VirtualPedestal(pid) for pid in pedestal_ids
+            pid: VirtualPedestal(pid, auto_connect=auto_connect) for pid in pedestal_ids
         }
         logger.info(f"Simulating {len(pedestal_ids)} pedestal(s): {pedestal_ids}")
 
@@ -239,11 +239,13 @@ def main():
                         help="Comma-separated pedestal IDs, e.g. 1,2,3")
     parser.add_argument("--broker-host",   type=str, default="localhost")
     parser.add_argument("--broker-port",   type=int, default=1883)
+    parser.add_argument("--auto-connect",  action="store_true", default=False,
+                        help="Allow simulator to randomly connect sockets (legacy mode)")
     args = parser.parse_args()
 
     pedestal_ids = [int(x.strip()) for x in args.pedestal_ids.split(",") if x.strip()]
 
-    sim = PedestalSimulator(pedestal_ids, args.broker_host, args.broker_port)
+    sim = PedestalSimulator(pedestal_ids, args.broker_host, args.broker_port, auto_connect=args.auto_connect)
 
     def _handle_signal(sig, frame):
         sim.stop()

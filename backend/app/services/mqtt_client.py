@@ -32,11 +32,22 @@ class MQTTService:
         self._client.on_disconnect = self._on_disconnect
 
         try:
+            # Exponential back-off: retry in 1s, 2s, 4s … up to 30s between attempts
+            self._client.reconnect_delay_set(min_delay=1, max_delay=30)
             self._client.connect(settings.mqtt_broker_host, settings.mqtt_broker_port, keepalive=60)
             self._client.loop_start()
             logger.info(f"MQTT client connecting to {settings.mqtt_broker_host}:{settings.mqtt_broker_port}")
         except Exception as e:
             logger.error(f"Failed to connect MQTT client: {e}")
+            try:
+                from .error_log_service import log_error
+                log_error(
+                    "hw", "mqtt_client",
+                    f"MQTT broker unreachable ({settings.mqtt_broker_host}:{settings.mqtt_broker_port})",
+                    details=str(e),
+                )
+            except Exception:
+                pass
 
     def stop(self):
         if self._client:
@@ -50,6 +61,11 @@ class MQTTService:
             logger.debug(f"MQTT publish → {topic}: {payload}")
         else:
             logger.warning(f"MQTT not connected, cannot publish to {topic}")
+            try:
+                from .error_log_service import log_warning
+                log_warning("hw", "mqtt_client", f"Publish failed — not connected. Topic: {topic}")
+            except Exception:
+                pass
 
     def _on_connect(self, client, userdata, flags, reason_code, properties):
         if reason_code == 0:
@@ -60,10 +76,21 @@ class MQTTService:
                 logger.info(f"Subscribed to {topic}")
         else:
             logger.error(f"MQTT connection failed with reason code {reason_code}")
+            try:
+                from .error_log_service import log_error
+                log_error("hw", "mqtt_client", f"MQTT connection failed (reason code {reason_code})")
+            except Exception:
+                pass
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties):
         self._connected = False
         logger.warning(f"MQTT disconnected (reason: {reason_code})")
+        if reason_code != 0:  # 0 = clean disconnect
+            try:
+                from .error_log_service import log_warning
+                log_warning("hw", "mqtt_client", f"MQTT broker disconnected unexpectedly (code {reason_code})")
+            except Exception:
+                pass
 
     def _on_message(self, client, userdata, msg):
         topic = msg.topic

@@ -13,6 +13,7 @@ export default function History() {
     setLoading(true)
     getSessions({ status: statusFilter || undefined, limit: 200 })
       .then(setSessions)
+      .catch(() => {})
       .finally(() => setLoading(false))
   }, [statusFilter])
 

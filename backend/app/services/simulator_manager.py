@@ -35,6 +35,11 @@ class SimulatorManager:
             logger.info(f"Simulator started for pedestals [{ids_str}] (PID={self._process.pid})")
         except Exception as e:
             logger.error(f"Failed to start simulator: {e}")
+            try:
+                from .error_log_service import log_error
+                log_error("system", "simulator_manager", f"Failed to start simulator: {e}")
+            except Exception:
+                pass
             self._process = None
 
     def stop(self):

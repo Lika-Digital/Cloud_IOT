@@ -15,9 +15,9 @@ export default function Dashboard() {
   } = useStore()
 
   useEffect(() => {
-    getPedestals().then(setPedestals)
-    getPendingSessions().then(setPendingSessions)
-    getActiveSessions().then(setActiveSessions)
+    getPedestals().then(setPedestals).catch(() => {})
+    getPendingSessions().then(setPendingSessions).catch(() => {})
+    getActiveSessions().then(setActiveSessions).catch(() => {})
   }, [])
 
   const selectedPedestal = pedestals.find((p) => p.id === selectedPedestalId)

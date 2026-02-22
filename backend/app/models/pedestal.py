@@ -15,8 +15,8 @@ class Pedestal(Base):
     initialized: Mapped[bool] = mapped_column(Boolean, default=False)
 
     sessions: Mapped[list["Session"]] = relationship(  # noqa: F821
-        "Session", back_populates="pedestal"
+        "Session", back_populates="pedestal", cascade="all, delete-orphan"
     )
     sensor_readings: Mapped[list["SensorReading"]] = relationship(  # noqa: F821
-        "SensorReading", back_populates="pedestal"
+        "SensorReading", back_populates="pedestal", cascade="all, delete-orphan"
     )

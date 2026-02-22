@@ -28,6 +28,9 @@ export interface Session {
   ended_at: string | null
   energy_kwh: number | null
   water_liters: number | null
+  customer_id: number | null
+  customer_name?: string | null
+  deny_reason: string | null
 }
 
 export interface PowerReading {
@@ -92,6 +95,16 @@ interface AppStore {
   // Selected pedestal for detail view
   selectedPedestalId: number | null
   setSelectedPedestalId: (id: number | null) => void
+
+  // Chat unread count
+  unreadChatCount: number
+  setUnreadChatCount: (count: number) => void
+  incrementUnreadChat: () => void
+
+  // System health — new error count since last visit
+  newErrorCount: number
+  incrementNewErrors: () => void
+  resetNewErrors: () => void
 }
 
 export const useStore = create<AppStore>((set) => ({
@@ -173,4 +186,12 @@ export const useStore = create<AppStore>((set) => ({
 
   selectedPedestalId: null,
   setSelectedPedestalId: (selectedPedestalId) => set({ selectedPedestalId }),
+
+  unreadChatCount: 0,
+  setUnreadChatCount: (count) => set({ unreadChatCount: count }),
+  incrementUnreadChat: () => set((s) => ({ unreadChatCount: s.unreadChatCount + 1 })),
+
+  newErrorCount: 0,
+  incrementNewErrors: () => set((s) => ({ newErrorCount: s.newErrorCount + 1 })),
+  resetNewErrors: () => set({ newErrorCount: 0 }),
 }))

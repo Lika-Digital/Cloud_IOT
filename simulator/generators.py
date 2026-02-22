@@ -110,12 +110,13 @@ class SocketStateManager:
     # all sockets connecting at the same time
     _BASE_CONNECT_PROB = 0.004
 
-    def __init__(self, socket_id: int):
+    def __init__(self, socket_id: int, auto_connect: bool = True):
         self.socket_id = socket_id
         self.state = self.IDLE
         self._state_entered_at = 0.0
         self._session_duration_s = 0.0
         self._connect_prob = self._BASE_CONNECT_PROB + socket_id * 0.001
+        self._auto_connect = auto_connect
 
     def tick(self) -> str | None:
         """
@@ -124,7 +125,7 @@ class SocketStateManager:
         now = time.time()
 
         if self.state == self.IDLE:
-            if random.random() < self._connect_prob:
+            if self._auto_connect and random.random() < self._connect_prob:
                 self.state = self.PENDING
                 self._state_entered_at = now
                 return "connected"
@@ -172,18 +173,19 @@ class WaterStateManager:
     PENDING = "pending"
     ACTIVE = "active"
 
-    def __init__(self):
+    def __init__(self, auto_connect: bool = True):
         self.state = self.IDLE
         self._state_entered_at = 0.0
         self._session_duration_s = 0.0
         self._connect_prob = 0.002
+        self._auto_connect = auto_connect
 
     def tick(self) -> str | None:
         """Returns 'start', 'stop', or None."""
         now = time.time()
 
         if self.state == self.IDLE:
-            if random.random() < self._connect_prob:
+            if self._auto_connect and random.random() < self._connect_prob:
                 self.state = self.PENDING
                 self._state_entered_at = now
                 return "start"

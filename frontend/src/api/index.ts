@@ -58,8 +58,8 @@ export const getActiveSessions = (pedestal_id?: number) =>
 // Controls
 export const allowSession = (id: number) =>
   api.post<Session>(`/controls/${id}/allow`).then((r) => r.data)
-export const denySession = (id: number) =>
-  api.post<Session>(`/controls/${id}/deny`).then((r) => r.data)
+export const denySession = (id: number, reason?: string) =>
+  api.post<Session>(`/controls/${id}/deny`, { reason: reason ?? null }).then((r) => r.data)
 export const stopSession = (id: number) =>
   api.post<Session>(`/controls/${id}/stop`).then((r) => r.data)
 

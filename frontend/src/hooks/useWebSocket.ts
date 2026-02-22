@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useStore } from '../store'
+import { useAuthStore } from '../store/authStore'
 
 const WS_URL = `ws://${window.location.host}/ws`
 const RECONNECT_DELAY_MS = 3000
@@ -16,7 +17,10 @@ export function useWebSocket() {
     setSensorReading,
     setOnline,
     setWsConnected,
+    incrementUnreadChat,
+    incrementNewErrors,
   } = useStore()
+  const { role } = useAuthStore()
 
   useEffect(() => {
     function connect() {
@@ -65,6 +69,9 @@ export function useWebSocket() {
             ended_at: null,
             energy_kwh: null,
             water_liters: null,
+            customer_id: (msg.data.customer_id as number | null) ?? null,
+            customer_name: (msg.data.customer_name as string | null) ?? null,
+            deny_reason: null,
           })
           break
         }
@@ -74,6 +81,8 @@ export function useWebSocket() {
             status: msg.data.status as 'active' | 'denied',
             socket_id: msg.data.socket_id as number | null,
             type: msg.data.type as 'electricity' | 'water',
+            customer_id: (msg.data.customer_id as number | null) ?? null,
+            deny_reason: (msg.data.deny_reason as string | null) ?? null,
           })
           break
         }
@@ -123,6 +132,22 @@ export function useWebSocket() {
           setOnline(msg.data.online as boolean)
           break
         }
+        case 'chat_message': {
+          if (role === 'admin' && msg.data.direction === 'from_customer') {
+            incrementUnreadChat()
+          }
+          break
+        }
+        case 'error_logged': {
+          // Only count errors/warnings for the nav badge (admins only)
+          if (role === 'admin') {
+            const level = msg.data.level as string
+            if (level === 'error' || level === 'warning') {
+              incrementNewErrors()
+            }
+          }
+          break
+        }
       }
     }
 
@@ -132,5 +157,5 @@ export function useWebSocket() {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       wsRef.current?.close()
     }
-  }, [])
+  }, [role])
 }

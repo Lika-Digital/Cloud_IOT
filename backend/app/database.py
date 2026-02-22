@@ -24,7 +24,7 @@ def get_db():
 
 
 def init_db():
-    from .models import pedestal, session, sensor_reading, error_log  # noqa: F401
+    from .models import pedestal, session, sensor_reading, error_log, active_alarm  # noqa: F401
     Base.metadata.create_all(bind=engine)
     _migrate_schema()
 

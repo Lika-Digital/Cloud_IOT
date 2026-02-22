@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 
 from ..auth.user_database import get_user_db
@@ -21,17 +21,46 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 @router.post("/login")
-def login(body: LoginRequest, db: Session = Depends(get_user_db)):
+def login(request: Request, body: LoginRequest, db: Session = Depends(get_user_db)):
     """Step 1: validate credentials and send OTP to email."""
+    from ..services.security_monitor import record_login_failure, record_login_success, check_brute_force
+    from ..services.error_log_service import log_warning, log_error
+    from ..services.alarm_service import trigger_alarm
+
+    client_ip = request.client.host if request.client else "unknown"
+
     user = db.query(User).filter(User.email == body.email).first()
     if not user or not verify_password(body.password, user.password_hash):
+        record_login_failure(client_ip)
+        try:
+            log_warning(
+                "security", "auth/login",
+                f"Failed operator login for '{body.email}' from {client_ip}",
+            )
+            if check_brute_force(client_ip):
+                log_error(
+                    "security", "auth/login",
+                    f"Brute-force detected: {client_ip} exceeded 5 failures in 5 min",
+                    details=f"target={body.email}",
+                )
+                trigger_alarm(
+                    alarm_type="security",
+                    source="sensor_auto",
+                    message=f"Brute-force login detected from IP {client_ip}",
+                    details=f"target={body.email}",
+                    deduplicate=False,
+                )
+        except Exception:
+            pass
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
         )
+
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled")
 
+    record_login_success(client_ip)
     code = generate_otp(db, user.id)
     send_otp_email(user.email, code)
     return {"message": "OTP sent to your email address"}

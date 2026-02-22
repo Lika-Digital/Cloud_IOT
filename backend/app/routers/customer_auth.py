@@ -1,5 +1,5 @@
 """Customer authentication: register, login, profile."""
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session as DBSession
 from ..auth.user_database import get_user_db
 from ..auth.customer_models import Customer
@@ -33,12 +33,42 @@ def register(body: RegisterRequest, user_db: DBSession = Depends(get_user_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(body: LoginRequest, user_db: DBSession = Depends(get_user_db)):
+def login(request: Request, body: LoginRequest, user_db: DBSession = Depends(get_user_db)):
+    from ..services.security_monitor import record_login_failure, record_login_success, check_brute_force
+    from ..services.error_log_service import log_warning, log_error
+    from ..services.alarm_service import trigger_alarm
+
+    client_ip = request.client.host if request.client else "unknown"
+
     customer = user_db.query(Customer).filter(Customer.email == body.email).first()
     if not customer or not verify_password(body.password, customer.password_hash):
+        record_login_failure(client_ip)
+        try:
+            log_warning(
+                "security", "customer_auth/login",
+                f"Failed customer login for '{body.email}' from {client_ip}",
+            )
+            if check_brute_force(client_ip):
+                log_error(
+                    "security", "customer_auth/login",
+                    f"Brute-force detected: {client_ip} exceeded 5 failures in 5 min",
+                    details=f"target={body.email}",
+                )
+                trigger_alarm(
+                    alarm_type="security",
+                    source="sensor_auto",
+                    message=f"Brute-force customer login detected from IP {client_ip}",
+                    details=f"target={body.email}",
+                    deduplicate=False,
+                )
+        except Exception:
+            pass
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
     if not customer.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account inactive")
+
+    record_login_success(client_ip)
     token = create_customer_token(customer.id, customer.email)
     return TokenResponse(access_token=token)
 

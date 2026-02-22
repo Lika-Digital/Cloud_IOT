@@ -20,10 +20,13 @@ from .services.websocket_manager import ws_manager
 from .routers import pedestals, sessions, controls, analytics, predictions, websocket, camera, diagnostics
 from .routers import auth as auth_router
 from .routers import customer_auth, customer_sessions, customer_invoices, billing, chat, system_health
+from .routers import alarms as alarms_router
+from .routers import customer_alarms
 from .auth.user_database import init_user_db, UserSessionLocal
 from .auth.models import User
 from .auth.customer_models import BillingConfig
 from .auth.password import hash_password
+from .middleware.security_middleware import SecurityMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -31,8 +34,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_ADMIN_EMAIL = "admin@iot-dashboard.local"
 DEFAULT_ADMIN_PASSWORD = "admin1234"
 
-# How long a session may stay in 'pending' before being auto-denied
 PENDING_TIMEOUT_SECONDS = 15
+COMM_LOSS_TIMEOUT_SECONDS = 60
 
 
 # ─── Background tasks ────────────────────────────────────────────────────────
@@ -84,13 +87,63 @@ async def _pending_session_watchdog():
                         f"Session {s.id} auto-denied (pedestal={s.pedestal_id}, "
                         f"socket={s.socket_id}) — pending >{PENDING_TIMEOUT_SECONDS}s",
                     )
-                    logger.info(f"Watchdog: auto-denied stale session {s.id}")
                 except Exception as e:
                     logger.warning(f"Watchdog: failed to deny session {s.id}: {e}")
         except Exception as e:
             logger.warning(f"Pending session watchdog error: {e}")
         finally:
             db.close()
+
+
+async def _comm_loss_watchdog():
+    """
+    Every 30 s: check each known pedestal against its last-heartbeat timestamp.
+    If no heartbeat received in COMM_LOSS_TIMEOUT_SECONDS, raise a comm_loss alarm
+    (deduplicated — only one active comm_loss alarm per pedestal at a time).
+    When the pedestal recovers (heartbeat seen again), the alarm stays until
+    the operator acknowledges it.
+    """
+    from .services.error_log_service import log_warning
+    from .services.alarm_service import trigger_alarm, get_active_alarms
+    from .services.mqtt_handlers import last_heartbeat
+
+    while True:
+        await asyncio.sleep(30)
+        try:
+            db = SessionLocal()
+            try:
+                pedestal_ids = [p.id for p in db.query(Pedestal).all()]
+            finally:
+                db.close()
+
+            now = datetime.utcnow()
+            cutoff = now - timedelta(seconds=COMM_LOSS_TIMEOUT_SECONDS)
+
+            # Pedestals already carrying an active comm_loss alarm
+            active = get_active_alarms()
+            already_alarmed = {
+                a.pedestal_id for a in active
+                if a.alarm_type == "comm_loss" and a.pedestal_id is not None
+            }
+
+            for pid in pedestal_ids:
+                last_hb = last_heartbeat.get(pid)
+                if last_hb is None:
+                    continue  # never received a heartbeat — pedestal not yet active
+                if last_hb < cutoff and pid not in already_alarmed:
+                    trigger_alarm(
+                        alarm_type="comm_loss",
+                        source="sensor_auto",
+                        message=f"Pedestal {pid}: no heartbeat for >{COMM_LOSS_TIMEOUT_SECONDS}s",
+                        pedestal_id=pid,
+                        deduplicate=True,
+                    )
+                    log_warning(
+                        "hw", "comm_loss_watchdog",
+                        f"Pedestal {pid} communication loss — no heartbeat in {COMM_LOSS_TIMEOUT_SECONDS}s",
+                    )
+        except Exception as e:
+            logger.warning(f"Comm loss watchdog error: {e}")
 
 
 # ─── Startup / shutdown ───────────────────────────────────────────────────────
@@ -101,15 +154,14 @@ async def lifespan(app: FastAPI):
     init_db()
     init_user_db()
 
-    from .services.error_log_service import purge_old_logs, log_info, log_error, log_warning
+    from .services.error_log_service import purge_old_logs, log_info, log_error
 
-    # Purge stale logs from previous runs
     try:
         purge_old_logs()
     except Exception:
         pass
 
-    # ── Startup check #6: verify DB is reachable ─────────────────────────────
+    # Startup check: verify DB is reachable
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
@@ -121,15 +173,9 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         if not db.query(Pedestal).first():
-            pedestal = Pedestal(
-                name="Pedestal 1",
-                location="Marina Berth A",
-                data_mode="synthetic",
-            )
-            db.add(pedestal)
+            db.add(Pedestal(name="Pedestal 1", location="Marina Berth A", data_mode="synthetic"))
             db.commit()
             logger.info("Created default pedestal")
-
         pedestal_count = db.query(Pedestal).count()
     finally:
         db.close()
@@ -137,48 +183,42 @@ async def lifespan(app: FastAPI):
     # Seed admin user + billing config
     user_db = UserSessionLocal()
     try:
-        admin_exists = bool(user_db.query(User).first())
-        if not admin_exists:
-            admin = User(
+        if not user_db.query(User).first():
+            user_db.add(User(
                 email=DEFAULT_ADMIN_EMAIL,
                 password_hash=hash_password(DEFAULT_ADMIN_PASSWORD),
                 role="admin",
-            )
-            user_db.add(admin)
+            ))
             user_db.commit()
-            logger.info("Created default admin user: %s / %s", DEFAULT_ADMIN_EMAIL, DEFAULT_ADMIN_PASSWORD)
-
+            logger.info("Created default admin: %s / %s", DEFAULT_ADMIN_EMAIL, DEFAULT_ADMIN_PASSWORD)
         if not user_db.get(BillingConfig, 1):
             user_db.add(BillingConfig(id=1, kwh_price_eur=0.30, liter_price_eur=0.015))
             user_db.commit()
-            logger.info("Created default BillingConfig")
-
         user_count = user_db.query(User).count()
     finally:
         user_db.close()
 
-    # Start MQTT client
+    # Start MQTT
     loop = asyncio.get_event_loop()
     mqtt_service.start(loop)
 
-    # ── Startup check #6: summarise what we found ────────────────────────────
     log_info(
         "system", "startup",
         f"Application started — {pedestal_count} pedestal(s), {user_count} operator user(s), "
         f"MQTT → {settings.mqtt_broker_host}:{settings.mqtt_broker_port}, "
-        f"pending timeout {PENDING_TIMEOUT_SECONDS}s",
+        f"pending timeout {PENDING_TIMEOUT_SECONDS}s, comm-loss timeout {COMM_LOSS_TIMEOUT_SECONDS}s",
     )
 
-    # Start background tasks
-    cleanup_task  = asyncio.create_task(_hourly_log_purge())
-    watchdog_task = asyncio.create_task(_pending_session_watchdog())
+    cleanup_task   = asyncio.create_task(_hourly_log_purge())
+    watchdog_task  = asyncio.create_task(_pending_session_watchdog())
+    comm_loss_task = asyncio.create_task(_comm_loss_watchdog())
 
     yield
 
-    # Shutdown
     logger.info("Shutting down...")
     cleanup_task.cancel()
     watchdog_task.cancel()
+    comm_loss_task.cancel()
     mqtt_service.stop()
     simulator_manager.stop()
     try:
@@ -189,11 +229,7 @@ async def lifespan(app: FastAPI):
 
 # ─── App ──────────────────────────────────────────────────────────────────────
 
-app = FastAPI(
-    title="Smart Pedestal IoT API",
-    version="1.0.0",
-    lifespan=lifespan,
-)
+app = FastAPI(title="Smart Pedestal IoT API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -202,29 +238,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(SecurityMiddleware)
 
 
 # ─── Global exception handler ────────────────────────────────────────────────
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """Catch all unhandled 500 errors, log them, return JSON."""
     path = request.url.path
     tb = traceback.format_exc()
     logger.error(f"Unhandled exception on {path}: {exc}\n{tb}")
     try:
         from .services.error_log_service import log_error
-        log_error(
-            "system", "api",
-            f"Unhandled exception: {type(exc).__name__} on {path}",
-            details=tb[:2000],
-        )
+        log_error("system", "api", f"Unhandled exception: {type(exc).__name__} on {path}", details=tb[:2000])
     except Exception:
         pass
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error", "path": path},
-    )
+    return JSONResponse(status_code=500, content={"detail": "Internal server error", "path": path})
 
 
 # ─── Routers ─────────────────────────────────────────────────────────────────
@@ -244,6 +273,8 @@ app.include_router(customer_invoices.router)
 app.include_router(billing.router)
 app.include_router(chat.router)
 app.include_router(system_health.router)
+app.include_router(alarms_router.router)
+app.include_router(customer_alarms.router)
 
 
 @app.get("/health")

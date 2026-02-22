@@ -1,8 +1,11 @@
+import { useState } from 'react'
 import { useStore } from '../../store'
 import { allowSession, denySession } from '../../api'
+import DenyDialog from './DenyDialog'
 
 export default function PendingApprovals() {
   const { pendingSessions, updateSession } = useStore()
+  const [denyingId, setDenyingId] = useState<number | null>(null)
 
   if (pendingSessions.length === 0) return null
 
@@ -21,13 +24,22 @@ export default function PendingApprovals() {
               const updated = await allowSession(s.id)
               updateSession({ id: updated.id, status: 'active' })
             }}
-            onDeny={async () => {
-              const updated = await denySession(s.id)
-              updateSession({ id: updated.id, status: 'denied' })
-            }}
+            onDenyClick={() => setDenyingId(s.id)}
           />
         ))}
       </div>
+
+      {denyingId !== null && (
+        <DenyDialog
+          sessionId={denyingId}
+          onConfirm={async (reason) => {
+            const updated = await denySession(denyingId, reason)
+            updateSession({ id: updated.id, status: 'denied', deny_reason: reason ?? null })
+            setDenyingId(null)
+          }}
+          onCancel={() => setDenyingId(null)}
+        />
+      )}
     </div>
   )
 }
@@ -35,20 +47,23 @@ export default function PendingApprovals() {
 function PendingCard({
   session,
   onAllow,
-  onDeny,
+  onDenyClick,
 }: {
-  session: { id: number; type: string; socket_id: number | null; started_at: string }
+  session: { id: number; type: string; socket_id: number | null; started_at: string; customer_id: number | null; customer_name?: string | null }
   onAllow: () => void
-  onDeny: () => void
+  onDenyClick: () => void
 }) {
   return (
     <div className="card border-amber-700/50 flex items-center gap-4">
       <div className="flex-1">
         <p className="font-medium text-white">
           {session.type === 'electricity' ? `Socket ${session.socket_id}` : 'Water Meter'}
+          {session.customer_name && (
+            <span className="ml-2 text-sm text-amber-300 font-normal">· {session.customer_name}</span>
+          )}
         </p>
         <p className="text-xs text-gray-400">
-          {session.type === 'electricity' ? 'Plug detected' : 'Water flow detected'} •{' '}
+          {session.type === 'electricity' ? 'Plug connected' : 'Water flow requested'} •{' '}
           {new Date(session.started_at).toLocaleTimeString()}
         </p>
       </div>
@@ -56,7 +71,7 @@ function PendingCard({
         <button className="btn-success text-sm" onClick={onAllow}>
           Allow
         </button>
-        <button className="btn-danger text-sm" onClick={onDeny}>
+        <button className="btn-danger text-sm" onClick={onDenyClick}>
           Deny
         </button>
       </div>

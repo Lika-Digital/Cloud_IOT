@@ -104,6 +104,14 @@ class ChatMessageResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PedestalStatusResponse(BaseModel):
+    id: int
+    name: str
+    location: Optional[str] = None
+    occupied_sockets: list[int]
+    water_occupied: bool
+
+
 class SendMessageRequest(BaseModel):
     message: str
 

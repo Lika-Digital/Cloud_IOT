@@ -9,10 +9,37 @@ from ..services.session_service import session_service
 from ..services.websocket_manager import ws_manager
 from ..services.invoice_service import create_invoice_for_session
 from ..schemas.session import SessionResponse
-from ..schemas.customer import StartSessionRequest
+from ..schemas.customer import StartSessionRequest, PedestalStatusResponse
 from ..models.session import Session
 
 router = APIRouter(prefix="/api/customer/sessions", tags=["customer-sessions"])
+
+
+@router.get("/pedestal-status", response_model=list[PedestalStatusResponse])
+def pedestal_status(
+    db: DBSession = Depends(get_db),
+    customer: Customer = Depends(require_customer),
+):
+    """Return all pedestals with their currently occupied sockets."""
+    from ..models.pedestal import Pedestal
+    pedestals = db.query(Pedestal).order_by(Pedestal.id).all()
+    result = []
+    for p in pedestals:
+        active = (
+            db.query(Session)
+            .filter(Session.pedestal_id == p.id, Session.status.in_(["pending", "active"]))
+            .all()
+        )
+        occupied_sockets = [s.socket_id for s in active if s.socket_id is not None]
+        water_occupied = any(s for s in active if s.type == "water")
+        result.append(PedestalStatusResponse(
+            id=p.id,
+            name=p.name,
+            location=p.location,
+            occupied_sockets=occupied_sockets,
+            water_occupied=water_occupied,
+        ))
+    return result
 
 
 @router.post("/start", response_model=SessionResponse)

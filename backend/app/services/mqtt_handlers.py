@@ -9,6 +9,9 @@ from ..services.websocket_manager import ws_manager
 
 logger = logging.getLogger(__name__)
 
+# Tracks most-recent heartbeat per pedestal — read by _comm_loss_watchdog in main.py
+last_heartbeat: dict[int, datetime] = {}
+
 # Topic patterns
 SOCKET_STATUS_RE = re.compile(r"pedestal/(\d+)/socket/(\d+)/status")
 SOCKET_POWER_RE  = re.compile(r"pedestal/(\d+)/socket/(\d+)/power")
@@ -176,6 +179,7 @@ async def _handle_water_flow(pedestal_id: int, payload: str):
 async def _handle_heartbeat(pedestal_id: int, payload: str):
     try:
         data = json.loads(payload)
+        last_heartbeat[pedestal_id] = datetime.utcnow()  # update for comm-loss watchdog
         await ws_manager.broadcast({
             "event": "heartbeat",
             "data": {
@@ -206,6 +210,17 @@ async def _handle_temperature(pedestal_id: int, payload: str):
                 f"pedestal_{pedestal_id}",
                 f"Temperature ALARM: {round(value, 1)}°C (threshold 50°C)",
             )
+            try:
+                from .alarm_service import trigger_alarm
+                trigger_alarm(
+                    alarm_type="temperature",
+                    source="sensor_auto",
+                    message=f"Pedestal {pedestal_id}: temperature {round(value, 1)}°C exceeds 50°C threshold",
+                    pedestal_id=pedestal_id,
+                    deduplicate=True,
+                )
+            except Exception:
+                pass
 
         await ws_manager.broadcast({
             "event": "temperature_reading",
@@ -238,6 +253,17 @@ async def _handle_moisture(pedestal_id: int, payload: str):
                 f"pedestal_{pedestal_id}",
                 f"Moisture ALARM: {round(value, 1)}% (threshold 90%)",
             )
+            try:
+                from .alarm_service import trigger_alarm
+                trigger_alarm(
+                    alarm_type="moisture",
+                    source="sensor_auto",
+                    message=f"Pedestal {pedestal_id}: moisture {round(value, 1)}% exceeds 90% threshold",
+                    pedestal_id=pedestal_id,
+                    deduplicate=True,
+                )
+            except Exception:
+                pass
 
         await ws_manager.broadcast({
             "event": "moisture_reading",
@@ -259,7 +285,7 @@ async def _handle_diagnostics(pedestal_id: int, payload: str):
         data = json.loads(payload)
         diagnostics_manager.complete_request(pedestal_id, data)
 
-        # Log any failed sensors as HW errors
+        # Log any failed sensors as HW errors and raise operational alarm
         failed = [k for k, v in data.items() if v != "ok"]
         if failed:
             _hw_error(
@@ -267,6 +293,18 @@ async def _handle_diagnostics(pedestal_id: int, payload: str):
                 f"Diagnostics: {len(failed)} sensor(s) failed — {', '.join(failed)}",
                 details=json.dumps(data),
             )
+            try:
+                from .alarm_service import trigger_alarm
+                trigger_alarm(
+                    alarm_type="operational_failure",
+                    source="sensor_auto",
+                    message=f"Pedestal {pedestal_id}: diagnostics failure — {', '.join(failed)}",
+                    pedestal_id=pedestal_id,
+                    details=json.dumps(data),
+                    deduplicate=True,
+                )
+            except Exception:
+                pass
 
         await ws_manager.broadcast({
             "event": "diagnostics_result",

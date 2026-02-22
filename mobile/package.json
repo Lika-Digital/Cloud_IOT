@@ -3,10 +3,11 @@
   "version": "1.0.0",
   "main": "expo-router/entry",
   "scripts": {
-    "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "web": "expo start --web"
+    "setup-env": "node scripts/setup-env.js",
+    "start": "node scripts/setup-env.js && expo start",
+    "android": "node scripts/setup-env.js && expo start --android",
+    "ios": "node scripts/setup-env.js && expo start --ios",
+    "web": "node scripts/setup-env.js && expo start --web"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.2.0",

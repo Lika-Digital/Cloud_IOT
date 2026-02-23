@@ -9,7 +9,7 @@ interface Props {
 }
 
 export function SignaturePad({ visible, onConfirm, onCancel }: Props) {
-  const sigRef = useRef<SignatureCanvas>(null)
+  const sigRef = useRef<any>(null)
 
   const handleOK = (signature: string) => {
     onConfirm(signature)

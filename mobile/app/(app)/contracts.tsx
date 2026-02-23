@@ -62,7 +62,7 @@ export default function ContractsScreen() {
   const handleDownloadPdf = async (contractId: number) => {
     const token = getToken()
     const url = `${BASE_URL}/api/customer/contracts/${contractId}/pdf`
-    const localPath = `${FileSystem.documentDirectory}contract_${contractId}.pdf`
+    const localPath = `${(FileSystem as any).documentDirectory}contract_${contractId}.pdf`
     try {
       const { uri } = await FileSystem.downloadAsync(url, localPath, {
         headers: { Authorization: `Bearer ${token}` },

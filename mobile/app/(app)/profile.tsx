@@ -6,8 +6,6 @@ import {
 import { useRouter } from 'expo-router'
 import { useAuthStore } from '../../src/store/authStore'
 import { updateProfile } from '../../src/api/profile'
-import * as Notifications from 'expo-notifications'
-
 export default function ProfileScreen() {
   const { profile, logout, setProfile } = useAuthStore()
   const router = useRouter()
@@ -33,12 +31,13 @@ export default function ProfileScreen() {
     }
   }
 
-  const handleToggleNotifications = async (value: boolean) => {
+  const handleToggleNotifications = (value: boolean) => {
+    setNotificationsEnabled(value)
     if (value) {
-      const { status } = await Notifications.requestPermissionsAsync()
-      setNotificationsEnabled(status === 'granted')
-    } else {
-      setNotificationsEnabled(false)
+      Alert.alert(
+        'Push Notifications',
+        'Notifications will be requested automatically when you open the app on a physical device.',
+      )
     }
   }
 

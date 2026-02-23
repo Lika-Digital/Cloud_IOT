@@ -113,21 +113,26 @@ def make_contract_pdf(
     story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cccccc")))
     story.append(Spacer(1, 4 * mm))
 
-    # Signature
+    # Signature — pre-validate with PIL then pass clean JPEG to reportlab
     story.append(Paragraph("<b>Customer Signature:</b>", label_style))
     story.append(Spacer(1, 2 * mm))
     if signature_data:
+        sig_flowable = None
         try:
-            # Strip data URI prefix if present
+            from PIL import Image as PILImage
             raw = signature_data
             if "," in raw:
                 raw = raw.split(",", 1)[1]
-            img_bytes = base64.b64decode(raw)
-            img_buf = io.BytesIO(img_bytes)
-            img = RLImage(img_buf, width=60 * mm, height=25 * mm)
-            story.append(img)
+            img_bytes = base64.b64decode(raw + "==")  # pad for safety
+            pil_img = PILImage.open(io.BytesIO(img_bytes)).convert("RGB")
+            clean_buf = io.BytesIO()
+            pil_img.save(clean_buf, format="JPEG", quality=90)
+            clean_buf.seek(0)
+            sig_flowable = RLImage(clean_buf, width=60 * mm, height=25 * mm)
         except Exception:
-            story.append(Paragraph("[Signature image could not be rendered]", label_style))
+            pass
+        story.append(sig_flowable if sig_flowable is not None
+                     else Paragraph("[Signature image could not be rendered]", label_style))
     else:
         story.append(Paragraph("[No signature]", label_style))
 

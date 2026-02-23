@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import * as Device from 'expo-device'
 import * as Notifications from 'expo-notifications'
+import Constants from 'expo-constants'
 import { Platform } from 'react-native'
 import { registerPushToken } from '../api/profile'
 
@@ -58,8 +59,14 @@ async function registerForPushNotifications() {
     return
   }
 
+  const projectId = Constants.expoConfig?.extra?.eas?.projectId
+  if (!projectId) {
+    console.warn('Push notifications: no EAS projectId configured — skipping token registration')
+    return
+  }
+
   try {
-    const tokenData = await Notifications.getExpoPushTokenAsync()
+    const tokenData = await Notifications.getExpoPushTokenAsync({ projectId })
     const token = tokenData.data
     await registerPushToken(token)
   } catch (e) {

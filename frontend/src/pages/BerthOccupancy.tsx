@@ -33,13 +33,17 @@ export default function BerthOccupancy() {
   const [calendarBerth, setCalendarBerth] = useState<BerthOut | null>(null)
   const [calendarEntries, setCalendarEntries] = useState<CalendarEntry[]>([])
   const [calendarLoading, setCalendarLoading] = useState(false)
+  const [analyzingId, setAnalyzingId] = useState<number | null>(null)
+  const [analyzeResult, setAnalyzeResult] = useState<string | null>(null)
 
-  // Load berths on mount
-  useEffect(() => {
+  const refresh = () =>
     getBerths()
       .then((data: import('../store').BerthStatus[]) => setBerthOccupancy(data))
       .catch(() => {})
-      .finally(() => setLoading(false))
+
+  // Load berths on mount
+  useEffect(() => {
+    refresh().finally(() => setLoading(false))
   }, [])
 
   const openCalendar = async (berth: BerthOut) => {
@@ -55,9 +59,18 @@ export default function BerthOccupancy() {
   }
 
   const handleManualAnalyze = async (berthId: number) => {
+    setAnalyzingId(berthId)
+    setAnalyzeResult(null)
     try {
-      await triggerAnalysis(berthId)
-    } catch {/* ignore */}
+      const res = await triggerAnalysis(berthId)
+      setAnalyzeResult(`✓ ${res.detected_status}`)
+      await refresh()
+    } catch {
+      setAnalyzeResult('⚠ ML Worker unavailable')
+    } finally {
+      setAnalyzingId(null)
+      setTimeout(() => setAnalyzeResult(null), 4000)
+    }
   }
 
   return (
@@ -66,6 +79,16 @@ export default function BerthOccupancy() {
         <h1 className="text-2xl font-bold text-white">Berth Occupancy</h1>
         <p className="text-gray-400 text-sm mt-1">Real-time dock status — updated every 30 s by camera analysis</p>
       </div>
+
+      {analyzeResult && (
+        <div className={`text-sm font-semibold px-4 py-2 rounded-lg border w-fit ${
+          analyzeResult.startsWith('✓')
+            ? 'bg-green-900/30 border-green-700/50 text-green-400'
+            : 'bg-red-900/30 border-red-700/50 text-red-400'
+        }`}>
+          {analyzeResult}
+        </div>
+      )}
 
       {loading ? (
         <div className="text-gray-500 text-center py-16">Loading berth data…</div>
@@ -162,9 +185,10 @@ export default function BerthOccupancy() {
                           )}
                           <button
                             onClick={() => handleManualAnalyze(b.id)}
-                            className="text-xs text-gray-400 hover:text-gray-200 border border-gray-700 px-2 py-1 rounded"
+                            disabled={analyzingId === b.id}
+                            className="text-xs text-gray-400 hover:text-gray-200 border border-gray-700 px-2 py-1 rounded disabled:opacity-50 disabled:cursor-wait"
                           >
-                            🔄 Analyze
+                            {analyzingId === b.id ? '⏳ Analyzing…' : '🔄 Analyze'}
                           </button>
                         </div>
                       </td>

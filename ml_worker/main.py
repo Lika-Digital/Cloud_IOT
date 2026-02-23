@@ -47,8 +47,10 @@ from inference.dinov2 import DINOv2Session
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-MODELS_DIR = Path("/models")
-ASSETS_DIR = Path("/assets")
+# Docker paths take priority; fall back to native Windows paths
+_root = Path(__file__).parent.parent
+MODELS_DIR = Path("/models") if Path("/models").exists() else _root / "backend" / "models"
+ASSETS_DIR = Path("/assets") if Path("/assets").exists() else _root / "frontend" / "src" / "assets"
 
 RTDETR_PATH = MODELS_DIR / "rtdetr.onnx"
 DINOV2_PATH = MODELS_DIR / "dinov2.onnx"

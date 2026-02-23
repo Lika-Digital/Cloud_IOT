@@ -29,6 +29,7 @@ export default function Layout() {
       { to: '/billing', label: 'Billing', icon: '💰', badge: 0 },
       { to: '/users', label: 'Customers', icon: '👥', badge: unreadChatCount },
       { to: '/contracts', label: 'Contracts', icon: '📝', badge: 0 },
+      { to: '/berths', label: 'Berth Occupancy', icon: '⚓', badge: 0 },
       { to: '/system-health', label: 'System Health', icon: '🔧', badge: newErrorCount },
       { to: '/settings', label: 'Settings', icon: '⚙️', badge: 0 },
     ] : []),

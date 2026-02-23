@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   View, Text, StyleSheet, SafeAreaView, ScrollView,
-  TouchableOpacity, Linking, ActivityIndicator,
+  TouchableOpacity, Linking, ActivityIndicator, Alert,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useAuthStore } from '../../src/store/authStore'
@@ -13,6 +13,8 @@ import { useWebSocket } from '../../src/hooks/useWebSocket'
 import { stopMySession } from '../../src/api/sessions'
 import { getPendingContracts, getMyContracts, type CustomerContract } from '../../src/api/contracts'
 import { ShipCameraModal } from '../../src/components/ShipCameraModal'
+import { BerthBookingModal } from '../../src/components/BerthBookingModal'
+import { type ReservationOut } from '../../src/api/berths'
 
 export default function HomeScreen() {
   const { profile } = useAuthStore()
@@ -21,6 +23,7 @@ export default function HomeScreen() {
   const [showModal, setShowModal] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [showCamera, setShowCamera] = useState(false)
+  const [showBerthModal, setShowBerthModal] = useState(false)
 
   // Contract state
   const [pendingCount, setPendingCount] = useState(0)
@@ -131,7 +134,19 @@ export default function HomeScreen() {
           </View>
         </TouchableOpacity>
 
-        {/* 4. Contracts banner */}
+        {/* 4. Book a Berth card */}
+        <TouchableOpacity style={styles.berthCard} onPress={() => setShowBerthModal(true)} activeOpacity={0.85}>
+          <View style={styles.berthCardLeft}>
+            <Text style={styles.berthIcon}>⚓</Text>
+            <View>
+              <Text style={styles.berthTitle}>Book a Berth</Text>
+              <Text style={styles.berthSub}>Check availability & reserve</Text>
+            </View>
+          </View>
+          <Text style={styles.berthArrow}>›</Text>
+        </TouchableOpacity>
+
+        {/* 5. Contracts banner */}
         {contractsLoaded ? (
           <TouchableOpacity
             style={[
@@ -202,6 +217,18 @@ export default function HomeScreen() {
       </ScrollView>
 
       <StartSessionModal visible={showModal} onClose={() => setShowModal(false)} />
+      <BerthBookingModal
+        visible={showBerthModal}
+        onClose={() => setShowBerthModal(false)}
+        onReserved={(res: ReservationOut) => {
+          setShowBerthModal(false)
+          Alert.alert(
+            '⚓ Berth Reserved!',
+            `${res.berth_name}\n${res.check_in_date} → ${res.check_out_date}`,
+            [{ text: 'OK' }],
+          )
+        }}
+      />
       <ShipCameraModal
         visible={showCamera}
         shipName={profile?.ship_name ?? undefined}
@@ -250,6 +277,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   mapBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
+
+  // Berth booking card
+  berthCard: {
+    backgroundColor: '#0f172a',
+    borderRadius: 16,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#1e3a5f',
+  },
+  berthCardLeft: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  berthIcon: { fontSize: 32 },
+  berthTitle: { color: '#f9fafb', fontWeight: '700', fontSize: 15 },
+  berthSub: { color: '#6b7280', fontSize: 12, marginTop: 2 },
+  berthArrow: { color: '#60a5fa', fontSize: 26 },
 
   // Camera card
   cameraCard: {

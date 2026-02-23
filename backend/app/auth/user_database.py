@@ -35,6 +35,7 @@ def init_user_db():
     from .models import User, OtpStore  # noqa: F401
     from .customer_models import Customer, BillingConfig, Invoice, ChatMessage  # noqa: F401
     from .contract_models import ContractTemplate, CustomerContract, ServiceOrder  # noqa: F401
+    from .berth_models import Berth, BerthReservation  # noqa: F401
     UserBase.metadata.create_all(bind=user_engine)
     _migrate_user_schema()
 

@@ -25,10 +25,12 @@ from .routers import customer_alarms
 from .routers import contracts as contracts_router
 from .routers import service_orders as service_orders_router
 from .routers import reviews as reviews_router
+from .routers import berths as berths_router
 from .auth.user_database import init_user_db, UserSessionLocal
 from .auth.models import User
 from .auth.customer_models import BillingConfig
 from .auth.contract_models import ContractTemplate
+from .auth.berth_models import Berth
 from .auth.password import hash_password
 from .middleware.security_middleware import SecurityMiddleware
 
@@ -198,6 +200,32 @@ async def lifespan(app: FastAPI):
         if not user_db.get(BillingConfig, 1):
             user_db.add(BillingConfig(id=1, kwh_price_eur=0.30, liter_price_eur=0.015))
             user_db.commit()
+        # Seed default berths (3 berths for the pilot)
+        if not user_db.query(Berth).first():
+            user_db.add(Berth(
+                name="Yearly Contract Berth 1",
+                pedestal_id=1,
+                status="free",
+                detected_status="free",
+                video_source="Berth Full.mp4",
+            ))
+            user_db.add(Berth(
+                name="Yearly Contract Berth 2",
+                pedestal_id=2,
+                status="free",
+                detected_status="free",
+                video_source="Berth empty.mp4",
+            ))
+            user_db.add(Berth(
+                name="Transit Berth",
+                pedestal_id=None,
+                status="free",
+                detected_status="free",
+                video_source=None,
+            ))
+            user_db.commit()
+            logger.info("Seeded 3 default berths")
+
         if not user_db.query(ContractTemplate).first():
             user_db.add(ContractTemplate(
                 title="Marina Portorož – Berth Service Agreement",
@@ -255,9 +283,11 @@ async def lifespan(app: FastAPI):
         f"pending timeout {PENDING_TIMEOUT_SECONDS}s, comm-loss timeout {COMM_LOSS_TIMEOUT_SECONDS}s",
     )
 
-    cleanup_task   = asyncio.create_task(_hourly_log_purge())
-    watchdog_task  = asyncio.create_task(_pending_session_watchdog())
-    comm_loss_task = asyncio.create_task(_comm_loss_watchdog())
+    from .services.berth_analyzer import run_berth_analysis
+    cleanup_task    = asyncio.create_task(_hourly_log_purge())
+    watchdog_task   = asyncio.create_task(_pending_session_watchdog())
+    comm_loss_task  = asyncio.create_task(_comm_loss_watchdog())
+    berth_task      = asyncio.create_task(run_berth_analysis())
 
     yield
 
@@ -265,6 +295,7 @@ async def lifespan(app: FastAPI):
     cleanup_task.cancel()
     watchdog_task.cancel()
     comm_loss_task.cancel()
+    berth_task.cancel()
     mqtt_service.stop()
     simulator_manager.stop()
     try:
@@ -324,6 +355,7 @@ app.include_router(customer_alarms.router)
 app.include_router(contracts_router.router)
 app.include_router(service_orders_router.router)
 app.include_router(reviews_router.router)
+app.include_router(berths_router.router)
 
 
 @app.get("/health")

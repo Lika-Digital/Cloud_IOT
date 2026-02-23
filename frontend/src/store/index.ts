@@ -56,6 +56,16 @@ export interface SocketLiveData {
   lastUpdated: string
 }
 
+export interface BerthStatus {
+  id: number
+  name: string
+  status: 'free' | 'occupied' | 'reserved'
+  detected_status: string
+  pedestal_id: number | null
+  video_source: string | null
+  last_analyzed: string | null
+}
+
 // --- Store ---
 
 interface AppStore {
@@ -109,6 +119,11 @@ interface AppStore {
   newErrorCount: number
   incrementNewErrors: () => void
   resetNewErrors: () => void
+
+  // Berth occupancy
+  berthOccupancy: BerthStatus[]
+  setBerthOccupancy: (berths: BerthStatus[]) => void
+  updateBerthOccupancy: (berths: BerthStatus[]) => void
 }
 
 export const useStore = create<AppStore>((set) => ({
@@ -201,4 +216,13 @@ export const useStore = create<AppStore>((set) => ({
   newErrorCount: 0,
   incrementNewErrors: () => set((s) => ({ newErrorCount: s.newErrorCount + 1 })),
   resetNewErrors: () => set({ newErrorCount: 0 }),
+
+  berthOccupancy: [],
+  setBerthOccupancy: (berths) => set({ berthOccupancy: berths }),
+  updateBerthOccupancy: (incoming) =>
+    set((s) => {
+      const map = new Map(s.berthOccupancy.map((b) => [b.id, b]))
+      for (const b of incoming) map.set(b.id, b as BerthStatus)
+      return { berthOccupancy: Array.from(map.values()) }
+    }),
 }))

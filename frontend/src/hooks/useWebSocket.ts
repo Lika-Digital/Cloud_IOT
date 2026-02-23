@@ -20,6 +20,7 @@ export function useWebSocket() {
     incrementUnreadChat,
     setLastChatMessage,
     incrementNewErrors,
+    updateBerthOccupancy,
   } = useStore()
   const { role } = useAuthStore()
 
@@ -172,6 +173,11 @@ export function useWebSocket() {
               incrementNewErrors()
             }
           }
+          break
+        }
+        case 'berth_occupancy_updated': {
+          const berths = msg.data.berths as import('../store').BerthStatus[]
+          updateBerthOccupancy(berths)
           break
         }
       }

@@ -8,6 +8,7 @@ import Billing from './pages/Billing'
 import Users from './pages/Users'
 import SystemHealth from './pages/SystemHealth'
 import Contracts from './pages/Contracts'
+import BerthOccupancy from './pages/BerthOccupancy'
 import LoginPage from './pages/LoginPage'
 import ProtectedRoute from './components/auth/ProtectedRoute'
 import { useWebSocket } from './hooks/useWebSocket'
@@ -66,6 +67,14 @@ function AppInner() {
           element={
             <ProtectedRoute adminOnly>
               <Contracts />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="berths"
+          element={
+            <ProtectedRoute adminOnly>
+              <BerthOccupancy />
             </ProtectedRoute>
           }
         />

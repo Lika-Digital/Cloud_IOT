@@ -95,14 +95,15 @@ def update_profile(
     user_db: DBSession = Depends(get_user_db),
     customer: Customer = Depends(require_customer),
 ):
+    # Re-fetch within this session to avoid cross-session detached-object issues
+    db_customer = user_db.get(Customer, customer.id)
     if body.name is not None:
-        customer.name = body.name
+        db_customer.name = body.name
     if body.ship_name is not None:
-        customer.ship_name = body.ship_name
-    user_db.add(customer)
+        db_customer.ship_name = body.ship_name
     user_db.commit()
-    user_db.refresh(customer)
-    return customer
+    user_db.refresh(db_customer)
+    return db_customer
 
 
 @router.post("/push-token")
@@ -111,7 +112,8 @@ def save_push_token(
     user_db: DBSession = Depends(get_user_db),
     customer: Customer = Depends(require_customer),
 ):
-    customer.push_token = body.token
-    user_db.add(customer)
+    # Re-fetch within this session to avoid cross-session detached-object issues
+    db_customer = user_db.get(Customer, customer.id)
+    db_customer.push_token = body.token
     user_db.commit()
     return {"ok": True}

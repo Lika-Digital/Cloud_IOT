@@ -41,7 +41,7 @@ export default function ChatPanel({ customerId, customerName, customerEmail, onC
         id: Date.now(),
         customer_id: lastChatMessage.customer_id,
         message: lastChatMessage.message,
-        direction: lastChatMessage.direction,
+        direction: lastChatMessage.direction as ChatMessage['direction'],
         created_at: lastChatMessage.created_at,
         read_at: null,
       }]

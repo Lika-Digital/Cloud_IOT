@@ -39,3 +39,16 @@ class ServiceOrder(UserBase):
     notes: Mapped[str] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ServiceReview(UserBase):
+    __tablename__ = "service_reviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    customer_id: Mapped[int] = mapped_column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
+    stars: Mapped[int] = mapped_column(Integer, nullable=False)          # 1–5
+    comment: Mapped[str] = mapped_column(Text, nullable=True)
+    # Optional links — at most one will be set
+    session_id: Mapped[int] = mapped_column(Integer, nullable=True)
+    service_order_id: Mapped[int] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

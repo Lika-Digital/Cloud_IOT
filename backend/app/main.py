@@ -24,6 +24,7 @@ from .routers import alarms as alarms_router
 from .routers import customer_alarms
 from .routers import contracts as contracts_router
 from .routers import service_orders as service_orders_router
+from .routers import reviews as reviews_router
 from .auth.user_database import init_user_db, UserSessionLocal
 from .auth.models import User
 from .auth.customer_models import BillingConfig
@@ -322,6 +323,7 @@ app.include_router(alarms_router.router)
 app.include_router(customer_alarms.router)
 app.include_router(contracts_router.router)
 app.include_router(service_orders_router.router)
+app.include_router(reviews_router.router)
 
 
 @app.get("/health")

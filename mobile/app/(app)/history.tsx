@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   View, Text, StyleSheet, SafeAreaView,
-  ScrollView, TouchableOpacity, ActivityIndicator,
+  ScrollView, TouchableOpacity, ActivityIndicator, Alert,
 } from 'react-native'
 import { getMySessions, type Session } from '../../src/api/sessions'
 import { getMyInvoices, payInvoice, type Invoice } from '../../src/api/invoices'
+import { getMyReviews, type Review } from '../../src/api/reviews'
 import { InvoiceCard } from '../../src/components/InvoiceCard'
+import { ReviewModal } from '../../src/components/ReviewModal'
 
 type Tab = 'sessions' | 'invoices'
 
@@ -13,14 +15,17 @@ export default function HistoryScreen() {
   const [tab, setTab] = useState<Tab>('sessions')
   const [sessions, setSessions] = useState<Session[]>([])
   const [invoices, setInvoices] = useState<Invoice[]>([])
+  const [myReviews, setMyReviews] = useState<Review[]>([])
   const [loading, setLoading] = useState(true)
+  const [reviewTarget, setReviewTarget] = useState<{ sessionId: number; title: string } | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [s, i] = await Promise.all([getMySessions(), getMyInvoices()])
+      const [s, i, r] = await Promise.all([getMySessions(), getMyInvoices(), getMyReviews()])
       setSessions(s)
       setInvoices(i)
+      setMyReviews(r)
     } catch {}
     setLoading(false)
   }, [])
@@ -62,7 +67,17 @@ export default function HistoryScreen() {
           {tab === 'sessions' && (
             sessions.length === 0
               ? <EmptyState icon="📋" text="No sessions yet." />
-              : sessions.map((s) => <SessionRow key={s.id} session={s} />)
+              : sessions.map((s) => (
+                  <SessionRow
+                    key={s.id}
+                    session={s}
+                    alreadyReviewed={myReviews.some((r) => r.session_id === s.id)}
+                    onReview={() => setReviewTarget({
+                      sessionId: s.id,
+                      title: `${s.type === 'electricity' ? '⚡ Electricity' : '💧 Water'} Session`,
+                    })}
+                  />
+                ))
           )}
           {tab === 'invoices' && (
             invoices.length === 0
@@ -73,12 +88,32 @@ export default function HistoryScreen() {
           )}
         </ScrollView>
       )}
+
+      <ReviewModal
+        visible={reviewTarget !== null}
+        sessionId={reviewTarget?.sessionId}
+        title={reviewTarget?.title}
+        onClose={() => setReviewTarget(null)}
+        onSubmitted={() => {
+          setReviewTarget(null)
+          Alert.alert('Thank you!', 'Your review has been submitted.')
+          load()
+        }}
+      />
     </SafeAreaView>
   )
 }
 
 // ─── Session row ─────────────────────────────────────────────────────────────
-function SessionRow({ session }: { session: Session }) {
+function SessionRow({
+  session,
+  alreadyReviewed,
+  onReview,
+}: {
+  session: Session
+  alreadyReviewed: boolean
+  onReview: () => void
+}) {
   const statusMeta: Record<string, { color: string; label: string; icon: string }> = {
     completed: { color: '#4ade80', label: 'Completed', icon: '✅' },
     denied:    { color: '#f87171', label: 'Denied',    icon: '❌' },
@@ -131,6 +166,17 @@ function SessionRow({ session }: { session: Session }) {
         {/* Denial reason */}
         {session.deny_reason && (
           <Text style={rowStyles.reason}>Reason: {session.deny_reason}</Text>
+        )}
+
+        {/* Rate button — only for completed sessions */}
+        {session.status === 'completed' && (
+          alreadyReviewed
+            ? <Text style={rowStyles.reviewed}>★ Reviewed</Text>
+            : (
+              <TouchableOpacity style={rowStyles.rateBtn} onPress={onReview}>
+                <Text style={rowStyles.rateBtnText}>★ Rate this session</Text>
+              </TouchableOpacity>
+            )
         )}
       </View>
     </View>
@@ -214,4 +260,17 @@ const rowStyles = StyleSheet.create({
   usage: { color: '#9ca3af', fontSize: 12, fontFamily: 'monospace' },
 
   reason: { color: '#f87171', fontSize: 12, marginTop: 2 },
+
+  rateBtn: {
+    marginTop: 6,
+    alignSelf: 'flex-start',
+    backgroundColor: '#1e3a5f',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: '#3b82f6',
+  },
+  rateBtnText: { color: '#60a5fa', fontWeight: '700', fontSize: 12 },
+  reviewed: { color: '#fbbf24', fontSize: 12, marginTop: 6, fontWeight: '600' },
 })

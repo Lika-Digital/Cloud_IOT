@@ -12,6 +12,7 @@ import { StartSessionModal } from '../../src/components/StartSessionModal'
 import { useWebSocket } from '../../src/hooks/useWebSocket'
 import { stopMySession } from '../../src/api/sessions'
 import { getPendingContracts, getMyContracts, type CustomerContract } from '../../src/api/contracts'
+import { ShipCameraModal } from '../../src/components/ShipCameraModal'
 
 export default function HomeScreen() {
   const { profile } = useAuthStore()
@@ -19,6 +20,7 @@ export default function HomeScreen() {
   const router = useRouter()
   const [showModal, setShowModal] = useState(false)
   const [stopping, setStopping] = useState(false)
+  const [showCamera, setShowCamera] = useState(false)
 
   // Contract state
   const [pendingCount, setPendingCount] = useState(0)
@@ -114,7 +116,22 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* 3. Contracts banner */}
+        {/* 3. Check My Ship */}
+        <TouchableOpacity style={styles.cameraCard} onPress={() => setShowCamera(true)} activeOpacity={0.85}>
+          <View style={styles.cameraCardLeft}>
+            <Text style={styles.cameraIcon}>📷</Text>
+            <View>
+              <Text style={styles.cameraTitle}>Check My Ship</Text>
+              <Text style={styles.cameraSub}>Live berth camera view</Text>
+            </View>
+          </View>
+          <View style={styles.livePill}>
+            <View style={styles.liveDot} />
+            <Text style={styles.liveText}>LIVE</Text>
+          </View>
+        </TouchableOpacity>
+
+        {/* 4. Contracts banner */}
         {contractsLoaded ? (
           <TouchableOpacity
             style={[
@@ -185,6 +202,11 @@ export default function HomeScreen() {
       </ScrollView>
 
       <StartSessionModal visible={showModal} onClose={() => setShowModal(false)} />
+      <ShipCameraModal
+        visible={showCamera}
+        shipName={profile?.ship_name ?? undefined}
+        onClose={() => setShowCamera(false)}
+      />
     </SafeAreaView>
   )
 }
@@ -228,6 +250,29 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   mapBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
+
+  // Camera card
+  cameraCard: {
+    backgroundColor: '#0f172a',
+    borderRadius: 16,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#1e3a5f',
+  },
+  cameraCardLeft: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  cameraIcon: { fontSize: 32 },
+  cameraTitle: { color: '#f9fafb', fontWeight: '700', fontSize: 15 },
+  cameraSub: { color: '#6b7280', fontSize: 12, marginTop: 2 },
+  livePill: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: '#dc2626', paddingHorizontal: 10,
+    paddingVertical: 5, borderRadius: 20,
+  },
+  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#fff' },
+  liveText: { color: '#fff', fontWeight: '800', fontSize: 11 },
 
   // Contract banner
   contractBanner: {

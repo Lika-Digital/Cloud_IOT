@@ -1,101 +1,153 @@
 """
 One-time model setup script.
 
-Downloads and exports RT-DETR and DINOv2 as ONNX files into /models/.
+Exports RT-DETR and DINOv2 as ONNX files into /models/ using
+torch.onnx.export directly (no optimum-cli dependency).
 
-Run inside the ml_worker Docker container:
+Run with the ml_export_env (64-bit Python 3.11):
 
-    # Step 1 – install export dependencies (one-time, temporary in container)
-    docker compose run --rm ml_worker pip install -r requirements-setup.txt
+    # Create + fill env once:
+    py -3.11 -m venv C:/temp/ml_export_env
+    C:/temp/ml_export_env/Scripts/pip install torch transformers onnxruntime
 
-    # Step 2 – export the models
-    docker compose run --rm ml_worker python setup_models.py
+    # Export:
+    C:/temp/ml_export_env/Scripts/python ml_worker/setup_models.py
 
-Models written to /models/ (mounted from backend/models/ on the host):
+Models written to backend/models/ on the host:
     rtdetr.onnx   ~70 MB   RT-DETR ResNet-18 backbone, COCO-pretrained
     dinov2.onnx   ~85 MB   DINOv2 ViT-S/14, image embeddings
 
 Total disk usage: ~155 MB
 """
 
-import shutil
-import subprocess
+import os
 import sys
 from pathlib import Path
 
 # Inside Docker: /models is the volume mount.
 # On Windows directly: use backend/models/ relative to project root.
-_docker_path   = Path("/models")
-_native_path   = Path(__file__).parent.parent / "backend" / "models"
-MODELS_DIR     = _docker_path if _docker_path.exists() else _native_path
+_docker_path = Path("/models")
+_native_path = Path(__file__).parent.parent / "backend" / "models"
+MODELS_DIR = _docker_path if _docker_path.exists() else _native_path
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-RTDETR_OUT  = MODELS_DIR / "rtdetr.onnx"
-DINOV2_OUT  = MODELS_DIR / "dinov2.onnx"
+RTDETR_OUT = MODELS_DIR / "rtdetr.onnx"
+DINOV2_OUT = MODELS_DIR / "dinov2.onnx"
 
-# Temporary export directories (deleted after copying final .onnx)
-RTDETR_EXPORT = MODELS_DIR / "_rtdetr_export"
-DINOV2_EXPORT = MODELS_DIR / "_dinov2_export"
+# Suppress symlink warning from huggingface_hub on Windows without Developer Mode
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
 
-def _check_optimum():
-    try:
-        import optimum  # noqa: F401
-    except ImportError:
-        print("\n[ERROR] 'optimum' is not installed.")
-        print("Install it with:")
-        print("  # Docker:")
-        print("  docker compose run --rm ml_worker pip install -r requirements-setup.txt")
-        print("  # Native 64-bit Python:")
-        print("  pip install optimum[exporters] torch==2.4.0+cpu --index-url https://download.pytorch.org/whl/cpu\n")
+def _check_deps():
+    missing = []
+    for pkg in ("torch", "transformers", "onnxruntime"):
+        try:
+            __import__(pkg)
+        except ImportError:
+            missing.append(pkg)
+    if missing:
+        print(f"\n[ERROR] Missing packages: {', '.join(missing)}")
+        print("Install with:")
+        print("  C:/temp/ml_export_env/Scripts/pip install torch transformers onnxruntime")
         sys.exit(1)
 
 
-def _export(model_id: str, task: str, export_dir: Path, out_file: Path, label: str):
-    if out_file.exists():
-        print(f"[SKIP] {label} already exists at {out_file}")
+def _export_rtdetr():
+    if RTDETR_OUT.exists():
+        print(f"[SKIP] RT-DETR already exists at {RTDETR_OUT}")
         return
 
     print(f"\n{'='*60}")
-    print(f"[{label}] Downloading and exporting from HuggingFace ...")
-    print(f"  model  : {model_id}")
-    print(f"  task   : {task}")
-    print(f"  output : {out_file}")
+    print("[RT-DETR] Downloading PekingU/rtdetr_r18vd from HuggingFace ...")
+    print(f"  output : {RTDETR_OUT}")
     print(f"{'='*60}")
 
-    # Clean up any previous partial export
-    if export_dir.exists():
-        shutil.rmtree(export_dir)
-    export_dir.mkdir(parents=True)
+    import torch
+    from transformers import RTDetrForObjectDetection
 
-    cmd = [
-        "optimum-cli", "export", "onnx",
-        "--model",  model_id,
-        "--task",   task,
-        "--opset",  "17",
-        "--device", "cpu",
-        str(export_dir),
-    ]
+    model = RTDetrForObjectDetection.from_pretrained("PekingU/rtdetr_r18vd")
+    model.eval()
 
-    result = subprocess.run(cmd, check=False)
-    if result.returncode != 0:
-        print(f"\n[ERROR] optimum-cli export failed for {label}.")
-        sys.exit(1)
+    # Wrapper so torch.onnx.export gets plain tensor I/O
+    class _Wrapper(torch.nn.Module):
+        def __init__(self, m):
+            super().__init__()
+            self.m = m
 
-    # optimum writes model.onnx (sometimes model_quantized.onnx too)
-    candidate = export_dir / "model.onnx"
-    if not candidate.exists():
-        # Some tasks produce decoder_model.onnx etc. — take the main one
-        candidates = sorted(export_dir.glob("*.onnx"))
-        if not candidates:
-            print(f"[ERROR] No .onnx file found in {export_dir}")
-            sys.exit(1)
-        candidate = candidates[0]
+        def forward(self, pixel_values):
+            out = self.m(pixel_values=pixel_values)
+            return out.logits, out.pred_boxes
 
-    shutil.copy(candidate, out_file)
-    shutil.rmtree(export_dir)  # clean up temp files
-    size_mb = out_file.stat().st_size / (1024 * 1024)
-    print(f"\n[OK] {label} → {out_file}  ({size_mb:.1f} MB)")
+    wrapper = _Wrapper(model)
+    dummy = torch.zeros(1, 3, 640, 640, dtype=torch.float32)
+
+    print("[RT-DETR] Exporting to ONNX (opset 17, legacy exporter) ...")
+    with torch.no_grad():
+        torch.onnx.export(
+            wrapper,
+            (dummy,),
+            str(RTDETR_OUT),
+            input_names=["pixel_values"],
+            output_names=["logits", "pred_boxes"],
+            opset_version=17,
+            dynamo=False,
+            dynamic_axes={
+                "pixel_values": {0: "batch"},
+                "logits":       {0: "batch"},
+                "pred_boxes":   {0: "batch"},
+            },
+        )
+
+    size_mb = RTDETR_OUT.stat().st_size / (1024 * 1024)
+    print(f"\n[OK] RT-DETR -> {RTDETR_OUT}  ({size_mb:.1f} MB)")
+
+
+def _export_dinov2():
+    if DINOV2_OUT.exists():
+        print(f"[SKIP] DINOv2 already exists at {DINOV2_OUT}")
+        return
+
+    print(f"\n{'='*60}")
+    print("[DINOv2] Downloading facebook/dinov2-small from HuggingFace ...")
+    print(f"  output : {DINOV2_OUT}")
+    print(f"{'='*60}")
+
+    import torch
+    from transformers import AutoModel
+
+    model = AutoModel.from_pretrained("facebook/dinov2-small")
+    model.eval()
+
+    class _Wrapper(torch.nn.Module):
+        def __init__(self, m):
+            super().__init__()
+            self.m = m
+
+        def forward(self, pixel_values):
+            out = self.m(pixel_values=pixel_values)
+            return out.last_hidden_state  # [1, seq, 384]
+
+    wrapper = _Wrapper(model)
+    dummy = torch.zeros(1, 3, 224, 224, dtype=torch.float32)
+
+    print("[DINOv2] Exporting to ONNX (opset 17, legacy exporter) ...")
+    with torch.no_grad():
+        torch.onnx.export(
+            wrapper,
+            (dummy,),
+            str(DINOV2_OUT),
+            input_names=["pixel_values"],
+            output_names=["last_hidden_state"],
+            opset_version=17,
+            dynamo=False,
+            dynamic_axes={
+                "pixel_values":     {0: "batch"},
+                "last_hidden_state": {0: "batch"},
+            },
+        )
+
+    size_mb = DINOV2_OUT.stat().st_size / (1024 * 1024)
+    print(f"\n[OK] DINOv2 -> {DINOV2_OUT}  ({size_mb:.1f} MB)")
 
 
 def _verify(label: str, path: Path):
@@ -110,25 +162,9 @@ def _verify(label: str, path: Path):
 
 
 def main():
-    _check_optimum()
-
-    # ── RT-DETR (ResNet-18, COCO object-detection) ────────────────────────────
-    _export(
-        model_id   = "PekingU/rtdetr_r18vd",
-        task       = "object-detection",
-        export_dir = RTDETR_EXPORT,
-        out_file   = RTDETR_OUT,
-        label      = "RT-DETR",
-    )
-
-    # ── DINOv2-small (ViT-S/14, image feature extraction) ────────────────────
-    _export(
-        model_id   = "facebook/dinov2-small",
-        task       = "feature-extraction",
-        export_dir = DINOV2_EXPORT,
-        out_file   = DINOV2_OUT,
-        label      = "DINOv2",
-    )
+    _check_deps()
+    _export_rtdetr()
+    _export_dinov2()
 
     # ── Verification ──────────────────────────────────────────────────────────
     print(f"\n{'='*60}")

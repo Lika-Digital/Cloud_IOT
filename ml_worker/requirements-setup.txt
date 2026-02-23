@@ -1,10 +1,17 @@
 # Extra dependencies needed only for the one-time model export step.
 # The main ml_worker container does NOT need these at runtime.
-# Run: docker compose run --rm ml_worker pip install -r requirements-setup.txt
+#
+# Run with 64-bit Python 3.11+:
+#   py -3.11 -m venv C:/temp/ml_export_env
+#   C:/temp/ml_export_env/Scripts/pip install -r ml_worker/requirements-setup.txt
+#   C:/temp/ml_export_env/Scripts/python ml_worker/setup_models.py
 
-# CPU-only torch (much smaller than CUDA variant: ~250 MB vs ~2 GB)
-torch==2.4.0+cpu --index-url https://download.pytorch.org/whl/cpu
+# PyTorch CPU-only (much smaller than CUDA variant: ~250 MB vs ~2 GB)
+torch>=2.4.0
+torchvision
 
-# Hugging Face model exporter to ONNX
-optimum[exporters]==1.23.3
-transformers==4.44.2
+# Hugging Face transformers (for RTDetrForObjectDetection + AutoModel)
+transformers>=4.44.2
+
+# ONNX runtime for post-export verification
+onnxruntime>=1.17.0

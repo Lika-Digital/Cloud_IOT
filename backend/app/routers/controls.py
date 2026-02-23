@@ -1,9 +1,12 @@
 from typing import Optional
+import asyncio
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session as DBSession
 from ..database import get_db
 from ..auth.user_database import get_user_db
+from ..auth.customer_models import Customer
 from ..models.session import Session
 from ..schemas.session import SessionResponse
 from ..services.session_service import session_service
@@ -12,7 +15,21 @@ from ..services.websocket_manager import ws_manager
 from ..services.invoice_service import create_invoice_for_session
 from ..auth.dependencies import require_admin
 from ..auth.models import User
-import asyncio
+
+logger = logging.getLogger(__name__)
+
+
+async def _send_expo_push(push_token: str, title: str, body: str, data: dict):
+    """Fire-and-forget Expo push notification. Never raises."""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(
+                "https://exp.host/--/api/v2/push/send",
+                json={"to": push_token, "title": title, "body": body, "data": data},
+            )
+    except Exception as e:
+        logger.warning(f"Push notification failed: {e}")
 
 router = APIRouter(prefix="/api/controls", tags=["controls"])
 
@@ -35,7 +52,12 @@ def _control_topic(session: Session) -> str:
 
 
 @router.post("/{session_id}/allow", response_model=SessionResponse)
-async def allow_session(session_id: int, db: DBSession = Depends(get_db), _: User = Depends(require_admin)):
+async def allow_session(
+    session_id: int,
+    db: DBSession = Depends(get_db),
+    user_db: DBSession = Depends(get_user_db),
+    _: User = Depends(require_admin),
+):
     session = _get_session_or_404(session_id, db)
     if session.status != "pending":
         raise HTTPException(status_code=400, detail=f"Session is {session.status}, expected pending")
@@ -55,6 +77,18 @@ async def allow_session(session_id: int, db: DBSession = Depends(get_db), _: Use
             "deny_reason": None,
         },
     })
+
+    # Fire-and-forget push notification
+    if session.customer_id:
+        customer = user_db.get(Customer, session.customer_id)
+        if customer and getattr(customer, "push_token", None):
+            asyncio.create_task(_send_expo_push(
+                customer.push_token,
+                title="Session Approved",
+                body=f"Your {session.type} session on Pedestal {session.pedestal_id} has been approved.",
+                data={"session_id": session.id},
+            ))
+
     return session
 
 
@@ -63,6 +97,7 @@ async def deny_session(
     session_id: int,
     body: DenyBody = DenyBody(),
     db: DBSession = Depends(get_db),
+    user_db: DBSession = Depends(get_user_db),
     _: User = Depends(require_admin),
 ):
     session = _get_session_or_404(session_id, db)
@@ -84,6 +119,19 @@ async def deny_session(
             "deny_reason": session.deny_reason,
         },
     })
+
+    # Fire-and-forget push notification
+    if session.customer_id:
+        customer = user_db.get(Customer, session.customer_id)
+        if customer and getattr(customer, "push_token", None):
+            reason_text = session.deny_reason or "No reason provided."
+            asyncio.create_task(_send_expo_push(
+                customer.push_token,
+                title="Session Denied",
+                body=f"Your {session.type} session was denied. Reason: {reason_text}",
+                data={"session_id": session.id},
+            ))
+
     return session
 
 

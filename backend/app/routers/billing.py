@@ -10,7 +10,7 @@ from ..auth.models import User
 from ..models.session import Session
 from ..schemas.customer import (
     BillingConfigResponse, BillingConfigUpdate,
-    CustomerSpendingRow, CustomerListRow,
+    CustomerSpendingRow, CustomerListRow, SessionDetailRow,
 )
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
@@ -75,6 +75,33 @@ def get_spending_overview(
             total_kwh=round(data["total_kwh"], 4),
             total_liters=round(data["total_liters"], 4),
             total_eur=round(data["total_eur"], 4),
+        ))
+    return rows
+
+
+@router.get("/spending/detail", response_model=list[SessionDetailRow])
+def get_spending_detail(
+    user_db: DBSession = Depends(get_user_db),
+    db: DBSession = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    invoices = user_db.query(Invoice).filter(Invoice.customer_id.isnot(None)).all()
+    rows = []
+    for inv in invoices:
+        customer = user_db.get(Customer, inv.customer_id)
+        session = db.get(Session, inv.session_id)
+        rows.append(SessionDetailRow(
+            customer_id=inv.customer_id,
+            customer_name=customer.name if customer else None,
+            customer_email=customer.email if customer else "?",
+            session_id=inv.session_id,
+            session_type=session.type if session else "electricity",
+            started_at=session.started_at if session else None,
+            ended_at=session.ended_at if session else None,
+            energy_kwh=inv.energy_kwh,
+            water_liters=inv.water_liters,
+            total_eur=inv.total_eur or 0.0,
+            paid=bool(inv.paid),
         ))
     return rows
 

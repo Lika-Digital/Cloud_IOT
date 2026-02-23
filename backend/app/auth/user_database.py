@@ -34,4 +34,26 @@ def get_user_db():
 def init_user_db():
     from .models import User, OtpStore  # noqa: F401
     from .customer_models import Customer, BillingConfig, Invoice, ChatMessage  # noqa: F401
+    from .contract_models import ContractTemplate, CustomerContract, ServiceOrder  # noqa: F401
     UserBase.metadata.create_all(bind=user_engine)
+    _migrate_user_schema()
+
+
+def _migrate_user_schema():
+    """Add missing columns to existing user DB tables (safe no-op if already present)."""
+    import logging
+    from sqlalchemy import text
+    log = logging.getLogger(__name__)
+
+    migrations = [
+        ("customers", "push_token", "TEXT"),
+    ]
+
+    with user_engine.connect() as conn:
+        for table, column, definition in migrations:
+            result = conn.execute(text(f"PRAGMA table_info({table})"))
+            existing = {row[1] for row in result.fetchall()}
+            if column not in existing:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {definition}"))
+                conn.commit()
+                log.info(f"User DB migration: added column '{column}' to '{table}'")

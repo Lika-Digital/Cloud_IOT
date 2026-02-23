@@ -22,9 +22,12 @@ from .routers import auth as auth_router
 from .routers import customer_auth, customer_sessions, customer_invoices, billing, chat, system_health
 from .routers import alarms as alarms_router
 from .routers import customer_alarms
+from .routers import contracts as contracts_router
+from .routers import service_orders as service_orders_router
 from .auth.user_database import init_user_db, UserSessionLocal
 from .auth.models import User
 from .auth.customer_models import BillingConfig
+from .auth.contract_models import ContractTemplate
 from .auth.password import hash_password
 from .middleware.security_middleware import SecurityMiddleware
 
@@ -180,7 +183,7 @@ async def lifespan(app: FastAPI):
     finally:
         db.close()
 
-    # Seed admin user + billing config
+    # Seed admin user + billing config + default contract template
     user_db = UserSessionLocal()
     try:
         if not user_db.query(User).first():
@@ -194,6 +197,48 @@ async def lifespan(app: FastAPI):
         if not user_db.get(BillingConfig, 1):
             user_db.add(BillingConfig(id=1, kwh_price_eur=0.30, liter_price_eur=0.015))
             user_db.commit()
+        if not user_db.query(ContractTemplate).first():
+            user_db.add(ContractTemplate(
+                title="Marina Portorož – Berth Service Agreement",
+                validity_days=365,
+                notify_on_register=True,
+                active=True,
+                body=(
+                    "BERTH SERVICE AGREEMENT\n\n"
+                    "This Berth Service Agreement ('Agreement') is entered into between Marina Portorož "
+                    "(Cesta solinarjev 8, 6320 Portorož, Slovenia) and the Customer identified above.\n\n"
+                    "1. SERVICES\n"
+                    "Marina Portorož provides the following services at its pedestals: "
+                    "electricity supply (4 sockets per pedestal, metered in kWh), "
+                    "fresh water supply (metered in litres), Wi-Fi access, and upon request: "
+                    "crane services, engine checks, hull cleaning, diver services, battery checks, "
+                    "and electrical checks.\n\n"
+                    "2. FEES\n"
+                    "Electricity is charged per kWh consumed. Water is charged per litre consumed. "
+                    "Current prices are displayed in the Marina IoT portal. Service fees for crane, "
+                    "engine, hull, and diver services are quoted separately upon request. "
+                    "All prices are exclusive of VAT unless otherwise stated.\n\n"
+                    "3. CUSTOMER OBLIGATIONS\n"
+                    "The Customer agrees to: (a) use only properly rated connectors; "
+                    "(b) not exceed the rated current for any socket; "
+                    "(c) report any malfunctions immediately to marina staff; "
+                    "(d) comply with all marina regulations and the Slovenian Maritime Act.\n\n"
+                    "4. LIABILITY\n"
+                    "Marina Portorož is not liable for interruptions of electricity or water supply "
+                    "due to technical faults, maintenance, or force majeure. "
+                    "The Customer is liable for damage caused by improper use.\n\n"
+                    "5. TERM & TERMINATION\n"
+                    "This Agreement is valid for the period specified above. "
+                    "Either party may terminate with 24 hours written notice.\n\n"
+                    "6. GOVERNING LAW\n"
+                    "This Agreement is governed by the laws of the Republic of Slovenia. "
+                    "Disputes shall be resolved before the competent court in Koper, Slovenia.\n\n"
+                    "By signing below, the Customer confirms they have read, understood, "
+                    "and agree to be bound by the terms of this Agreement."
+                ),
+            ))
+            user_db.commit()
+            logger.info("Seeded default contract template: Marina Portorož – Berth Service Agreement")
         user_count = user_db.query(User).count()
     finally:
         user_db.close()
@@ -275,6 +320,8 @@ app.include_router(chat.router)
 app.include_router(system_health.router)
 app.include_router(alarms_router.router)
 app.include_router(customer_alarms.router)
+app.include_router(contracts_router.router)
+app.include_router(service_orders_router.router)
 
 
 @app.get("/health")

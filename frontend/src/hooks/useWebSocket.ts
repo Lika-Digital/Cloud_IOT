@@ -23,6 +23,13 @@ export function useWebSocket() {
   } = useStore()
   const { role } = useAuthStore()
 
+  // Request browser notification permission for admin users
+  useEffect(() => {
+    if (role === 'admin' && typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {})
+    }
+  }, [role])
+
   useEffect(() => {
     function connect() {
       const ws = new WebSocket(WS_URL)
@@ -74,6 +81,16 @@ export function useWebSocket() {
             customer_name: (msg.data.customer_name as string | null) ?? null,
             deny_reason: null,
           })
+          // Browser push notification for operators
+          if (role === 'admin' && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+            const customerName = (msg.data.customer_name as string | null) ?? 'A customer'
+            const sessionType = msg.data.type as string
+            const pedestalId = msg.data.pedestal_id as number
+            new Notification('New Pending Session', {
+              body: `${customerName} requested ${sessionType} on Pedestal ${pedestalId}`,
+              icon: '/vite.svg',
+            })
+          }
           break
         }
         case 'session_updated': {

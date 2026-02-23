@@ -118,3 +118,17 @@ class SendMessageRequest(BaseModel):
 
 class OperatorReplyRequest(BaseModel):
     message: str
+
+
+class SessionDetailRow(BaseModel):
+    customer_id: int
+    customer_name: Optional[str] = None
+    customer_email: str
+    session_id: int
+    session_type: str
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    energy_kwh: Optional[float] = None
+    water_liters: Optional[float] = None
+    total_eur: float
+    paid: bool

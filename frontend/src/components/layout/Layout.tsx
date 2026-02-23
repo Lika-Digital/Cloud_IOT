@@ -28,6 +28,7 @@ export default function Layout() {
     ...(isAdmin ? [
       { to: '/billing', label: 'Billing', icon: '💰', badge: 0 },
       { to: '/users', label: 'Customers', icon: '👥', badge: unreadChatCount },
+      { to: '/contracts', label: 'Contracts', icon: '📝', badge: 0 },
       { to: '/system-health', label: 'System Health', icon: '🔧', badge: newErrorCount },
       { to: '/settings', label: 'Settings', icon: '⚙️', badge: 0 },
     ] : []),

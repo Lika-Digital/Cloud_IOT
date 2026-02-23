@@ -23,6 +23,19 @@ export default function AppLayout() {
         name="chat"
         options={{ title: 'Chat', tabBarIcon: () => <Text style={{ fontSize: 20 }}>💬</Text> }}
       />
+      <Tabs.Screen
+        name="profile"
+        options={{ title: 'Profile', tabBarIcon: () => <Text style={{ fontSize: 20 }}>👤</Text> }}
+      />
+      {/* Hidden tab screens (navigated to programmatically) */}
+      <Tabs.Screen
+        name="contracts"
+        options={{ href: null }}
+      />
+      <Tabs.Screen
+        name="services"
+        options={{ href: null }}
+      />
     </Tabs>
   )
 }

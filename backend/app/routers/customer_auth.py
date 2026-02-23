@@ -1,5 +1,7 @@
 """Customer authentication: register, login, profile."""
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request
+from pydantic import BaseModel
 from sqlalchemy.orm import Session as DBSession
 from ..auth.user_database import get_user_db
 from ..auth.customer_models import Customer
@@ -76,3 +78,40 @@ def login(request: Request, body: LoginRequest, user_db: DBSession = Depends(get
 @router.get("/me", response_model=CustomerProfileResponse)
 def get_me(customer: Customer = Depends(require_customer)):
     return customer
+
+
+class ProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    ship_name: Optional[str] = None
+
+
+class PushTokenRequest(BaseModel):
+    token: str
+
+
+@router.patch("/profile", response_model=CustomerProfileResponse)
+def update_profile(
+    body: ProfileUpdate,
+    user_db: DBSession = Depends(get_user_db),
+    customer: Customer = Depends(require_customer),
+):
+    if body.name is not None:
+        customer.name = body.name
+    if body.ship_name is not None:
+        customer.ship_name = body.ship_name
+    user_db.add(customer)
+    user_db.commit()
+    user_db.refresh(customer)
+    return customer
+
+
+@router.post("/push-token")
+def save_push_token(
+    body: PushTokenRequest,
+    user_db: DBSession = Depends(get_user_db),
+    customer: Customer = Depends(require_customer),
+):
+    customer.push_token = body.token
+    user_db.add(customer)
+    user_db.commit()
+    return {"ok": True}

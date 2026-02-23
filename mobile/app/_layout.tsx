@@ -2,11 +2,15 @@ import { useEffect } from 'react'
 import { Stack, useRouter, useSegments } from 'expo-router'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { useAuthStore } from '../src/store/authStore'
+import { usePushNotifications } from '../src/hooks/usePushNotifications'
 
 export default function RootLayout() {
   const { token, loaded, loadFromStorage } = useAuthStore()
   const router = useRouter()
   const segments = useSegments()
+
+  // Register push notifications once authenticated
+  usePushNotifications()
 
   useEffect(() => {
     loadFromStorage()

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import {
-  getBillingConfig, setBillingConfig, getSpendingOverview,
-  type BillingConfig, type SpendingRow,
+  getBillingConfig, setBillingConfig, getSpendingOverview, getSpendingDetail,
+  type BillingConfig, type SpendingRow, type SessionDetailRow,
 } from '../api/billing'
 
 export default function Billing() {
@@ -11,6 +11,8 @@ export default function Billing() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [spending, setSpending] = useState<SpendingRow[]>([])
+  const [detail, setDetail] = useState<SessionDetailRow[]>([])
+  const [expandedCustomer, setExpandedCustomer] = useState<number | null>(null)
 
   useEffect(() => {
     getBillingConfig().then((c) => {
@@ -19,6 +21,7 @@ export default function Billing() {
       setLiter(String(c.liter_price_eur))
     }).catch(() => {})
     getSpendingOverview().then(setSpending).catch(() => {})
+    getSpendingDetail().then(setDetail).catch(() => {})
   }, [])
 
   const handleSave = async () => {
@@ -112,6 +115,72 @@ export default function Billing() {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+      </div>
+
+      {/* Session breakdown accordion */}
+      <div className="card">
+        <h2 className="font-semibold text-gray-200 mb-4">Session Breakdown</h2>
+        {detail.length === 0 ? (
+          <p className="text-gray-500 text-sm">No session data yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {spending.map((customer) => {
+              const sessions = detail.filter((d) => d.customer_id === customer.customer_id)
+              const isOpen = expandedCustomer === customer.customer_id
+              return (
+                <div key={customer.customer_id} className="border border-gray-700 rounded-lg overflow-hidden">
+                  <button
+                    className="w-full flex items-center justify-between px-4 py-3 text-sm text-gray-200 hover:bg-gray-800/50 transition-colors"
+                    onClick={() => setExpandedCustomer(isOpen ? null : customer.customer_id)}
+                  >
+                    <span className="font-medium">{customer.customer_name ?? customer.customer_email}</span>
+                    <span className="text-gray-400">{sessions.length} sessions {isOpen ? '▲' : '▼'}</span>
+                  </button>
+                  {isOpen && (
+                    <div className="overflow-x-auto border-t border-gray-700">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="bg-gray-800/50 text-gray-400 text-left">
+                            <th className="py-2 px-3">Date</th>
+                            <th className="py-2 px-3">Type</th>
+                            <th className="py-2 px-3">Energy</th>
+                            <th className="py-2 px-3">Water</th>
+                            <th className="py-2 px-3">Cost</th>
+                            <th className="py-2 px-3">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sessions.map((s) => (
+                            <tr key={s.session_id} className="border-t border-gray-800 hover:bg-gray-800/30">
+                              <td className="py-2 px-3 text-gray-300 font-mono">
+                                {s.started_at ? new Date(s.started_at).toLocaleDateString() : '—'}
+                              </td>
+                              <td className="py-2 px-3 text-gray-300 capitalize">{s.session_type}</td>
+                              <td className="py-2 px-3 text-gray-300 font-mono">
+                                {s.energy_kwh != null ? `${s.energy_kwh.toFixed(3)} kWh` : '—'}
+                              </td>
+                              <td className="py-2 px-3 text-gray-300 font-mono">
+                                {s.water_liters != null ? `${s.water_liters.toFixed(1)} L` : '—'}
+                              </td>
+                              <td className="py-2 px-3 text-green-400 font-mono font-bold">€{s.total_eur.toFixed(2)}</td>
+                              <td className="py-2 px-3">
+                                <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                                  s.paid ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'
+                                }`}>
+                                  {s.paid ? 'Paid' : 'Unpaid'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         )}
       </div>

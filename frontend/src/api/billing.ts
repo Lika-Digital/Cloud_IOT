@@ -50,8 +50,25 @@ export const getBillingConfig = () =>
 export const setBillingConfig = (data: { kwh_price_eur: number; liter_price_eur: number }) =>
   api.put<BillingConfig>('/billing/config', data).then((r) => r.data)
 
+export interface SessionDetailRow {
+  customer_id: number
+  customer_name: string | null
+  customer_email: string
+  session_id: number
+  session_type: string
+  started_at: string | null
+  ended_at: string | null
+  energy_kwh: number | null
+  water_liters: number | null
+  total_eur: number
+  paid: boolean
+}
+
 export const getSpendingOverview = () =>
   api.get<SpendingRow[]>('/billing/spending').then((r) => r.data)
+
+export const getSpendingDetail = () =>
+  api.get<SessionDetailRow[]>('/billing/spending/detail').then((r) => r.data)
 
 export const getCustomers = () =>
   api.get<CustomerRow[]>('/billing/customers').then((r) => r.data)

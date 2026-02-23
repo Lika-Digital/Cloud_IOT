@@ -82,40 +82,67 @@ export default function BerthOccupancy() {
 
           {/* ── Occupancy table ────────────────────────────────────────────── */}
           <div className="bg-gray-900 rounded-xl border border-gray-800">
-            <div className="px-6 py-4 border-b border-gray-800">
+            <div className="px-6 py-4 border-b border-gray-800 flex items-center justify-between">
               <h2 className="text-lg font-semibold text-white">Berth Status Summary</h2>
+              {berthOccupancy.some((b) => b.alarm) && (
+                <span className="flex items-center gap-2 text-sm font-bold text-red-400 animate-pulse">
+                  🚨 {berthOccupancy.filter((b) => b.alarm).length} alarm(s) active
+                </span>
+              )}
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-gray-500 text-xs uppercase border-b border-gray-800">
-                    <th className="px-6 py-3 text-left">Berth</th>
-                    <th className="px-6 py-3 text-left">Status</th>
-                    <th className="px-6 py-3 text-left">Detected</th>
-                    <th className="px-6 py-3 text-left">Pedestal</th>
-                    <th className="px-6 py-3 text-left">Last Analyzed</th>
-                    <th className="px-6 py-3 text-left">Actions</th>
+                    <th className="px-4 py-3 text-left">Berth</th>
+                    <th className="px-4 py-3 text-left">Status</th>
+                    <th className="px-4 py-3 text-left">ML State</th>
+                    <th className="px-4 py-3 text-left">Match Score</th>
+                    <th className="px-4 py-3 text-left">Pedestal</th>
+                    <th className="px-4 py-3 text-left">Analyzed</th>
+                    <th className="px-4 py-3 text-left">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {berthOccupancy.map((b) => (
-                    <tr key={b.id} className="border-b border-gray-800 hover:bg-gray-800/40">
-                      <td className="px-6 py-3 font-medium text-white">{b.name}</td>
-                      <td className="px-6 py-3">
+                    <tr
+                      key={b.id}
+                      className={`border-b border-gray-800 hover:bg-gray-800/40 ${
+                        b.alarm ? 'bg-red-950/30' : ''
+                      }`}
+                    >
+                      <td className="px-4 py-3 font-medium text-white">
+                        {b.alarm ? '🚨 ' : ''}{b.name}
+                      </td>
+                      <td className="px-4 py-3">
                         <StatusBadge status={b.status} />
                       </td>
-                      <td className="px-6 py-3">
-                        <StatusBadge status={b.detected_status as 'free' | 'occupied' | 'reserved'} />
+                      <td className="px-4 py-3">
+                        <StateCodeBadge stateCode={b.state_code} />
                       </td>
-                      <td className="px-6 py-3 text-gray-400">
+                      <td className="px-4 py-3 text-xs font-mono">
+                        {b.match_score !== null && b.match_score !== undefined ? (
+                          <span className={b.match_ok_bit ? 'text-green-400' : 'text-red-400'}>
+                            {b.match_score.toFixed(4)}
+                          </span>
+                        ) : (
+                          <span className="text-gray-600">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-gray-400">
                         {b.pedestal_id ? `Pedestal ${b.pedestal_id}` : '—'}
                       </td>
-                      <td className="px-6 py-3 text-gray-400 text-xs">
+                      <td className="px-4 py-3 text-gray-400 text-xs">
                         {b.last_analyzed
                           ? new Date(b.last_analyzed).toLocaleTimeString()
                           : '—'}
+                        {b.analysis_error && (
+                          <div className="text-red-500 text-xs mt-0.5 max-w-[140px] truncate" title={b.analysis_error}>
+                            ⚠ {b.analysis_error}
+                          </div>
+                        )}
                       </td>
-                      <td className="px-6 py-3">
+                      <td className="px-4 py-3">
                         <div className="flex gap-2">
                           {b.video_source && (
                             <button
@@ -125,7 +152,7 @@ export default function BerthOccupancy() {
                               📹 View
                             </button>
                           )}
-                          {(b.status === 'reserved') && (
+                          {b.status === 'reserved' && (
                             <button
                               onClick={() => openCalendar(b)}
                               className="text-xs text-amber-400 hover:text-amber-300 border border-amber-600/40 px-2 py-1 rounded"
@@ -456,5 +483,19 @@ function LegendDot({ color, label }: { color: string; label: string }) {
       <span className="w-3 h-3 rounded-full" style={{ backgroundColor: color }} />
       <span>{label}</span>
     </div>
+  )
+}
+
+function StateCodeBadge({ stateCode }: { stateCode: number }) {
+  const cfg: Record<number, { label: string; cls: string }> = {
+    0: { label: 'FREE',             cls: 'bg-green-500/20 text-green-400 border-green-700/40' },
+    1: { label: 'OK — MATCH',       cls: 'bg-blue-500/20  text-blue-400  border-blue-700/40'  },
+    2: { label: '⚠ WRONG SHIP',     cls: 'bg-red-500/20   text-red-400   border-red-700/40 animate-pulse' },
+  }
+  const c = cfg[stateCode] ?? { label: `code ${stateCode}`, cls: 'bg-gray-700 text-gray-400 border-gray-600' }
+  return (
+    <span className={`text-xs font-bold px-2 py-0.5 rounded-full border ${c.cls}`}>
+      {c.label}
+    </span>
   )
 }

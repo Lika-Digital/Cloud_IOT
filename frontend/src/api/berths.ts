@@ -16,6 +16,12 @@ export interface BerthOut {
   detected_status: string
   video_source: string | null
   last_analyzed: string | null
+  occupied_bit: number
+  match_ok_bit: number
+  state_code: number
+  alarm: number
+  match_score: number | null
+  analysis_error: string | null
 }
 
 export interface CalendarEntry {

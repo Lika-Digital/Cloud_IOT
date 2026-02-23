@@ -208,6 +208,9 @@ async def lifespan(app: FastAPI):
                 status="free",
                 detected_status="free",
                 video_source="Berth Full.mp4",
+                reference_image="Full_Berth.jpg",
+                detect_conf_threshold=0.30,
+                match_threshold=0.50,
             ))
             user_db.add(Berth(
                 name="Yearly Contract Berth 2",
@@ -215,6 +218,9 @@ async def lifespan(app: FastAPI):
                 status="free",
                 detected_status="free",
                 video_source="Berth empty.mp4",
+                reference_image=None,
+                detect_conf_threshold=0.30,
+                match_threshold=0.50,
             ))
             user_db.add(Berth(
                 name="Transit Berth",
@@ -222,9 +228,12 @@ async def lifespan(app: FastAPI):
                 status="free",
                 detected_status="free",
                 video_source=None,
+                reference_image=None,
+                detect_conf_threshold=0.30,
+                match_threshold=0.50,
             ))
             user_db.commit()
-            logger.info("Seeded 3 default berths")
+            logger.info("Seeded 3 default berths (berth 1: ref=Full_Berth.jpg)")
 
         if not user_db.query(ContractTemplate).first():
             user_db.add(ContractTemplate(

@@ -64,6 +64,13 @@ export interface BerthStatus {
   pedestal_id: number | null
   video_source: string | null
   last_analyzed: string | null
+  // ML pipeline outputs
+  occupied_bit: number
+  match_ok_bit: number
+  state_code: number          // 0=FREE  1=OCCUPIED_CORRECT  2=OCCUPIED_WRONG
+  alarm: number
+  match_score: number | null
+  analysis_error: string | null
 }
 
 // --- Store ---

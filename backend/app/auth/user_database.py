@@ -47,7 +47,16 @@ def _migrate_user_schema():
     log = logging.getLogger(__name__)
 
     migrations = [
-        ("customers", "push_token", "TEXT"),
+        ("customers", "push_token",           "TEXT"),
+        ("berths",    "reference_image",       "TEXT"),
+        ("berths",    "detect_conf_threshold", "REAL NOT NULL DEFAULT 0.30"),
+        ("berths",    "match_threshold",       "REAL NOT NULL DEFAULT 0.50"),
+        ("berths",    "occupied_bit",          "INTEGER NOT NULL DEFAULT 0"),
+        ("berths",    "match_ok_bit",          "INTEGER NOT NULL DEFAULT 0"),
+        ("berths",    "state_code",            "INTEGER NOT NULL DEFAULT 0"),
+        ("berths",    "alarm",                 "INTEGER NOT NULL DEFAULT 0"),
+        ("berths",    "match_score",           "REAL"),
+        ("berths",    "analysis_error",        "TEXT"),
     ]
 
     with user_engine.connect() as conn:

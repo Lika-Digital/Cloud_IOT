@@ -1,6 +1,6 @@
 """ORM models for marina berths and berth reservations."""
 from datetime import datetime, date
-from sqlalchemy import String, Integer, Text, DateTime, Date, ForeignKey
+from sqlalchemy import String, Integer, Float, Text, DateTime, Date, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 from .user_database import UserBase
 
@@ -10,14 +10,27 @@ class Berth(UserBase):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    # Optional reference to a pedestal (plain int, no FK since it lives in pedestal.db)
+    # Optional reference to a pedestal (plain int, no FK — pedestals live in pedestal.db)
     pedestal_id: Mapped[int] = mapped_column(Integer, nullable=True)
     # "free" | "occupied" | "reserved"
     status: Mapped[str] = mapped_column(String(20), default="free")
-    # Latest status reported by the analyzer
+    # Latest status determined by ML analyzer (never "reserved")
     detected_status: Mapped[str] = mapped_column(String(20), default="free")
-    # Filename of the video source used by the analyzer (relative to frontend/src/assets/)
+    # Filename of the video stream (relative to frontend/src/assets/)
     video_source: Mapped[str] = mapped_column(String(255), nullable=True)
+    # Filename of the contracted-ship reference image (relative to frontend/src/assets/)
+    reference_image: Mapped[str] = mapped_column(String(255), nullable=True)
+    # RT-DETR minimum detection confidence to declare a vessel present
+    detect_conf_threshold: Mapped[float] = mapped_column(Float, default=0.30)
+    # DINOv2 cosine-similarity threshold to declare a ship match
+    match_threshold: Mapped[float] = mapped_column(Float, default=0.50)
+    # Last ML output fields (persisted for frontend query without waiting for next cycle)
+    occupied_bit: Mapped[int] = mapped_column(Integer, default=0)
+    match_ok_bit: Mapped[int] = mapped_column(Integer, default=0)
+    state_code: Mapped[int] = mapped_column(Integer, default=0)   # 0=FREE 1=OK 2=WRONG
+    alarm: Mapped[int] = mapped_column(Integer, default=0)
+    match_score: Mapped[float] = mapped_column(Float, nullable=True)
+    analysis_error: Mapped[str] = mapped_column(Text, nullable=True)
     last_analyzed: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

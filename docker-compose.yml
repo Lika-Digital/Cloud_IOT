@@ -13,6 +13,24 @@ services:
       - mosquitto-log:/mosquitto/log
     restart: unless-stopped
 
+  ml_worker:
+    build: ./ml_worker
+    container_name: pedestal-ml-worker
+    ports:
+      - "8001:8001"
+    volumes:
+      # Assets (video + reference images) read-only
+      - ./frontend/src/assets:/assets:ro
+      # ONNX model files (place rtdetr.onnx + dinov2.onnx here)
+      - ./backend/models:/models:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
 volumes:
   mosquitto-data:
   mosquitto-log:

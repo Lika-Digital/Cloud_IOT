@@ -23,7 +23,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-MODELS_DIR = Path("/models")
+# Inside Docker: /models is the volume mount.
+# On Windows directly: use backend/models/ relative to project root.
+_docker_path   = Path("/models")
+_native_path   = Path(__file__).parent.parent / "backend" / "models"
+MODELS_DIR     = _docker_path if _docker_path.exists() else _native_path
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 RTDETR_OUT  = MODELS_DIR / "rtdetr.onnx"
@@ -38,8 +42,12 @@ def _check_optimum():
     try:
         import optimum  # noqa: F401
     except ImportError:
-        print("\n[ERROR] 'optimum' is not installed in this container.")
-        print("Run first:\n  docker compose run --rm ml_worker pip install -r requirements-setup.txt\n")
+        print("\n[ERROR] 'optimum' is not installed.")
+        print("Install it with:")
+        print("  # Docker:")
+        print("  docker compose run --rm ml_worker pip install -r requirements-setup.txt")
+        print("  # Native 64-bit Python:")
+        print("  pip install optimum[exporters] torch==2.4.0+cpu --index-url https://download.pytorch.org/whl/cpu\n")
         sys.exit(1)
 
 

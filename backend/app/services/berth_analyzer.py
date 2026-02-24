@@ -70,6 +70,11 @@ async def run_berth_analysis():
                         "reference_image":        berth.reference_image,
                         "detect_conf_threshold":  berth.detect_conf_threshold or 0.30,
                         "match_threshold":        berth.match_threshold or 0.50,
+                        "use_detection_zone":     bool(berth.use_detection_zone),
+                        "zone_x1":                berth.zone_x1 or 0.15,
+                        "zone_y1":                berth.zone_y1 or 0.10,
+                        "zone_x2":                berth.zone_x2 or 0.85,
+                        "zone_y2":                berth.zone_y2 or 0.80,
                     }
 
                     try:

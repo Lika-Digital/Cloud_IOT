@@ -4,12 +4,13 @@ from typing import Optional
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    # Use str (not EmailStr) — email-validator rejects .local TLD used by default admin account
+    email: str = Field(..., max_length=254)
     password: str = Field(..., min_length=1, max_length=128)
 
 
 class VerifyOtpRequest(BaseModel):
-    email: EmailStr
+    email: str = Field(..., max_length=254)
     code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
 
 

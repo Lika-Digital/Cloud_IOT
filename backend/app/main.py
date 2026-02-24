@@ -210,8 +210,10 @@ async def lifespan(app: FastAPI):
                 detected_status="free",
                 video_source="Berth Full.mp4",
                 reference_image="Full_Berth.jpg",
-                detect_conf_threshold=0.30,
+                # Lower threshold: marina vessels often score below 0.30 with RT-DETR
+                detect_conf_threshold=0.15,
                 match_threshold=0.50,
+                use_detection_zone=0,
             ))
             user_db.add(Berth(
                 name="Yearly Contract Berth 2",
@@ -220,8 +222,14 @@ async def lifespan(app: FastAPI):
                 detected_status="free",
                 video_source="Berth empty.mp4",
                 reference_image=None,
-                detect_conf_threshold=0.30,
+                detect_conf_threshold=0.15,
                 match_threshold=0.50,
+                # Zone-based: only count vessels in the central dock area
+                use_detection_zone=1,
+                zone_x1=0.15,
+                zone_y1=0.10,
+                zone_x2=0.85,
+                zone_y2=0.80,
             ))
             user_db.add(Berth(
                 name="Transit Berth",
@@ -232,9 +240,10 @@ async def lifespan(app: FastAPI):
                 reference_image=None,
                 detect_conf_threshold=0.30,
                 match_threshold=0.50,
+                use_detection_zone=0,
             ))
             user_db.commit()
-            logger.info("Seeded 3 default berths (berth 1: ref=Full_Berth.jpg)")
+            logger.info("Seeded 3 default berths (berth 1: ref=Full_Berth.jpg, berth 2: zone-based)")
 
         if not user_db.query(ContractTemplate).first():
             user_db.add(ContractTemplate(

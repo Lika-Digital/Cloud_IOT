@@ -57,6 +57,11 @@ def _migrate_user_schema():
         ("berths",    "alarm",                 "INTEGER NOT NULL DEFAULT 0"),
         ("berths",    "match_score",           "REAL"),
         ("berths",    "analysis_error",        "TEXT"),
+        ("berths",    "use_detection_zone",    "INTEGER NOT NULL DEFAULT 0"),
+        ("berths",    "zone_x1",               "REAL NOT NULL DEFAULT 0.15"),
+        ("berths",    "zone_y1",               "REAL NOT NULL DEFAULT 0.10"),
+        ("berths",    "zone_x2",               "REAL NOT NULL DEFAULT 0.85"),
+        ("berths",    "zone_y2",               "REAL NOT NULL DEFAULT 0.80"),
     ]
 
     with user_engine.connect() as conn:

@@ -151,9 +151,7 @@ export default function LoginPage() {
           )}
         </div>
 
-        <p className="text-center text-xs text-gray-600 mt-4">
-          Default: admin@iot-dashboard.local / admin1234
-        </p>
+        {/* Default credentials are available in the server console on first startup */}
       </div>
     </div>
   )

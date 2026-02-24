@@ -75,6 +75,7 @@ export default function ProfileScreen() {
               onChangeText={setName}
               placeholder="Your name"
               placeholderTextColor="#6b7280"
+              maxLength={120}
             />
           </View>
           <View style={styles.inputGroup}>
@@ -85,6 +86,7 @@ export default function ProfileScreen() {
               onChangeText={setShipName}
               placeholder="Vessel name"
               placeholderTextColor="#6b7280"
+              maxLength={120}
             />
           </View>
           <TouchableOpacity

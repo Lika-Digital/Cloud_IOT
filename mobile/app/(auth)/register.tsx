@@ -128,6 +128,7 @@ export default function RegisterScreen() {
             value={email}
             onChangeText={setEmail}
             keyboardType="email-address"
+            maxLength={120}
           />
           <LabeledInput
             label="Password *"
@@ -135,6 +136,7 @@ export default function RegisterScreen() {
             value={password}
             onChangeText={setPassword}
             secureTextEntry
+            maxLength={128}
           />
           <LabeledInput
             label="Full Name"
@@ -142,6 +144,7 @@ export default function RegisterScreen() {
             value={name}
             onChangeText={setName}
             autoCapitalize="words"
+            maxLength={120}
           />
           <LabeledInput
             label="Ship Name"
@@ -149,18 +152,21 @@ export default function RegisterScreen() {
             value={shipName}
             onChangeText={setShipName}
             autoCapitalize="words"
+            maxLength={120}
           />
           <LabeledInput
             label="VAT Number"
             placeholder="e.g. HR12345678  (optional)"
             value={vatNumber}
             onChangeText={setVatNumber}
+            maxLength={40}
           />
           <LabeledInput
             label="Ship Registration"
             placeholder="e.g. HR-ST-123  (optional)"
             value={shipReg}
             onChangeText={setShipReg}
+            maxLength={60}
           />
 
           {error ? <Text style={styles.error}>{error}</Text> : null}

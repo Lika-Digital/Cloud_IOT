@@ -10,6 +10,7 @@ export function useWebSocket(
   const { token } = useAuthStore()
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const attemptRef = useRef(0)
   // Keep a ref to the callback so the effect doesn't need to re-run when it changes
   const onChatRef = useRef(onChatMessage)
   useEffect(() => { onChatRef.current = onChatMessage }, [onChatMessage])
@@ -71,6 +72,7 @@ export function useWebSocket(
       wsRef.current = ws
 
       ws.onopen = () => {
+        attemptRef.current = 0
         const ping = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) ws.send('ping')
         }, 20_000)
@@ -87,7 +89,9 @@ export function useWebSocket(
 
       ws.onclose = () => {
         clearInterval((ws as any)._ping)
-        reconnectRef.current = setTimeout(connect, 3000)
+        const delay = Math.min(1000 * Math.pow(2, attemptRef.current), 30_000)
+        attemptRef.current += 1
+        reconnectRef.current = setTimeout(connect, delay)
       }
 
       ws.onerror = () => ws.close()

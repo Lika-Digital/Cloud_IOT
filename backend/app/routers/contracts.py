@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DBSession
 import io
 
@@ -48,7 +48,7 @@ class TemplateResponse(BaseModel):
 
 
 class SignRequest(BaseModel):
-    signature_data: str  # base64 PNG
+    signature_data: str = Field(..., max_length=500_000)  # base64 PNG, cap at ~500 KB
 
 
 class ContractResponse(BaseModel):
@@ -156,15 +156,18 @@ def admin_download_contract_pdf(
     template = user_db.get(ContractTemplate, contract.template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
-    pdf_bytes = make_contract_pdf(
-        template_title=template.title,
-        template_body=template.body,
-        customer_name=customer.name if customer else None,
-        customer_email=customer.email if customer else "unknown",
-        signed_at=contract.signed_at,
-        valid_until=contract.valid_until,
-        signature_data=contract.signature_data,
-    )
+    try:
+        pdf_bytes = make_contract_pdf(
+            template_title=template.title,
+            template_body=template.body,
+            customer_name=customer.name if customer else None,
+            customer_email=customer.email if customer else "unknown",
+            signed_at=contract.signed_at,
+            valid_until=contract.valid_until,
+            signature_data=contract.signature_data,
+        )
+    except Exception:
+        raise HTTPException(status_code=503, detail="PDF generation failed. Please try again later.")
     filename = f"contract_{contract_id}.pdf"
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
@@ -272,15 +275,18 @@ def download_contract_pdf(
     template = user_db.get(ContractTemplate, contract.template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
-    pdf_bytes = make_contract_pdf(
-        template_title=template.title,
-        template_body=template.body,
-        customer_name=customer.name,
-        customer_email=customer.email,
-        signed_at=contract.signed_at,
-        valid_until=contract.valid_until,
-        signature_data=contract.signature_data,
-    )
+    try:
+        pdf_bytes = make_contract_pdf(
+            template_title=template.title,
+            template_body=template.body,
+            customer_name=customer.name,
+            customer_email=customer.email,
+            signed_at=contract.signed_at,
+            valid_until=contract.valid_until,
+            signature_data=contract.signature_data,
+        )
+    except Exception:
+        raise HTTPException(status_code=503, detail="PDF generation failed. Please try again later.")
     filename = f"contract_{contract_id}.pdf"
     return StreamingResponse(
         io.BytesIO(pdf_bytes),

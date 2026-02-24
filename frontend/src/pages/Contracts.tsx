@@ -9,6 +9,9 @@ export default function Contracts() {
   const [contracts, setContracts] = useState<CustomerContract[]>([])
   const [showForm, setShowForm] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [pdfError, setPdfError] = useState<string | null>(null)
 
   // New template form state
   const [title, setTitle] = useState('')
@@ -17,13 +20,16 @@ export default function Contracts() {
   const [notifyOnRegister, setNotifyOnRegister] = useState(true)
 
   useEffect(() => {
-    getTemplates().then(setTemplates).catch(() => {})
-    getAdminContracts().then(setContracts).catch(() => {})
+    Promise.all([
+      getTemplates().then(setTemplates),
+      getAdminContracts().then(setContracts),
+    ]).catch(() => setLoadError('Failed to load contracts data. Check your connection and refresh.'))
   }, [])
 
   const handleCreateTemplate = async () => {
     if (!title.trim() || !body.trim()) return
     setSaving(true)
+    setSaveError(null)
     try {
       const tpl = await createTemplate({
         title,
@@ -38,7 +44,7 @@ export default function Contracts() {
       setNotifyOnRegister(true)
       setShowForm(false)
     } catch {
-      // ignore
+      setSaveError('Failed to create template. Please try again.')
     } finally {
       setSaving(false)
     }
@@ -49,28 +55,30 @@ export default function Contracts() {
       const updated = await updateTemplate(tpl.id, { active: !tpl.active })
       setTemplates((prev) => prev.map((t) => (t.id === updated.id ? updated : t)))
     } catch {
-      // ignore
+      setSaveError('Failed to update template status. Please try again.')
     }
   }
 
   const handleDownloadPdf = (contractId: number) => {
     const token = localStorage.getItem('auth_token')
     const url = `/api/admin/contracts/${contractId}/pdf`
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `contract_${contractId}.pdf`
-    // Use fetch to get blob with auth header
+    setPdfError(null)
     fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => r.blob())
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.blob()
+      })
       .then((blob) => {
         const objUrl = URL.createObjectURL(blob)
+        const a = document.createElement('a')
         a.href = objUrl
+        a.download = `contract_${contractId}.pdf`
         document.body.appendChild(a)
         a.click()
         document.body.removeChild(a)
         URL.revokeObjectURL(objUrl)
       })
-      .catch(() => {})
+      .catch(() => setPdfError('Failed to download PDF. Please try again.'))
   }
 
   return (
@@ -79,6 +87,22 @@ export default function Contracts() {
         <h1 className="text-2xl font-bold text-white">Contracts</h1>
         <p className="text-gray-400 text-sm mt-1">Manage marina service agreement templates and customer signatures</p>
       </div>
+
+      {loadError && (
+        <div className="px-4 py-3 rounded-lg bg-red-900/30 border border-red-700/40 text-red-400 text-sm">
+          {loadError}
+        </div>
+      )}
+      {saveError && (
+        <div className="px-4 py-3 rounded-lg bg-red-900/30 border border-red-700/40 text-red-400 text-sm">
+          {saveError}
+        </div>
+      )}
+      {pdfError && (
+        <div className="px-4 py-3 rounded-lg bg-red-900/30 border border-red-700/40 text-red-400 text-sm">
+          {pdfError}
+        </div>
+      )}
 
       {/* Templates section */}
       <div className="card space-y-4">

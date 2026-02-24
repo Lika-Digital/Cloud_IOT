@@ -27,22 +27,25 @@ def download_invoice_pdf(
     if invoice.customer_id != customer.id:
         raise HTTPException(status_code=403, detail="Not your invoice")
     session = db.get(SessionModel, invoice.session_id)
-    pdf_bytes = make_invoice_pdf(
-        invoice_id=invoice.id,
-        customer_name=customer.name,
-        customer_email=customer.email,
-        session_id=invoice.session_id,
-        session_type=session.type if session else "electricity",
-        started_at=session.started_at if session else None,
-        ended_at=session.ended_at if session else None,
-        energy_kwh=invoice.energy_kwh,
-        water_liters=invoice.water_liters,
-        energy_cost_eur=invoice.energy_cost_eur,
-        water_cost_eur=invoice.water_cost_eur,
-        total_eur=invoice.total_eur,
-        paid=bool(invoice.paid),
-        created_at=invoice.created_at,
-    )
+    try:
+        pdf_bytes = make_invoice_pdf(
+            invoice_id=invoice.id,
+            customer_name=customer.name,
+            customer_email=customer.email,
+            session_id=invoice.session_id,
+            session_type=session.type if session else "electricity",
+            started_at=session.started_at if session else None,
+            ended_at=session.ended_at if session else None,
+            energy_kwh=invoice.energy_kwh,
+            water_liters=invoice.water_liters,
+            energy_cost_eur=invoice.energy_cost_eur,
+            water_cost_eur=invoice.water_cost_eur,
+            total_eur=invoice.total_eur,
+            paid=bool(invoice.paid),
+            created_at=invoice.created_at,
+        )
+    except Exception:
+        raise HTTPException(status_code=503, detail="PDF generation failed. Please try again later.")
     filename = f"invoice_{invoice_id:05d}.pdf"
     return StreamingResponse(
         io.BytesIO(pdf_bytes),

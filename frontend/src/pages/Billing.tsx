@@ -10,22 +10,27 @@ export default function Billing() {
   const [liter, setLiter] = useState('')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [spending, setSpending] = useState<SpendingRow[]>([])
   const [detail, setDetail] = useState<SessionDetailRow[]>([])
   const [expandedCustomer, setExpandedCustomer] = useState<number | null>(null)
 
   useEffect(() => {
-    getBillingConfig().then((c) => {
-      setConfig(c)
-      setKwh(String(c.kwh_price_eur))
-      setLiter(String(c.liter_price_eur))
-    }).catch(() => {})
-    getSpendingOverview().then(setSpending).catch(() => {})
-    getSpendingDetail().then(setDetail).catch(() => {})
+    Promise.all([
+      getBillingConfig().then((c) => {
+        setConfig(c)
+        setKwh(String(c.kwh_price_eur))
+        setLiter(String(c.liter_price_eur))
+      }),
+      getSpendingOverview().then(setSpending),
+      getSpendingDetail().then(setDetail),
+    ]).catch(() => setLoadError('Failed to load billing data. Check your connection and refresh.'))
   }, [])
 
   const handleSave = async () => {
     setSaving(true)
+    setSaveError(null)
     try {
       const updated = await setBillingConfig({
         kwh_price_eur: parseFloat(kwh),
@@ -35,7 +40,7 @@ export default function Billing() {
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch {
-      // Error visible via toast/console; don't crash the form
+      setSaveError('Failed to save price configuration. Please try again.')
     } finally {
       setSaving(false)
     }
@@ -47,6 +52,12 @@ export default function Billing() {
         <h1 className="text-2xl font-bold text-white">Billing</h1>
         <p className="text-gray-400 text-sm mt-1">Configure prices and view customer spending</p>
       </div>
+
+      {loadError && (
+        <div className="px-4 py-3 rounded-lg bg-red-900/30 border border-red-700/40 text-red-400 text-sm">
+          {loadError}
+        </div>
+      )}
 
       {/* Price config */}
       <div className="card max-w-md space-y-4">
@@ -78,6 +89,9 @@ export default function Billing() {
         >
           {saved ? 'Saved!' : saving ? 'Saving…' : 'Save Prices'}
         </button>
+        {saveError && (
+          <p className="text-sm text-red-400 bg-red-900/20 border border-red-700/30 rounded-lg px-3 py-2">{saveError}</p>
+        )}
         {config && (
           <p className="text-xs text-gray-500">Last updated: {new Date(config.updated_at).toLocaleString()}</p>
         )}

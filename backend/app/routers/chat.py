@@ -1,6 +1,9 @@
 """Customer ↔ Operator chat endpoints."""
+import asyncio
+import collections
+import time
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session as DBSession
 from ..auth.user_database import get_user_db
 from ..auth.customer_models import Customer, ChatMessage
@@ -12,6 +15,12 @@ from ..schemas.customer import ChatMessageResponse, SendMessageRequest, Operator
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
+# Rate limit: max 10 send calls per 60s per customer_id — protected by a per-customer lock
+_RATE_WINDOW = 60
+_RATE_MAX = 10
+_send_log: dict[int, collections.deque] = {}
+_send_lock: dict[int, asyncio.Lock] = {}
+
 
 @router.post("/send", response_model=ChatMessageResponse)
 async def send_message(
@@ -19,6 +28,18 @@ async def send_message(
     user_db: DBSession = Depends(get_user_db),
     customer: Customer = Depends(require_customer),
 ):
+    # Rate limit: 10 messages per 60s per customer (atomic via per-customer Lock)
+    if customer.id not in _send_lock:
+        _send_lock[customer.id] = asyncio.Lock()
+    async with _send_lock[customer.id]:
+        now = time.monotonic()
+        log = _send_log.setdefault(customer.id, collections.deque())
+        while log and now - log[0] > _RATE_WINDOW:
+            log.popleft()
+        if len(log) >= _RATE_MAX:
+            raise HTTPException(status_code=429, detail="Too many messages. Please wait before sending again.")
+        log.append(now)
+
     msg = ChatMessage(
         customer_id=customer.id,
         message=body.message,
@@ -77,6 +98,8 @@ async def operator_reply(
 @router.get("/messages/{customer_id}", response_model=list[ChatMessageResponse])
 def get_messages(
     customer_id: int,
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     user_db: DBSession = Depends(get_user_db),
     _: User = Depends(require_admin),
 ):
@@ -84,6 +107,8 @@ def get_messages(
         user_db.query(ChatMessage)
         .filter(ChatMessage.customer_id == customer_id)
         .order_by(ChatMessage.created_at.asc())
+        .offset(offset)
+        .limit(min(limit, 500))
         .all()
     )
 
@@ -126,6 +151,8 @@ def unread_count(
 
 @router.get("/my-messages", response_model=list[ChatMessageResponse])
 def my_messages(
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     user_db: DBSession = Depends(get_user_db),
     customer: Customer = Depends(require_customer),
 ):
@@ -133,5 +160,7 @@ def my_messages(
         user_db.query(ChatMessage)
         .filter(ChatMessage.customer_id == customer.id)
         .order_by(ChatMessage.created_at.asc())
+        .offset(offset)
+        .limit(min(limit, 500))
         .all()
     )

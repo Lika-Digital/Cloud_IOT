@@ -6,10 +6,13 @@ import ChatPanel from '../components/chat/ChatPanel'
 export default function Users() {
   const [customers, setCustomers] = useState<CustomerRow[]>([])
   const [chatCustomer, setChatCustomer] = useState<CustomerRow | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const { unreadChatCount, setUnreadChatCount } = useStore()
 
   useEffect(() => {
-    getCustomers().then(setCustomers)
+    getCustomers().then(setCustomers).catch(() =>
+      setLoadError('Failed to load customer list. Check your connection and refresh.')
+    )
   }, [])
 
   const handleOpenChat = (customer: CustomerRow) => {
@@ -28,12 +31,19 @@ export default function Users() {
         <p className="text-gray-400 text-sm mt-1">Registered marina customers and their activity</p>
       </div>
 
-      {customers.length === 0 ? (
+      {loadError && (
+        <div className="px-4 py-3 rounded-lg bg-red-900/30 border border-red-700/40 text-red-400 text-sm">
+          {loadError}
+        </div>
+      )}
+
+      {!loadError && customers.length === 0 && (
         <div className="card text-center py-12 text-gray-500">
           <p className="text-4xl mb-3">👥</p>
           <p>No customers registered yet.</p>
         </div>
-      ) : (
+      )}
+      {!loadError && customers.length > 0 && (
         <div className="card">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

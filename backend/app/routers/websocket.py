@@ -26,8 +26,14 @@ async def websocket_endpoint(
     try:
         while True:
             data = await websocket.receive_text()
+            # Enforce a 1 KB limit on incoming frames — clients should only send "ping"
+            if len(data) > 1024:
+                logger.warning("WebSocket: oversized frame (%d bytes) — closing connection", len(data))
+                await websocket.close(code=1009)
+                break
             if data == "ping":
                 await websocket.send_text("pong")
+            # All other text frames are silently ignored
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)
     except Exception as e:

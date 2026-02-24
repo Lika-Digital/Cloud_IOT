@@ -50,9 +50,12 @@ async def start_session(
     customer: Customer = Depends(require_customer),
 ):
     if body.type not in ("electricity", "water"):
-        raise HTTPException(status_code=400, detail="type must be 'electricity' or 'water'")
-    if body.type == "electricity" and body.socket_id is None:
-        raise HTTPException(status_code=400, detail="socket_id required for electricity")
+        raise HTTPException(status_code=422, detail="type must be 'electricity' or 'water'")
+    if body.type == "electricity":
+        if body.socket_id is None:
+            raise HTTPException(status_code=422, detail="socket_id required for electricity")
+        if body.socket_id not in (1, 2, 3, 4):
+            raise HTTPException(status_code=422, detail="socket_id must be 1, 2, 3, or 4")
 
     # One active/pending session per customer at a time
     customer_busy = (

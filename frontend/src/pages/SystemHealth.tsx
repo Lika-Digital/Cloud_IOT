@@ -16,6 +16,7 @@ export default function SystemHealth() {
   const [hours, setHours] = useState(24)
   const [expanded, setExpanded] = useState<number | null>(null)
   const [clearing, setClearing] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const { resetNewErrors } = useStore()
 
   const load = useCallback(async () => {
@@ -30,8 +31,9 @@ export default function SystemHealth() {
       ])
       setSummary(s)
       setLogs(l)
+      setLoadError(null)
     } catch {
-      // Keep existing data on transient API failure; next auto-refresh will retry
+      setLoadError('Failed to load system health data. Retrying…')
     }
   }, [category, level, hours])
 
@@ -58,6 +60,11 @@ export default function SystemHealth() {
 
   return (
     <div className="space-y-6">
+      {loadError && (
+        <div className="px-4 py-3 rounded-lg bg-red-900/30 border border-red-700/40 text-red-400 text-sm">
+          {loadError}
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

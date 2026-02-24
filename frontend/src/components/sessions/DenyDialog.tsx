@@ -28,6 +28,7 @@ export default function DenyDialog({ onConfirm, onCancel }: DenyDialogProps) {
           className="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 text-gray-200 text-sm resize-none focus:outline-none focus:border-red-500 mb-4"
           rows={3}
           placeholder="Reason (optional)"
+          maxLength={500}
           value={reason}
           onChange={(e) => setReason(e.target.value)}
         />

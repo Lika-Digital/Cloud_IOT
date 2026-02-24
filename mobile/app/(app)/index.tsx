@@ -33,7 +33,7 @@ export default function HomeScreen() {
   useWebSocket()
 
   useEffect(() => {
-    // Restore active session on mount
+    // Restore active session on mount (silent — user may simply have no active session)
     getMySessions().then((sessions) => {
       const active = sessions.find((s) => s.status === 'active' || s.status === 'pending')
       if (active) {
@@ -47,7 +47,9 @@ export default function HomeScreen() {
           customer_id: active.customer_id,
         })
       }
-    }).catch(() => {})
+    }).catch(() => {
+      // Non-blocking — session card defaults to "Start session" view
+    })
   }, [])
 
   const loadContracts = useCallback(() => {
@@ -57,7 +59,10 @@ export default function HomeScreen() {
         setSignedContract(mine[0] ?? null)
         setContractsLoaded(true)
       })
-      .catch(() => setContractsLoaded(true))
+      .catch(() => {
+        // Non-blocking — contract banner hidden; user can retry via profile tab
+        setContractsLoaded(true)
+      })
   }, [])
 
   useEffect(() => { loadContracts() }, [loadContracts])
@@ -68,8 +73,11 @@ export default function HomeScreen() {
     try {
       await stopMySession(activeSession.id)
       setActiveSession(null)
-    } catch {}
-    setStopping(false)
+    } catch {
+      Alert.alert('Error', 'Failed to stop session. Please try again.')
+    } finally {
+      setStopping(false)
+    }
   }
 
   const openMap = () => {

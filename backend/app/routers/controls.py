@@ -2,7 +2,7 @@ from typing import Optional
 import asyncio
 import logging
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DBSession
 from ..database import get_db
 from ..auth.user_database import get_user_db
@@ -35,7 +35,7 @@ router = APIRouter(prefix="/api/controls", tags=["controls"])
 
 
 class DenyBody(BaseModel):
-    reason: Optional[str] = None
+    reason: Optional[str] = Field(None, max_length=500)
 
 
 def _get_session_or_404(session_id: int, db: DBSession) -> Session:

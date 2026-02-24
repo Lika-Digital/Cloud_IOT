@@ -14,6 +14,7 @@ export default function ChatScreen() {
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const flatRef = useRef<FlatList>(null)
   const inFlight = useRef(false)
   const { profile } = useAuthStore()
@@ -36,11 +37,20 @@ export default function ChatScreen() {
 
   useWebSocket(handleIncoming)
 
-  useEffect(() => {
+  const loadMessages = () => {
+    setLoadError(false)
+    setLoading(true)
     getMyMessages().then((msgs) => {
       setMessages(msgs)
       setLoading(false)
-    }).catch(() => setLoading(false))
+    }).catch(() => {
+      setLoadError(true)
+      setLoading(false)
+    })
+  }
+
+  useEffect(() => {
+    loadMessages()
   }, [])
 
   useEffect(() => {
@@ -77,6 +87,10 @@ export default function ChatScreen() {
 
         {loading ? (
           <ActivityIndicator style={{ marginTop: 40 }} color="#60a5fa" />
+        ) : loadError ? (
+          <TouchableOpacity style={styles.errorContainer} onPress={loadMessages}>
+            <Text style={styles.errorText}>Could not load messages — tap to retry</Text>
+          </TouchableOpacity>
         ) : (
           <FlatList
             ref={flatRef}

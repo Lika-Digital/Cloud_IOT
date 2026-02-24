@@ -1,4 +1,9 @@
+import logging
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_config_logger = logging.getLogger(__name__)
+
+_DEFAULT_JWT_SECRET = "change-me-in-production-use-a-long-random-string"
 
 
 class Settings(BaseSettings):
@@ -8,8 +13,11 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8000
 
+    # CORS — comma-separated list of allowed origins
+    allowed_origins: str = "http://localhost:5173"
+
     # JWT
-    jwt_secret: str = "change-me-in-production-use-a-long-random-string"
+    jwt_secret: str = _DEFAULT_JWT_SECRET
     jwt_expire_minutes: int = 480  # 8 hours
 
     # OTP
@@ -27,3 +35,9 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+if settings.jwt_secret == _DEFAULT_JWT_SECRET:
+    _config_logger.critical(
+        "SECURITY WARNING: jwt_secret is set to the default value. "
+        "Set JWT_SECRET in your .env file before deploying to production!"
+    )

@@ -8,12 +8,14 @@ export default function History() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [statusFilter, setStatusFilter] = useState('')
   const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   useEffect(() => {
     setLoading(true)
+    setLoadError(null)
     getSessions({ status: statusFilter || undefined, limit: 200 })
-      .then(setSessions)
-      .catch(() => {})
+      .then((data) => { setSessions(data); setLoadError(null) })
+      .catch(() => setLoadError('Failed to load session history. Check your connection and refresh.'))
       .finally(() => setLoading(false))
   }, [statusFilter])
 
@@ -34,14 +36,19 @@ export default function History() {
         </select>
       </div>
 
+      {loadError && (
+        <div className="mb-4 px-4 py-3 rounded-lg bg-red-900/30 border border-red-700/40 text-red-400 text-sm">
+          {loadError}
+        </div>
+      )}
       {loading ? (
         <div className="text-gray-400 text-center py-8">Loading…</div>
-      ) : sessions.length === 0 ? (
+      ) : !loadError && sessions.length === 0 ? (
         <div className="card text-center py-12 text-gray-500">
           <p>No sessions found.</p>
           <p className="text-sm mt-1">Start the simulator and approve some sessions first.</p>
         </div>
-      ) : (
+      ) : !loadError ? (
         <div className="card overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -96,7 +103,7 @@ export default function History() {
             </tbody>
           </table>
         </div>
-      )}
+      ) : null}
     </div>
   )
 }

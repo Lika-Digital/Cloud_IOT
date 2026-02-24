@@ -1,21 +1,21 @@
 """Pydantic schemas for customer-facing API."""
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 from datetime import datetime
 
 
 class RegisterRequest(BaseModel):
     email: EmailStr
-    password: str
-    name: Optional[str] = None
-    vat_number: Optional[str] = None
-    ship_name: Optional[str] = None
-    ship_registration: Optional[str] = None
+    password: str = Field(..., min_length=8, max_length=128)
+    name: Optional[str] = Field(None, max_length=120)
+    vat_number: Optional[str] = Field(None, max_length=40)
+    ship_name: Optional[str] = Field(None, max_length=120)
+    ship_registration: Optional[str] = Field(None, max_length=60)
 
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(..., min_length=1, max_length=128)
 
 
 class TokenResponse(BaseModel):
@@ -67,8 +67,8 @@ class BillingConfigResponse(BaseModel):
 
 
 class BillingConfigUpdate(BaseModel):
-    kwh_price_eur: float
-    liter_price_eur: float
+    kwh_price_eur: float = Field(..., ge=0.0, le=9999.0)
+    liter_price_eur: float = Field(..., ge=0.0, le=9999.0)
 
 
 class CustomerSpendingRow(BaseModel):
@@ -113,11 +113,11 @@ class PedestalStatusResponse(BaseModel):
 
 
 class SendMessageRequest(BaseModel):
-    message: str
+    message: str = Field(..., min_length=1, max_length=2000)
 
 
 class OperatorReplyRequest(BaseModel):
-    message: str
+    message: str = Field(..., min_length=1, max_length=2000)
 
 
 class SessionDetailRow(BaseModel):

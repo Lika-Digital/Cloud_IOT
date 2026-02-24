@@ -1,16 +1,16 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from datetime import datetime
 from typing import Optional
 
 
 class LoginRequest(BaseModel):
-    email: str
-    password: str
+    email: EmailStr
+    password: str = Field(..., min_length=1, max_length=128)
 
 
 class VerifyOtpRequest(BaseModel):
-    email: str
-    code: str
+    email: EmailStr
+    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
 
 
 class TokenResponse(BaseModel):
@@ -21,9 +21,9 @@ class TokenResponse(BaseModel):
 
 
 class UserCreate(BaseModel):
-    email: str
-    password: str
-    role: str = "monitor"
+    email: EmailStr
+    password: str = Field(..., min_length=8, max_length=128)
+    role: str = Field("monitor", pattern=r"^(admin|monitor)$")
 
 
 class UserResponse(BaseModel):
@@ -37,5 +37,5 @@ class UserResponse(BaseModel):
 
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)

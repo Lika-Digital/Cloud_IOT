@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useStore } from '../store'
 import { getPedestals, getPendingSessions, getActiveSessions } from '../api'
 import PedestalGrid from '../components/pedestal/PedestalGrid'
@@ -13,17 +13,25 @@ export default function Dashboard() {
     selectedPedestalId,
     setSelectedPedestalId,
   } = useStore()
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    getPedestals().then(setPedestals).catch(() => {})
-    getPendingSessions().then(setPendingSessions).catch(() => {})
-    getActiveSessions().then(setActiveSessions).catch(() => {})
+    Promise.all([
+      getPedestals().then(setPedestals),
+      getPendingSessions().then(setPendingSessions),
+      getActiveSessions().then(setActiveSessions),
+    ]).catch(() => setError('Failed to load dashboard data. Check your connection and refresh.'))
   }, [])
 
   const selectedPedestal = pedestals.find((p) => p.id === selectedPedestalId)
 
   return (
     <div>
+      {error && (
+        <div className="mb-4 px-4 py-3 rounded-lg bg-red-900/30 border border-red-700/40 text-red-400 text-sm">
+          {error}
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center gap-3 mb-6">
         {selectedPedestalId !== null && (

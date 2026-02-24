@@ -70,7 +70,16 @@ class SecurityMiddleware(BaseHTTPMiddleware):
             except Exception:
                 pass
 
+        # ── 4. Security response headers ──────────────────────────────────────
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+
         return response
+
+
+_B64URL_RE = re.compile(r"^[A-Za-z0-9_\-]+=*$")
 
 
 def _valid_jwt_structure(token: str) -> bool:
@@ -78,5 +87,4 @@ def _valid_jwt_structure(token: str) -> bool:
     parts = token.split(".")
     if len(parts) != 3:
         return False
-    _b64url = re.compile(r"^[A-Za-z0-9_\-]+=*$")
-    return all(_b64url.match(p) for p in parts if p)
+    return all(_B64URL_RE.match(p) for p in parts if p)

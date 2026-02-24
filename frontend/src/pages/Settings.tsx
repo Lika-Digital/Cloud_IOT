@@ -228,6 +228,7 @@ function UserManagementPanel() {
             <input
               type="email"
               required
+              maxLength={120}
               value={newEmail}
               onChange={(e) => setNewEmail(e.target.value)}
               className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm"
@@ -241,6 +242,7 @@ function UserManagementPanel() {
               type="password"
               required
               minLength={6}
+              maxLength={128}
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
               className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm"

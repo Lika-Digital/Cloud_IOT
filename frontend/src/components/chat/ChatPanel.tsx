@@ -13,15 +13,21 @@ export default function ChatPanel({ customerId, customerName, customerEmail, onC
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [reply, setReply] = useState('')
   const [sending, setSending] = useState(false)
+  const [loadError, setLoadError] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const { lastChatMessage } = useStore()
 
-  // Initial load
-  useEffect(() => {
+  const loadMessages = () => {
+    setLoadError(false)
     getChatMessages(customerId).then((msgs) => {
       setMessages(msgs)
       markChatRead(customerId).catch(() => {})
-    }).catch(() => {})
+    }).catch(() => setLoadError(true))
+  }
+
+  // Initial load
+  useEffect(() => {
+    loadMessages()
   }, [customerId])
 
   // Real-time: append incoming customer messages from WebSocket
@@ -86,7 +92,18 @@ export default function ChatPanel({ customerId, customerName, customerEmail, onC
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
-          {messages.length === 0 && (
+          {loadError && (
+            <div className="text-center mt-8">
+              <p className="text-red-400 text-sm mb-3">Failed to load messages.</p>
+              <button
+                onClick={loadMessages}
+                className="text-blue-400 text-sm hover:text-blue-300 underline"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+          {!loadError && messages.length === 0 && (
             <p className="text-gray-500 text-sm text-center mt-8">No messages yet.</p>
           )}
           {messages.map((m) => (

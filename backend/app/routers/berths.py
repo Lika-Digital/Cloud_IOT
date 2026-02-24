@@ -17,14 +17,14 @@ from datetime import date, datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DBSession
 
 from ..auth.user_database import get_user_db
 from ..auth.berth_models import Berth, BerthReservation
 from ..auth.customer_models import Customer
 from ..auth.dependencies import require_admin
-from ..routers.customer_auth import require_customer
+from ..auth.customer_dependencies import require_customer
 
 router = APIRouter(tags=["berths"])
 
@@ -55,7 +55,7 @@ class ReservationIn(BaseModel):
     berth_id: int
     check_in_date: str   # YYYY-MM-DD
     check_out_date: str  # YYYY-MM-DD
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(None, max_length=500)
 
 
 class ReservationOut(BaseModel):
@@ -183,6 +183,8 @@ def reserve_berth(
         raise HTTPException(status_code=422, detail="check_out must be after check_in")
     if ci < date.today():
         raise HTTPException(status_code=422, detail="check_in must not be in the past")
+    if (co - ci).days > 365:
+        raise HTTPException(status_code=422, detail="Reservation duration cannot exceed 365 days")
 
     berth = user_db.get(Berth, body.berth_id)
     if not berth:
@@ -234,9 +236,11 @@ def get_my_reservations(
         .order_by(BerthReservation.check_in_date.desc())
         .all()
     )
+    # Batch-load all berths to avoid N+1 queries
+    berth_map = {b.id: b for b in user_db.query(Berth).all()}
     result = []
     for r in rows:
-        b = user_db.get(Berth, r.berth_id)
+        b = berth_map.get(r.berth_id)
         result.append(_reservation_to_out(r, b.name if b else "Unknown"))
     return result
 

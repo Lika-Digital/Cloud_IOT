@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DBSession
 
 from ..auth.user_database import get_user_db
@@ -17,9 +17,14 @@ router = APIRouter(tags=["service-orders"])
 
 # ─── Pydantic schemas ──────────────────────────────────────────────────────────
 
+_ALLOWED_SERVICE_TYPES = {
+    "electrical", "water", "maintenance", "cleaning", "security", "other"
+}
+
+
 class ServiceOrderCreate(BaseModel):
-    service_type: str
-    notes: Optional[str] = None
+    service_type: str = Field(..., min_length=1, max_length=60)
+    notes: Optional[str] = Field(None, max_length=1000)
 
 
 class ServiceOrderResponse(BaseModel):

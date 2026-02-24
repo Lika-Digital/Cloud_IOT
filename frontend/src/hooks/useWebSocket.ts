@@ -3,11 +3,11 @@ import { useStore } from '../store'
 import { useAuthStore } from '../store/authStore'
 
 const WS_URL = `ws://${window.location.host}/ws`
-const RECONNECT_DELAY_MS = 3000
 
 export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const attemptRef = useRef(0)
 
   const {
     addSession,
@@ -38,6 +38,7 @@ export function useWebSocket() {
 
       ws.onopen = () => {
         setWsConnected(true)
+        attemptRef.current = 0
         // Heartbeat ping every 20s
         const ping = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) ws.send('ping')
@@ -57,7 +58,9 @@ export function useWebSocket() {
       ws.onclose = () => {
         setWsConnected(false)
         clearInterval((ws as any)._pingInterval)
-        reconnectTimer.current = setTimeout(connect, RECONNECT_DELAY_MS)
+        const delay = Math.min(1000 * Math.pow(2, attemptRef.current), 30_000)
+        attemptRef.current += 1
+        reconnectTimer.current = setTimeout(connect, delay)
       }
 
       ws.onerror = () => {

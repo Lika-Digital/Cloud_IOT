@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
@@ -319,7 +320,7 @@ app = FastAPI(title="Smart Pedestal IoT API", version="1.0.0", lifespan=lifespan
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.allowed_origins.split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -331,12 +332,15 @@ app.add_middleware(SecurityMiddleware)
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
+    # Let FastAPI handle HTTPException with its proper status code
+    if isinstance(exc, HTTPException):
+        raise exc
     path = request.url.path
     tb = traceback.format_exc()
     logger.error(f"Unhandled exception on {path}: {exc}\n{tb}")
     try:
         from .services.error_log_service import log_error
-        log_error("system", "api", f"Unhandled exception: {type(exc).__name__} on {path}", details=tb[:2000])
+        log_error("system", "api", f"Unhandled exception: {type(exc).__name__} on {path}", details=tb[:4000])
     except Exception:
         pass
     return JSONResponse(status_code=500, content={"detail": "Internal server error", "path": path})

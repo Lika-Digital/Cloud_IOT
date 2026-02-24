@@ -1,7 +1,7 @@
 """Customer authentication: register, login, profile."""
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DBSession
 from ..auth.user_database import get_user_db
 from ..auth.customer_models import Customer
@@ -81,12 +81,12 @@ def get_me(customer: Customer = Depends(require_customer)):
 
 
 class ProfileUpdate(BaseModel):
-    name: Optional[str] = None
-    ship_name: Optional[str] = None
+    name: Optional[str] = Field(None, max_length=120)
+    ship_name: Optional[str] = Field(None, max_length=120)
 
 
 class PushTokenRequest(BaseModel):
-    token: str
+    token: str = Field(..., max_length=200)
 
 
 @router.patch("/profile", response_model=CustomerProfileResponse)

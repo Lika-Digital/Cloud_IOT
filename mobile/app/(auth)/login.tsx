@@ -51,6 +51,7 @@ export default function LoginScreen() {
             onChangeText={setEmail}
             autoCapitalize="none"
             keyboardType="email-address"
+            maxLength={120}
           />
           <TextInput
             style={styles.input}
@@ -59,6 +60,7 @@ export default function LoginScreen() {
             value={password}
             onChangeText={setPassword}
             secureTextEntry
+            maxLength={128}
           />
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <TouchableOpacity style={styles.btn} onPress={handleLogin} disabled={loading}>

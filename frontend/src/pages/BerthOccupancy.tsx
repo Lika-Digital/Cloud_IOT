@@ -29,6 +29,7 @@ const STATUS_LABEL: Record<string, string> = {
 export default function BerthOccupancy() {
   const { berthOccupancy, setBerthOccupancy } = useStore()
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [videoModalBerth, setVideoModalBerth] = useState<BerthOut | null>(null)
   const [calendarBerth, setCalendarBerth] = useState<BerthOut | null>(null)
   const [calendarEntries, setCalendarEntries] = useState<CalendarEntry[]>([])
@@ -38,8 +39,8 @@ export default function BerthOccupancy() {
 
   const refresh = () =>
     getBerths()
-      .then((data: import('../store').BerthStatus[]) => setBerthOccupancy(data))
-      .catch(() => {})
+      .then((data: import('../store').BerthStatus[]) => { setBerthOccupancy(data); setLoadError(null) })
+      .catch(() => setLoadError('Failed to load berth data. Retrying on next refresh.'))
 
   // Load berths on mount
   useEffect(() => {
@@ -79,6 +80,12 @@ export default function BerthOccupancy() {
         <h1 className="text-2xl font-bold text-white">Berth Occupancy</h1>
         <p className="text-gray-400 text-sm mt-1">Real-time dock status — updated every 30 s by camera analysis</p>
       </div>
+
+      {loadError && (
+        <div className="px-4 py-3 rounded-lg bg-red-900/30 border border-red-700/40 text-red-400 text-sm">
+          {loadError}
+        </div>
+      )}
 
       {analyzeResult && (
         <div className={`text-sm font-semibold px-4 py-2 rounded-lg border w-fit ${

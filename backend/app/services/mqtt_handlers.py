@@ -13,13 +13,14 @@ logger = logging.getLogger(__name__)
 last_heartbeat: dict[int, datetime] = {}
 
 # Topic patterns
-SOCKET_STATUS_RE = re.compile(r"pedestal/(\d+)/socket/(\d+)/status")
-SOCKET_POWER_RE  = re.compile(r"pedestal/(\d+)/socket/(\d+)/power")
-WATER_FLOW_RE    = re.compile(r"pedestal/(\d+)/water/flow")
-HEARTBEAT_RE     = re.compile(r"pedestal/(\d+)/heartbeat")
-SENSOR_TEMP_RE   = re.compile(r"pedestal/(\d+)/sensors/temperature")
-SENSOR_MOIST_RE  = re.compile(r"pedestal/(\d+)/sensors/moisture")
-DIAGNOSTICS_RE   = re.compile(r"pedestal/(\d+)/diagnostics/response")
+SOCKET_STATUS_RE  = re.compile(r"pedestal/(\d+)/socket/(\d+)/status")
+SOCKET_POWER_RE   = re.compile(r"pedestal/(\d+)/socket/(\d+)/power")
+WATER_FLOW_RE     = re.compile(r"pedestal/(\d+)/water/flow")
+HEARTBEAT_RE      = re.compile(r"pedestal/(\d+)/heartbeat")
+SENSOR_TEMP_RE    = re.compile(r"pedestal/(\d+)/sensors/temperature")
+SENSOR_MOIST_RE   = re.compile(r"pedestal/(\d+)/sensors/moisture")
+DIAGNOSTICS_RE    = re.compile(r"pedestal/(\d+)/diagnostics/response")
+SENSOR_REGISTER_RE = re.compile(r"pedestal/(\d+)/register")
 
 
 def _hw_warn(source: str, message: str, details: str | None = None):
@@ -54,6 +55,8 @@ async def handle_message(topic: str, payload: str):
             await _handle_moisture(int(m.group(1)), payload)
         elif m := DIAGNOSTICS_RE.match(topic):
             await _handle_diagnostics(int(m.group(1)), payload)
+        elif m := SENSOR_REGISTER_RE.match(topic):
+            await _handle_auto_register(int(m.group(1)), payload)
     except Exception as e:
         logger.error(f"Error handling MQTT message on {topic}: {e}")
         _hw_error("mqtt_handlers", f"Unhandled error on topic {topic}: {e}")
@@ -179,18 +182,97 @@ async def _handle_water_flow(pedestal_id: int, payload: str):
 async def _handle_heartbeat(pedestal_id: int, payload: str):
     try:
         data = json.loads(payload)
-        last_heartbeat[pedestal_id] = datetime.utcnow()  # update for comm-loss watchdog
+        now = datetime.utcnow()
+        last_heartbeat[pedestal_id] = now  # update for comm-loss watchdog
+
+        # Persist heartbeat timestamp + mark OPTA connected in DB
+        try:
+            from ..models.pedestal_config import PedestalConfig
+            db = SessionLocal()
+            try:
+                cfg = db.query(PedestalConfig).filter(
+                    PedestalConfig.pedestal_id == pedestal_id
+                ).first()
+                if cfg is None:
+                    cfg = PedestalConfig(
+                        pedestal_id=pedestal_id,
+                        opta_connected=1,
+                        last_heartbeat=now,
+                        updated_at=now,
+                    )
+                    db.add(cfg)
+                else:
+                    cfg.opta_connected = 1
+                    cfg.last_heartbeat = now
+                    cfg.updated_at = now
+                db.commit()
+            finally:
+                db.close()
+        except Exception as db_err:
+            logger.warning(f"Heartbeat DB update failed for pedestal {pedestal_id}: {db_err}")
+
         await ws_manager.broadcast({
             "event": "heartbeat",
             "data": {
                 "pedestal_id": pedestal_id,
                 "online": data.get("online", True),
-                "timestamp": data.get("timestamp", datetime.utcnow().isoformat()),
+                "timestamp": data.get("timestamp", now.isoformat()),
+            },
+        })
+        await ws_manager.broadcast({
+            "event": "pedestal_health_updated",
+            "data": {
+                "pedestal_id": pedestal_id,
+                "opta_connected": True,
+                "last_heartbeat": now.isoformat(),
             },
         })
     except Exception as e:
         logger.warning(f"Invalid heartbeat payload: {e}")
         _hw_warn(f"pedestal_{pedestal_id}", f"Invalid heartbeat payload: {e}", details=payload[:200])
+
+
+async def _handle_auto_register(pedestal_id: int, payload: str):
+    """Auto-upsert sensor into pedestal_sensors when device publishes pedestal/{id}/register."""
+    try:
+        data = json.loads(payload)
+        sensor_name = data.get("sensor_name", "").strip()
+        sensor_type = data.get("sensor_type", "").strip()
+        mqtt_topic  = data.get("mqtt_topic", "").strip()
+        unit        = data.get("unit", "")
+
+        if not sensor_name or not mqtt_topic:
+            logger.warning(f"Auto-register: missing sensor_name or mqtt_topic from pedestal {pedestal_id}")
+            return
+
+        from ..models.pedestal_config import PedestalSensor
+        db = SessionLocal()
+        try:
+            existing = db.query(PedestalSensor).filter(
+                PedestalSensor.pedestal_id == pedestal_id,
+                PedestalSensor.mqtt_topic == mqtt_topic,
+            ).first()
+            if existing:
+                existing.sensor_name = sensor_name
+                existing.sensor_type = sensor_type
+                existing.unit = unit
+                existing.source = "auto_mqtt"
+            else:
+                db.add(PedestalSensor(
+                    pedestal_id=pedestal_id,
+                    sensor_name=sensor_name,
+                    sensor_type=sensor_type,
+                    mqtt_topic=mqtt_topic,
+                    unit=unit,
+                    source="auto_mqtt",
+                    created_at=datetime.utcnow(),
+                ))
+            db.commit()
+            logger.info(f"Auto-registered sensor '{sensor_name}' for pedestal {pedestal_id}")
+        finally:
+            db.close()
+    except (json.JSONDecodeError, Exception) as e:
+        logger.warning(f"Auto-register parse error on pedestal {pedestal_id}: {e}")
 
 
 async def _handle_temperature(pedestal_id: int, payload: str):

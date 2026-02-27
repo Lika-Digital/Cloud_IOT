@@ -27,6 +27,7 @@ from .routers import contracts as contracts_router
 from .routers import service_orders as service_orders_router
 from .routers import reviews as reviews_router
 from .routers import berths as berths_router
+from .routers import pedestal_config as pedestal_config_router
 from .auth.user_database import init_user_db, UserSessionLocal
 from .auth.models import User
 from .auth.customer_models import BillingConfig
@@ -100,6 +101,58 @@ async def _pending_session_watchdog():
             logger.warning(f"Pending session watchdog error: {e}")
         finally:
             db.close()
+
+
+async def _camera_health_check():
+    """Every 30 s: HTTP HEAD each configured camera URL and update DB + broadcast WS event."""
+    from .models.pedestal_config import PedestalConfig
+    from .services.discovery import check_camera
+    while True:
+        await asyncio.sleep(30)
+        try:
+            db = SessionLocal()
+            try:
+                configs = db.query(PedestalConfig).filter(
+                    PedestalConfig.camera_stream_url.isnot(None),
+                    PedestalConfig.camera_stream_url != "",
+                ).all()
+            finally:
+                db.close()
+
+            for cfg in configs:
+                try:
+                    reachable = await check_camera(
+                        cfg.camera_stream_url,
+                        username=cfg.camera_username or "",
+                        password=cfg.camera_password or "",
+                    )
+                    now = datetime.utcnow()
+                    prev = bool(cfg.camera_reachable)
+                    # Update in a fresh session
+                    db2 = SessionLocal()
+                    try:
+                        row = db2.get(PedestalConfig, cfg.id)
+                        if row:
+                            row.camera_reachable = 1 if reachable else 0
+                            row.last_camera_check = now
+                            row.updated_at = now
+                            db2.commit()
+                    finally:
+                        db2.close()
+
+                    if reachable != prev:
+                        await ws_manager.broadcast({
+                            "event": "pedestal_health_updated",
+                            "data": {
+                                "pedestal_id": cfg.pedestal_id,
+                                "camera_reachable": reachable,
+                                "last_camera_check": now.isoformat(),
+                            },
+                        })
+                except Exception as e:
+                    logger.debug(f"Camera health check error for pedestal {cfg.pedestal_id}: {e}")
+        except Exception as e:
+            logger.warning(f"Camera health check loop error: {e}")
 
 
 async def _comm_loss_watchdog():
@@ -307,6 +360,7 @@ async def lifespan(app: FastAPI):
     watchdog_task   = asyncio.create_task(_pending_session_watchdog())
     comm_loss_task  = asyncio.create_task(_comm_loss_watchdog())
     berth_task      = asyncio.create_task(run_berth_analysis())
+    camera_task     = asyncio.create_task(_camera_health_check())
 
     yield
 
@@ -315,6 +369,7 @@ async def lifespan(app: FastAPI):
     watchdog_task.cancel()
     comm_loss_task.cancel()
     berth_task.cancel()
+    camera_task.cancel()
     mqtt_service.stop()
     simulator_manager.stop()
     try:
@@ -378,6 +433,7 @@ app.include_router(contracts_router.router)
 app.include_router(service_orders_router.router)
 app.include_router(reviews_router.router)
 app.include_router(berths_router.router)
+app.include_router(pedestal_config_router.router)
 
 
 @app.get("/health")

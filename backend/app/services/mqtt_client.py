@@ -15,6 +15,7 @@ TOPICS = [
     "pedestal/+/sensors/temperature",
     "pedestal/+/sensors/moisture",
     "pedestal/+/diagnostics/response",
+    "pedestal/+/register",
 ]
 
 

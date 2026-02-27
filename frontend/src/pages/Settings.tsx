@@ -1,14 +1,16 @@
 import { useState, useEffect } from 'react'
 import ConfigPanel from '../components/config/ConfigPanel'
 import FieldHelp from '../components/config/FieldHelp'
+import PedestalConfigForm from '../components/config/PedestalConfigForm'
 import { getPedestals, configurePedestals } from '../api'
-import { useStore } from '../store'
+import { useStore, type Pedestal } from '../store'
 import { authListUsers, authCreateUser, authDeleteUser, type UserResponse } from '../api/auth'
 
 export default function Settings() {
   const { setPedestals } = useStore()
   const [pedestalCount, setPedestalCount] = useState(1)
   const [currentCount, setCurrentCount]   = useState(1)
+  const [pedestals, setPedestalsList]     = useState<Pedestal[]>([])
   const [loading, setLoading]             = useState(false)
   const [message, setMessage]             = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
@@ -16,6 +18,7 @@ export default function Settings() {
     getPedestals().then((data) => {
       setCurrentCount(data.length)
       setPedestalCount(data.length)
+      setPedestalsList(data)
     })
   }, [])
 
@@ -26,6 +29,7 @@ export default function Settings() {
       const updated = await configurePedestals(pedestalCount)
       setPedestals(updated)
       setCurrentCount(updated.length)
+      setPedestalsList(updated)
       setMessage({ type: 'success', text: `Fleet updated to ${updated.length} pedestal(s).` })
     } catch {
       setMessage({ type: 'error', text: 'Failed to update pedestal count.' })
@@ -106,6 +110,21 @@ export default function Settings() {
 
           {/* Pedestal mode config */}
           <ConfigPanel />
+
+          {/* Per-pedestal extended configuration */}
+          {pedestals.length > 0 && (
+            <div className="card space-y-3">
+              <h3 className="font-semibold text-white">Pedestal Configuration</h3>
+              <p className="text-sm text-gray-400">
+                Configure site IDs, MQTT credentials, camera settings, and sensors for each pedestal.
+              </p>
+              <div className="space-y-2">
+                {pedestals.map((p) => (
+                  <PedestalConfigForm key={p.id} pedestal={p} />
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* User Management */}
           <UserManagementPanel />

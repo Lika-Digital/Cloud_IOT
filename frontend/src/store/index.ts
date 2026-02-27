@@ -73,6 +73,13 @@ export interface BerthStatus {
   analysis_error: string | null
 }
 
+export interface PedestalHealth {
+  opta_connected: boolean
+  last_heartbeat: string | null
+  camera_reachable: boolean
+  last_camera_check: string | null
+}
+
 // --- Store ---
 
 interface AppStore {
@@ -131,6 +138,11 @@ interface AppStore {
   berthOccupancy: BerthStatus[]
   setBerthOccupancy: (berths: BerthStatus[]) => void
   updateBerthOccupancy: (berths: BerthStatus[]) => void
+
+  // Pedestal health (opta / camera)
+  pedestalHealth: Record<number, PedestalHealth>
+  setPedestalHealth: (health: Record<number, PedestalHealth>) => void
+  updatePedestalHealthEntry: (pedestalId: number, update: Partial<PedestalHealth>) => void
 }
 
 export const useStore = create<AppStore>((set) => ({
@@ -232,4 +244,14 @@ export const useStore = create<AppStore>((set) => ({
       for (const b of incoming) map.set(b.id, b as BerthStatus)
       return { berthOccupancy: Array.from(map.values()) }
     }),
+
+  pedestalHealth: {},
+  setPedestalHealth: (health) => set({ pedestalHealth: health }),
+  updatePedestalHealthEntry: (pedestalId, update) =>
+    set((s) => ({
+      pedestalHealth: {
+        ...s.pedestalHealth,
+        [pedestalId]: { ...(s.pedestalHealth[pedestalId] ?? {}), ...update } as PedestalHealth,
+      },
+    })),
 }))

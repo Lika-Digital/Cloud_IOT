@@ -1,11 +1,12 @@
-import { useStore, type Pedestal } from '../../store'
+import { useStore, type Pedestal, type PedestalHealth } from '../../store'
 
 interface PedestalCardProps {
   pedestal: Pedestal
+  health: PedestalHealth | null
   onClick: () => void
 }
 
-export default function PedestalCard({ pedestal, onClick }: PedestalCardProps) {
+export default function PedestalCard({ pedestal, health, onClick }: PedestalCardProps) {
   const { pendingSessions, activeSessions, temperatureData, moistureData } = useStore()
 
   const pending = pendingSessions.filter((s) => s.pedestal_id === pedestal.id)
@@ -78,6 +79,19 @@ export default function PedestalCard({ pedestal, onClick }: PedestalCardProps) {
         </div>
       )}
 
+      {/* Health indicators */}
+      {health && (
+        <div className="flex items-center gap-2 mb-3">
+          <StatusDot ok={health.opta_connected} label="OPTA" />
+          <StatusDot ok={health.camera_reachable} label="Cam" />
+          {health.last_heartbeat && (
+            <span className="text-xs text-gray-500 ml-auto">
+              HB {relativeTime(health.last_heartbeat)}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Session counts */}
       <div className="grid grid-cols-2 gap-2">
         <SessionBadge
@@ -136,6 +150,25 @@ function PedestalIcon({ pending, active, alarm }: { pending: boolean; active: bo
       <rect x="14" y="104" width="44" height="8" rx="3" fill="#374151" stroke={color} strokeWidth="1" />
     </svg>
   )
+}
+
+function StatusDot({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <span className="flex items-center gap-1 text-xs">
+      <span
+        className={`inline-block w-2 h-2 rounded-full ${ok ? 'bg-green-500' : 'bg-red-500'}`}
+        title={ok ? `${label}: connected` : `${label}: offline`}
+      />
+      <span className={ok ? 'text-green-400' : 'text-red-400'}>{label}</span>
+    </span>
+  )
+}
+
+function relativeTime(iso: string): string {
+  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
+  if (diff < 60) return `${diff}s ago`
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+  return `${Math.floor(diff / 3600)}h ago`
 }
 
 function SessionBadge({

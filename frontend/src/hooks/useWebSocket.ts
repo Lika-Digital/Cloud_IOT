@@ -21,6 +21,7 @@ export function useWebSocket() {
     setLastChatMessage,
     incrementNewErrors,
     updateBerthOccupancy,
+    updatePedestalHealthEntry,
   } = useStore()
   const { role } = useAuthStore()
 
@@ -181,6 +182,16 @@ export function useWebSocket() {
         case 'berth_occupancy_updated': {
           const berths = msg.data.berths as import('../store').BerthStatus[]
           updateBerthOccupancy(berths)
+          break
+        }
+        case 'pedestal_health_updated': {
+          const pedestalId = msg.data.pedestal_id as number
+          updatePedestalHealthEntry(pedestalId, {
+            opta_connected: msg.data.opta_connected as boolean | undefined,
+            last_heartbeat: msg.data.last_heartbeat as string | null | undefined,
+            camera_reachable: msg.data.camera_reachable as boolean | undefined,
+            last_camera_check: msg.data.last_camera_check as string | null | undefined,
+          } as Partial<import('../store').PedestalHealth>)
           break
         }
       }

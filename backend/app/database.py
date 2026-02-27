@@ -25,6 +25,7 @@ def get_db():
 
 def init_db():
     from .models import pedestal, session, sensor_reading, error_log, active_alarm  # noqa: F401
+    from .models import pedestal_config  # noqa: F401
     Base.metadata.create_all(bind=engine)
     _migrate_schema()
 
@@ -44,6 +45,27 @@ def _migrate_schema():
         ("pedestals", "initialized", "INTEGER NOT NULL DEFAULT 0"),
         ("sessions",  "customer_id", "INTEGER"),
         ("sessions",  "deny_reason", "TEXT"),
+        # pedestal_configs columns (table created by metadata, but ALTER handles existing DBs)
+        ("pedestal_configs", "site_id",           "TEXT"),
+        ("pedestal_configs", "dock_id",           "TEXT"),
+        ("pedestal_configs", "berth_ref",         "TEXT"),
+        ("pedestal_configs", "pedestal_uid",      "TEXT"),
+        ("pedestal_configs", "pedestal_model",    "TEXT"),
+        ("pedestal_configs", "mqtt_username",     "TEXT"),
+        ("pedestal_configs", "mqtt_password",     "TEXT"),
+        ("pedestal_configs", "opta_client_id",    "TEXT"),
+        ("pedestal_configs", "camera_stream_url", "TEXT"),
+        ("pedestal_configs", "camera_fqdn",       "TEXT"),
+        ("pedestal_configs", "camera_username",   "TEXT"),
+        ("pedestal_configs", "camera_password",   "TEXT"),
+        ("pedestal_configs", "sensor_config_mode","TEXT DEFAULT 'auto'"),
+        ("pedestal_configs", "mdns_discovered",   "TEXT"),
+        ("pedestal_configs", "snmp_discovered",   "TEXT"),
+        ("pedestal_configs", "opta_connected",    "INTEGER DEFAULT 0"),
+        ("pedestal_configs", "last_heartbeat",    "DATETIME"),
+        ("pedestal_configs", "camera_reachable",  "INTEGER DEFAULT 0"),
+        ("pedestal_configs", "last_camera_check", "DATETIME"),
+        ("pedestal_configs", "updated_at",        "DATETIME"),
     ]
 
     with engine.connect() as conn:

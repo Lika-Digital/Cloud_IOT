@@ -1,11 +1,22 @@
+import { useEffect } from 'react'
 import { useStore } from '../../store'
 import PedestalCard from './PedestalCard'
+import { getPedestalHealth } from '../../api/pedestalConfig'
 
 export default function PedestalGrid() {
-  const { pedestals, pendingSessions, activeSessions, setSelectedPedestalId } = useStore()
+  const {
+    pedestals, pendingSessions, activeSessions, setSelectedPedestalId,
+    pedestalHealth, setPedestalHealth,
+  } = useStore()
 
   const totalPending = pendingSessions.length
   const totalActive  = activeSessions.length
+
+  useEffect(() => {
+    getPedestalHealth()
+      .then(setPedestalHealth)
+      .catch(() => {})
+  }, [])
 
   return (
     <div>
@@ -34,6 +45,7 @@ export default function PedestalGrid() {
             <PedestalCard
               key={p.id}
               pedestal={p}
+              health={pedestalHealth[p.id] ?? null}
               onClick={() => setSelectedPedestalId(p.id)}
             />
           ))}

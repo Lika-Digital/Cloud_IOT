@@ -200,10 +200,10 @@ class BerthAnalysisRequest(BaseModel):
 
     # Zone-based detection — restrict detections to a rectangular region
     # expressed as fractions of frame dimensions (0.0 – 1.0)
-    use_detection_zone: bool = False
-    zone_x1: float = 0.15                       # left edge   (default: 15% from left)
-    zone_y1: float = 0.10                       # top edge    (default: 10% from top)
-    zone_x2: float = 0.85                       # right edge  (default: 85% from left)
+    use_detection_zone: bool = True
+    zone_x1: float = 0.20                       # left edge   (default: 20% from left)
+    zone_y1: float = 0.20                       # top edge    (default: 20% from top)
+    zone_x2: float = 0.80                       # right edge  (default: 80% from left)
     zone_y2: float = 0.80                       # bottom edge (default: 80% from top)
 
 

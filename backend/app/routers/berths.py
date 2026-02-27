@@ -47,10 +47,10 @@ class BerthOut(BaseModel):
     match_score: Optional[float] = None
     analysis_error: Optional[str] = None
     # Zone-based detection config
-    use_detection_zone: int = 0
-    zone_x1: float = 0.15
-    zone_y1: float = 0.10
-    zone_x2: float = 0.85
+    use_detection_zone: int = 1
+    zone_x1: float = 0.20
+    zone_y1: float = 0.20
+    zone_x2: float = 0.80
     zone_y2: float = 0.80
 
     class Config:
@@ -109,10 +109,10 @@ def _berth_to_out(b: Berth) -> BerthOut:
         match_score=b.match_score,
         analysis_error=b.analysis_error,
         use_detection_zone=b.use_detection_zone or 0,
-        zone_x1=b.zone_x1 or 0.15,
-        zone_y1=b.zone_y1 or 0.10,
-        zone_x2=b.zone_x2 or 0.85,
-        zone_y2=b.zone_y2 or 0.80,
+        zone_x1=b.zone_x1 if b.zone_x1 is not None else 0.20,
+        zone_y1=b.zone_y1 if b.zone_y1 is not None else 0.20,
+        zone_x2=b.zone_x2 if b.zone_x2 is not None else 0.80,
+        zone_y2=b.zone_y2 if b.zone_y2 is not None else 0.80,
     )
 
 
@@ -319,10 +319,10 @@ async def trigger_analysis(
         "detect_conf_threshold": berth.detect_conf_threshold or 0.30,
         "match_threshold":       berth.match_threshold or 0.50,
         "use_detection_zone":    bool(berth.use_detection_zone),
-        "zone_x1":               berth.zone_x1 or 0.15,
-        "zone_y1":               berth.zone_y1 or 0.10,
-        "zone_x2":               berth.zone_x2 or 0.85,
-        "zone_y2":               berth.zone_y2 or 0.80,
+        "zone_x1":               berth.zone_x1 if berth.zone_x1 is not None else 0.20,
+        "zone_y1":               berth.zone_y1 if berth.zone_y1 is not None else 0.20,
+        "zone_x2":               berth.zone_x2 if berth.zone_x2 is not None else 0.80,
+        "zone_y2":               berth.zone_y2 if berth.zone_y2 is not None else 0.80,
     }
 
     res: dict = {}

@@ -58,9 +58,9 @@ def _migrate_user_schema():
         ("berths",    "match_score",           "REAL"),
         ("berths",    "analysis_error",        "TEXT"),
         ("berths",    "use_detection_zone",    "INTEGER NOT NULL DEFAULT 0"),
-        ("berths",    "zone_x1",               "REAL NOT NULL DEFAULT 0.15"),
-        ("berths",    "zone_y1",               "REAL NOT NULL DEFAULT 0.10"),
-        ("berths",    "zone_x2",               "REAL NOT NULL DEFAULT 0.85"),
+        ("berths",    "zone_x1",               "REAL NOT NULL DEFAULT 0.20"),
+        ("berths",    "zone_y1",               "REAL NOT NULL DEFAULT 0.20"),
+        ("berths",    "zone_x2",               "REAL NOT NULL DEFAULT 0.80"),
         ("berths",    "zone_y2",               "REAL NOT NULL DEFAULT 0.80"),
     ]
 
@@ -72,3 +72,18 @@ def _migrate_user_schema():
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {definition}"))
                 conn.commit()
                 log.info(f"User DB migration: added column '{column}' to '{table}'")
+
+        # Enable zone detection (centered 60%) on all berths that have a video source
+        # and are still at factory default (use_detection_zone=0, threshold=0.30).
+        # This is idempotent — runs every startup but only modifies unchanged rows.
+        conn.execute(text("""
+            UPDATE berths
+            SET use_detection_zone = 1,
+                zone_x1 = 0.20, zone_y1 = 0.20,
+                zone_x2 = 0.80, zone_y2 = 0.80,
+                detect_conf_threshold = 0.15
+            WHERE video_source IS NOT NULL
+              AND video_source != ''
+              AND use_detection_zone = 0
+        """))
+        conn.commit()

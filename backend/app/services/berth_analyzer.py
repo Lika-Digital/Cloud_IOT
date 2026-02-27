@@ -71,10 +71,10 @@ async def run_berth_analysis():
                         "detect_conf_threshold":  berth.detect_conf_threshold or 0.30,
                         "match_threshold":        berth.match_threshold or 0.50,
                         "use_detection_zone":     bool(berth.use_detection_zone),
-                        "zone_x1":                berth.zone_x1 or 0.15,
-                        "zone_y1":                berth.zone_y1 or 0.10,
-                        "zone_x2":                berth.zone_x2 or 0.85,
-                        "zone_y2":                berth.zone_y2 or 0.80,
+                        "zone_x1":                berth.zone_x1 if berth.zone_x1 is not None else 0.20,
+                        "zone_y1":                berth.zone_y1 if berth.zone_y1 is not None else 0.20,
+                        "zone_x2":                berth.zone_x2 if berth.zone_x2 is not None else 0.80,
+                        "zone_y2":                berth.zone_y2 if berth.zone_y2 is not None else 0.80,
                     }
 
                     try:

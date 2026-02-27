@@ -26,10 +26,10 @@ class Berth(UserBase):
     match_threshold: Mapped[float] = mapped_column(Float, default=0.50)
     # Zone-based detection: restrict vessel detection to a rectangular ROI
     # expressed as fractions of frame dimensions (0.0 – 1.0)
-    use_detection_zone: Mapped[int] = mapped_column(Integer, default=0)   # bool as int
-    zone_x1: Mapped[float] = mapped_column(Float, default=0.15)
-    zone_y1: Mapped[float] = mapped_column(Float, default=0.10)
-    zone_x2: Mapped[float] = mapped_column(Float, default=0.85)
+    use_detection_zone: Mapped[int] = mapped_column(Integer, default=1)   # bool as int
+    zone_x1: Mapped[float] = mapped_column(Float, default=0.20)
+    zone_y1: Mapped[float] = mapped_column(Float, default=0.20)
+    zone_x2: Mapped[float] = mapped_column(Float, default=0.80)
     zone_y2: Mapped[float] = mapped_column(Float, default=0.80)
     # Last ML output fields (persisted for frontend query without waiting for next cycle)
     occupied_bit: Mapped[int] = mapped_column(Integer, default=0)

@@ -1,9 +1,9 @@
 import logging
+import secrets
+from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _config_logger = logging.getLogger(__name__)
-
-_DEFAULT_JWT_SECRET = "change-me-in-production-use-a-long-random-string"
 
 
 class Settings(BaseSettings):
@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     # CORS — comma-separated list of allowed origins
     allowed_origins: str = "http://localhost:5173"
 
-    # JWT
-    jwt_secret: str = _DEFAULT_JWT_SECRET
+    # JWT — must be set via JWT_SECRET env var in production
+    jwt_secret: Optional[str] = None
     jwt_expire_minutes: int = 480  # 8 hours
 
     # OTP
@@ -29,15 +29,40 @@ class Settings(BaseSettings):
     smtp_tls: bool = True
     smtp_user: str = ""
     smtp_password: str = ""
-    smtp_from: str = "noreply@iot-dashboard.local"
+    smtp_from: str = ""
+
+    # Default admin credentials for first-run seeding — override via env vars
+    default_admin_email: str = "admin@iot-dashboard.local"
+    default_admin_password: Optional[str] = None
+
+    # Company / branding — used in PDFs (contracts, invoices)
+    company_name: str = ""
+    company_address: str = ""
+    company_phone: str = ""
+    company_email: str = ""
+    company_portal_name: str = "IoT Portal"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
 settings = Settings()
 
-if settings.jwt_secret == _DEFAULT_JWT_SECRET:
+# ── JWT secret resolution ─────────────────────────────────────────────────────
+if settings.jwt_secret is None:
+    settings.jwt_secret = secrets.token_hex(32)
     _config_logger.critical(
-        "SECURITY WARNING: jwt_secret is set to the default value. "
-        "Set JWT_SECRET in your .env file before deploying to production!"
+        "SECURITY WARNING: JWT_SECRET is not set. A random secret was generated — "
+        "all sessions will be invalidated on every restart. "
+        "Set JWT_SECRET in your .env file."
     )
+
+# ── Admin password check ──────────────────────────────────────────────────────
+if settings.default_admin_password is None:
+    _config_logger.warning(
+        "DEFAULT_ADMIN_PASSWORD is not set. Default admin user will NOT be seeded on first run. "
+        "Set DEFAULT_ADMIN_PASSWORD in your .env file."
+    )
+
+# ── SMTP from address fallback ────────────────────────────────────────────────
+if not settings.smtp_from:
+    settings.smtp_from = f"noreply@{settings.default_admin_email.split('@')[-1]}"

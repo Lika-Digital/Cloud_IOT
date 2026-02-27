@@ -5,6 +5,14 @@ import io
 from datetime import datetime
 from typing import Optional
 
+from ..config import settings
+
+
+def _company_header_text() -> str:
+    """Build the company sub-header line from config (address, phone)."""
+    parts = [p for p in [settings.company_address, settings.company_phone] if p]
+    return " | ".join(parts) if parts else ""
+
 
 def _make_pdf_buffer(draw_fn) -> bytes:
     """Create a PDF in memory and return bytes."""
@@ -79,11 +87,11 @@ def make_contract_pdf(
     story = []
 
     # Header
-    story.append(Paragraph("Marina Portorož", title_style))
-    story.append(Paragraph(
-        "Cesta solinarjev 8, 6320 Portorož, Slovenia | Tel: +386 5 676 02 00",
-        header_style,
-    ))
+    if settings.company_name:
+        story.append(Paragraph(settings.company_name, title_style))
+    header_text = _company_header_text()
+    if header_text:
+        story.append(Paragraph(header_text, header_style))
     story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#1a3c5e")))
     story.append(Spacer(1, 8 * mm))
 
@@ -137,8 +145,9 @@ def make_contract_pdf(
         story.append(Paragraph("[No signature]", label_style))
 
     story.append(Spacer(1, 4 * mm))
+    portal = settings.company_name or settings.company_portal_name
     story.append(Paragraph(
-        f"Signed electronically on {signed_at.strftime('%Y-%m-%d')} — Marina Portorož IoT Portal",
+        f"Signed electronically on {signed_at.strftime('%Y-%m-%d')} — {portal}",
         ParagraphStyle("Footer", parent=styles["Normal"], fontSize=8, textColor=colors.grey, alignment=TA_CENTER),
     ))
 
@@ -220,11 +229,11 @@ def make_invoice_pdf(
     story = []
 
     # Header
-    story.append(Paragraph("Marina Portorož", title_style))
-    story.append(Paragraph(
-        "Cesta solinarjev 8, 6320 Portorož, Slovenia | Tel: +386 5 676 02 00",
-        header_style,
-    ))
+    if settings.company_name:
+        story.append(Paragraph(settings.company_name, title_style))
+    header_text = _company_header_text()
+    if header_text:
+        story.append(Paragraph(header_text, header_style))
     story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#1a3c5e")))
     story.append(Spacer(1, 6 * mm))
 
@@ -286,8 +295,11 @@ def make_invoice_pdf(
     story.append(tbl)
     story.append(Spacer(1, 8 * mm))
 
+    thank_you = f"Thank you for using {settings.company_name or settings.company_portal_name} services."
+    if settings.company_email:
+        thank_you += f" For inquiries: {settings.company_email}"
     story.append(Paragraph(
-        "Thank you for using Marina Portorož services. For inquiries: info@marina-portoroz.si",
+        thank_you,
         ParagraphStyle("Footer", parent=styles["Normal"], fontSize=8, textColor=colors.grey, alignment=TA_CENTER),
     ))
 

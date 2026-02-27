@@ -39,8 +39,8 @@ from .middleware.security_middleware import SecurityMiddleware
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-DEFAULT_ADMIN_EMAIL = "admin@iot-dashboard.local"
-DEFAULT_ADMIN_PASSWORD = "admin1234"
+DEFAULT_ADMIN_EMAIL = settings.default_admin_email
+DEFAULT_ADMIN_PASSWORD = settings.default_admin_password
 
 PENDING_TIMEOUT_SECONDS = 15
 COMM_LOSS_TIMEOUT_SECONDS = 60
@@ -244,13 +244,19 @@ async def lifespan(app: FastAPI):
     user_db = UserSessionLocal()
     try:
         if not user_db.query(User).first():
-            user_db.add(User(
-                email=DEFAULT_ADMIN_EMAIL,
-                password_hash=hash_password(DEFAULT_ADMIN_PASSWORD),
-                role="admin",
-            ))
-            user_db.commit()
-            logger.info("Created default admin: %s / %s", DEFAULT_ADMIN_EMAIL, DEFAULT_ADMIN_PASSWORD)
+            if DEFAULT_ADMIN_PASSWORD:
+                user_db.add(User(
+                    email=DEFAULT_ADMIN_EMAIL,
+                    password_hash=hash_password(DEFAULT_ADMIN_PASSWORD),
+                    role="admin",
+                ))
+                user_db.commit()
+                logger.info("Created default admin: %s", DEFAULT_ADMIN_EMAIL)
+            else:
+                logger.warning(
+                    "No admin users exist and DEFAULT_ADMIN_PASSWORD is not set — "
+                    "skipping admin seed. Set DEFAULT_ADMIN_PASSWORD in .env to auto-create admin."
+                )
         if not user_db.get(BillingConfig, 1):
             user_db.add(BillingConfig(id=1, kwh_price_eur=0.30, liter_price_eur=0.015))
             user_db.commit()

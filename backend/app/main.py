@@ -28,6 +28,8 @@ from .routers import service_orders as service_orders_router
 from .routers import reviews as reviews_router
 from .routers import berths as berths_router
 from .routers import pedestal_config as pedestal_config_router
+from .routers import external_api_admin as ext_api_admin_router
+from .routers import external_api_gateway as ext_api_gateway_router
 from .auth.user_database import init_user_db, UserSessionLocal
 from .auth.models import User
 from .auth.customer_models import BillingConfig
@@ -354,6 +356,10 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_event_loop()
     mqtt_service.start(loop)
 
+    # Register webhook broadcast hook for external API push
+    from .services.webhook_service import dispatch_webhook
+    ws_manager.add_broadcast_hook(dispatch_webhook)
+
     log_info(
         "system", "startup",
         f"Application started — {pedestal_count} pedestal(s), {user_count} operator user(s), "
@@ -440,6 +446,8 @@ app.include_router(service_orders_router.router)
 app.include_router(reviews_router.router)
 app.include_router(berths_router.router)
 app.include_router(pedestal_config_router.router)
+app.include_router(ext_api_admin_router.router)
+app.include_router(ext_api_gateway_router.router)
 
 
 @app.get("/health")

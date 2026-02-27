@@ -10,6 +10,7 @@ import Users from './pages/Users'
 import SystemHealth from './pages/SystemHealth'
 import Contracts from './pages/Contracts'
 import BerthOccupancy from './pages/BerthOccupancy'
+import ApiGateway from './pages/ApiGateway'
 import LoginPage from './pages/LoginPage'
 import ProtectedRoute from './components/auth/ProtectedRoute'
 import { useWebSocket } from './hooks/useWebSocket'
@@ -102,6 +103,14 @@ function AppInner() {
           element={
             <ProtectedRoute adminOnly>
               <BerthOccupancy />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="api-gateway"
+          element={
+            <ProtectedRoute adminOnly>
+              <ApiGateway />
             </ProtectedRoute>
           }
         />

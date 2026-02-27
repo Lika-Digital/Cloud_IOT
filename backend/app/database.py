@@ -26,6 +26,7 @@ def get_db():
 def init_db():
     from .models import pedestal, session, sensor_reading, error_log, active_alarm  # noqa: F401
     from .models import pedestal_config  # noqa: F401
+    from .models import external_api  # noqa: F401
     Base.metadata.create_all(bind=engine)
     _migrate_schema()
 
@@ -66,6 +67,17 @@ def _migrate_schema():
         ("pedestal_configs", "camera_reachable",  "INTEGER DEFAULT 0"),
         ("pedestal_configs", "last_camera_check", "DATETIME"),
         ("pedestal_configs", "updated_at",        "DATETIME"),
+        # external_api_config columns (table created by metadata; ALTER handles existing DBs)
+        ("external_api_config", "api_key",              "TEXT"),
+        ("external_api_config", "allowed_endpoints",    "TEXT DEFAULT '[]'"),
+        ("external_api_config", "webhook_url",          "TEXT"),
+        ("external_api_config", "allowed_events",       "TEXT DEFAULT '[]'"),
+        ("external_api_config", "active",               "INTEGER DEFAULT 0"),
+        ("external_api_config", "verified",             "INTEGER DEFAULT 0"),
+        ("external_api_config", "last_verified_at",     "DATETIME"),
+        ("external_api_config", "verification_results", "TEXT"),
+        ("external_api_config", "created_at",           "DATETIME"),
+        ("external_api_config", "updated_at",           "DATETIME"),
     ]
 
     with engine.connect() as conn:

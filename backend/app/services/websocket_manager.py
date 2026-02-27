@@ -13,6 +13,11 @@ class WebSocketManager:
     def __init__(self):
         # List of (websocket, customer_id | None)
         self._connections: list[tuple[WebSocket, int | None]] = []
+        self._broadcast_hooks: list = []
+
+    def add_broadcast_hook(self, fn) -> None:
+        """Register a coroutine function called after every broadcast."""
+        self._broadcast_hooks.append(fn)
 
     async def connect(self, websocket: WebSocket, customer_id: int | None = None):
         await websocket.accept()
@@ -24,8 +29,6 @@ class WebSocketManager:
         logger.info(f"WebSocket disconnected. Total: {len(self._connections)}")
 
     async def broadcast(self, message: dict):
-        if not self._connections:
-            return
         data = json.dumps(message)
         dead: list[WebSocket] = []
         for ws, _ in self._connections:
@@ -38,6 +41,8 @@ class WebSocketManager:
                 dead.append(ws)
         for ws in dead:
             self.disconnect(ws)
+        for hook in self._broadcast_hooks:
+            asyncio.create_task(hook(message))
 
     @property
     def connection_count(self) -> int:

@@ -1,0 +1,20 @@
+#!/bin/bash
+# prerm — stop services before package removal
+set -euo pipefail
+
+echo "[cloud-iot] Stopping services..."
+systemctl stop cloud-iot-backend.service  2>/dev/null || true
+systemctl stop cloud-iot-compose.service  2>/dev/null || true
+systemctl disable cloud-iot-backend.service 2>/dev/null || true
+systemctl disable cloud-iot-compose.service 2>/dev/null || true
+
+# Stop Docker containers
+if command -v docker &>/dev/null && [[ -f /opt/cloud-iot/docker-compose.yml ]]; then
+    docker compose -f /opt/cloud-iot/docker-compose.yml down 2>/dev/null || true
+fi
+
+# Remove nginx site
+rm -f /etc/nginx/sites-enabled/cloud-iot
+nginx -t -q && systemctl reload nginx 2>/dev/null || true
+
+echo "[cloud-iot] Services stopped."

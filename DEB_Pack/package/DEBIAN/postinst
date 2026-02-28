@@ -1,0 +1,223 @@
+#!/bin/bash
+# postinst — Cloud IoT package post-installation script
+set -euo pipefail
+
+APP_DIR="/opt/cloud-iot"
+APP_USER="cloud-iot"
+ENV_FILE="$APP_DIR/backend/.env"
+LOG_PREFIX="[cloud-iot]"
+
+log()  { echo "$LOG_PREFIX $*"; }
+ok()   { echo "$LOG_PREFIX ✓ $*"; }
+fail() { echo "$LOG_PREFIX ✗ $*" >&2; exit 1; }
+step() { echo ""; echo "$LOG_PREFIX ── $* ──────────────────────────────"; }
+
+# ─────────────────────────────────────────────────────────────────────────────
+step "1/9  System user"
+if ! id "$APP_USER" &>/dev/null; then
+    useradd --system --no-create-home --shell /usr/sbin/nologin \
+        --comment "Cloud IoT service account" "$APP_USER"
+    ok "Created system user: $APP_USER"
+else
+    ok "User $APP_USER already exists"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+step "2/9  System packages"
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+
+# Python 3.11+ — Ubuntu 22.04 ships 3.10; add deadsnakes for 3.11 if needed
+PYTHON_BIN=""
+for v in python3.13 python3.12 python3.11 python3; do
+    if command -v "$v" &>/dev/null; then
+        VER=$("$v" -c "import sys; print(sys.version_info.minor)" 2>/dev/null || echo 0)
+        if [[ "$VER" -ge 11 || "$v" == "python3" ]]; then
+            PYTHON_BIN="$v"
+            break
+        fi
+    fi
+done
+
+if [[ -z "$PYTHON_BIN" ]]; then
+    log "Installing Python 3.11 from deadsnakes PPA..."
+    apt-get install -y -qq software-properties-common
+    add-apt-repository -y ppa:deadsnakes/ppa
+    apt-get update -qq
+    apt-get install -y -qq python3.11 python3.11-venv python3.11-dev
+    PYTHON_BIN="python3.11"
+fi
+ok "Python: $(command -v $PYTHON_BIN) ($($PYTHON_BIN --version))"
+
+# nginx (if not already installed)
+if ! command -v nginx &>/dev/null; then
+    apt-get install -y -qq nginx
+fi
+ok "nginx: $(nginx -v 2>&1 | head -1)"
+
+# curl and openssl (usually pre-installed)
+apt-get install -y -qq curl openssl
+
+# ─────────────────────────────────────────────────────────────────────────────
+step "3/9  Node.js 20"
+if ! command -v node &>/dev/null || [[ $(node -e "process.exit(process.version.split('.')[0].slice(1) < 18 ? 1 : 0)" 2>/dev/null; echo $?) -ne 0 ]]; then
+    log "Installing Node.js 20 via NodeSource..."
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null
+    apt-get install -y -qq nodejs
+fi
+ok "Node.js: $(node --version)  npm: $(npm --version)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+step "4/9  Docker CE"
+if ! command -v docker &>/dev/null; then
+    log "Installing Docker CE..."
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+        -o /etc/apt/keyrings/docker.asc
+    chmod a+r /etc/apt/keyrings/docker.asc
+    CODENAME=$(. /etc/os-release && echo "$VERSION_CODENAME")
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+https://download.docker.com/linux/ubuntu $CODENAME stable" \
+        | tee /etc/apt/sources.list.d/docker.list >/dev/null
+    apt-get update -qq
+    apt-get install -y -qq docker-ce docker-ce-cli containerd.io \
+        docker-buildx-plugin docker-compose-plugin
+    systemctl enable docker --now
+fi
+ok "Docker: $(docker --version)"
+
+# Add app user to docker group so compose service works
+if ! groups "$APP_USER" | grep -q docker; then
+    usermod -aG docker "$APP_USER"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+step "5/9  Python virtual environment"
+VENV_DIR="$APP_DIR/backend/.venv"
+if [[ ! -d "$VENV_DIR" ]]; then
+    sudo -u "$APP_USER" "$PYTHON_BIN" -m venv "$VENV_DIR"
+    ok "Created venv at $VENV_DIR"
+else
+    ok "venv already exists"
+fi
+
+log "Installing Python dependencies (may take a minute)..."
+sudo -u "$APP_USER" "$VENV_DIR/bin/pip" install --upgrade pip -q
+sudo -u "$APP_USER" "$VENV_DIR/bin/pip" install -q \
+    -r "$APP_DIR/backend/requirements.txt" \
+    email-validator
+ok "Python dependencies installed"
+
+# ─────────────────────────────────────────────────────────────────────────────
+step "6/9  Frontend build"
+DIST_DIR="$APP_DIR/frontend/dist"
+if [[ ! -d "$DIST_DIR" ]]; then
+    log "Installing npm dependencies and building frontend..."
+    sudo -u "$APP_USER" bash -c "cd $APP_DIR/frontend && npm ci --silent"
+    sudo -u "$APP_USER" bash -c "cd $APP_DIR/frontend && npm run build"
+    ok "Frontend built → $DIST_DIR"
+else
+    ok "Frontend dist already exists (run: cloud-iot update to rebuild)"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+step "7/9  Environment configuration"
+if [[ ! -f "$ENV_FILE" ]]; then
+    JWT_SECRET=$(openssl rand -hex 32)
+    cat > "$ENV_FILE" <<ENVEOF
+# ── JWT ───────────────────────────────────────────────────────────────────────
+JWT_SECRET=${JWT_SECRET}
+
+# ── Admin seed credentials (used only on first run if no users exist) ─────────
+DEFAULT_ADMIN_EMAIL=admin@marina.local
+DEFAULT_ADMIN_PASSWORD=ChangeMe123!
+
+# ── SMTP ──────────────────────────────────────────────────────────────────────
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_TLS=true
+SMTP_USER=
+SMTP_PASSWORD=
+SMTP_FROM=noreply@marina.local
+
+# ── MQTT broker ───────────────────────────────────────────────────────────────
+MQTT_BROKER_HOST=localhost
+MQTT_BROKER_PORT=1883
+
+# ── CORS ──────────────────────────────────────────────────────────────────────
+ALLOWED_ORIGINS=*
+
+# ── Company / branding ────────────────────────────────────────────────────────
+COMPANY_NAME=Marina
+COMPANY_ADDRESS=
+COMPANY_PHONE=
+COMPANY_EMAIL=
+COMPANY_PORTAL_NAME=Marina IoT Portal
+ENVEOF
+    chown "$APP_USER:$APP_USER" "$ENV_FILE"
+    chmod 640 "$ENV_FILE"
+    ok "Created default .env (edit with: sudo cloud-iot config)"
+else
+    ok ".env already exists — keeping existing configuration"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+step "8/9  nginx configuration"
+NGINX_AVAIL="/etc/nginx/sites-available/cloud-iot"
+NGINX_ENABLED="/etc/nginx/sites-enabled/cloud-iot"
+
+# Remove default nginx site
+rm -f /etc/nginx/sites-enabled/default
+
+# Enable cloud-iot site
+if [[ ! -L "$NGINX_ENABLED" ]]; then
+    ln -s "$NGINX_AVAIL" "$NGINX_ENABLED"
+fi
+
+nginx -t -q && systemctl reload nginx || {
+    log "nginx config test failed — check /etc/nginx/sites-available/cloud-iot"
+}
+ok "nginx configured"
+
+# ─────────────────────────────────────────────────────────────────────────────
+step "9/9  Systemd services"
+
+# Ensure app directory ownership
+chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+chmod -R 755 "$APP_DIR"
+chmod 640 "$ENV_FILE"
+mkdir -p "$APP_DIR/backend/data" "$APP_DIR/backend/models" "$APP_DIR/backend/backgrounds"
+chown "$APP_USER:$APP_USER" \
+    "$APP_DIR/backend/data" \
+    "$APP_DIR/backend/models" \
+    "$APP_DIR/backend/backgrounds"
+
+systemctl daemon-reload
+systemctl enable cloud-iot-compose.service
+systemctl enable cloud-iot-backend.service
+
+log "Starting Docker services (MQTT + ML worker)..."
+systemctl start cloud-iot-compose.service || \
+    log "WARNING: Docker compose failed — run: sudo systemctl status cloud-iot-compose"
+
+log "Starting backend..."
+systemctl start cloud-iot-backend.service || \
+    log "WARNING: Backend failed — run: sudo cloud-iot logs backend"
+
+# ─────────────────────────────────────────────────────────────────────────────
+SERVER_IP=$(hostname -I | awk '{print $1}')
+echo ""
+echo "╔══════════════════════════════════════════════════════════╗"
+echo "║          Cloud IoT — Installation Complete               ║"
+echo "╠══════════════════════════════════════════════════════════╣"
+echo "║  Web interface:  http://$SERVER_IP"
+echo "║  Default login:  admin@marina.local / ChangeMe123!"
+echo "║                                                          ║"
+echo "║  IMPORTANT: Change the default password after login!     ║"
+echo "║                                                          ║"
+echo "║  Next steps:                                             ║"
+echo "║    sudo cloud-iot download-models  (for ML detection)    ║"
+echo "║    sudo cloud-iot config           (edit settings)       ║"
+echo "║    sudo cloud-iot status           (check services)      ║"
+echo "╚══════════════════════════════════════════════════════════╝"
+echo ""

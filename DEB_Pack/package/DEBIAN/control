@@ -1,0 +1,17 @@
+Package: cloud-iot
+Version: 1.0.0
+Section: net
+Priority: optional
+Architecture: amd64
+Depends: python3 (>= 3.11), python3-pip, python3-venv, nginx, curl, openssl
+Maintainer: Lika Digital <info@lika.digital>
+Description: Cloud IoT Marina Pedestal Management System
+ Full-stack IoT dashboard for marina smart pedestal management.
+ Includes FastAPI backend, React frontend, ML-based berth detection,
+ MQTT integration, customer portal, billing, and chat.
+ .
+ Components:
+  - FastAPI backend (Python 3.11+, SQLite, JWT auth, WebSocket)
+  - React 18 frontend served via nginx
+  - MQTT broker (Eclipse Mosquitto, Docker)
+  - ML worker with RT-DETR + DINOv2 berth detection (Docker)

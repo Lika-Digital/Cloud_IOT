@@ -1,0 +1,20 @@
+[Unit]
+Description=Cloud IoT Backend (FastAPI/uvicorn)
+After=network.target
+Wants=cloud-iot-compose.service
+
+[Service]
+Type=exec
+User=cloud-iot
+Group=cloud-iot
+WorkingDirectory=/opt/cloud-iot/backend
+EnvironmentFile=/opt/cloud-iot/backend/.env
+ExecStart=/opt/cloud-iot/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cloud-iot-backend
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,20 @@
+[Unit]
+Description=Cloud IoT Docker Compose (MQTT broker + ML worker)
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=cloud-iot
+Group=docker
+WorkingDirectory=/opt/cloud-iot
+ExecStart=/usr/bin/docker compose up -d --remove-orphans
+ExecStop=/usr/bin/docker compose down
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cloud-iot-compose
+
+[Install]
+WantedBy=multi-user.target

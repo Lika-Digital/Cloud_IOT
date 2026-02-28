@@ -1,0 +1,18 @@
+#!/bin/bash
+# postrm — cleanup after package removal
+set -euo pipefail
+
+case "$1" in
+  purge)
+    echo "[cloud-iot] Purging application data..."
+    rm -rf /opt/cloud-iot
+    userdel cloud-iot 2>/dev/null || true
+    systemctl daemon-reload
+    echo "[cloud-iot] Purge complete. Docker images and volumes kept (remove manually if needed)."
+    ;;
+  remove)
+    echo "[cloud-iot] Package removed. Data kept at /opt/cloud-iot"
+    echo "[cloud-iot] To fully remove: sudo dpkg --purge cloud-iot"
+    systemctl daemon-reload
+    ;;
+esac

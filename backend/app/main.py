@@ -425,6 +425,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 # ─── Routers ─────────────────────────────────────────────────────────────────
 
 app.include_router(auth_router.router)
+app.include_router(pedestal_config_router.router)  # must be before pedestals — /api/pedestals/health must register before /{pedestal_id}
 app.include_router(pedestals.router)
 app.include_router(sessions.router)
 app.include_router(controls.router)
@@ -445,7 +446,6 @@ app.include_router(contracts_router.router)
 app.include_router(service_orders_router.router)
 app.include_router(reviews_router.router)
 app.include_router(berths_router.router)
-app.include_router(pedestal_config_router.router)
 app.include_router(ext_api_admin_router.router)
 app.include_router(ext_api_gateway_router.router)
 

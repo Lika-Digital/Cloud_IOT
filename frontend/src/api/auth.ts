@@ -23,9 +23,10 @@ export interface UserCreate {
   role: 'admin' | 'monitor'
 }
 
-// Attach token from localStorage to every request
+import { useAuthStore } from '../store/authStore'
+
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('auth_token')
+  const token = useAuthStore.getState().token
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })

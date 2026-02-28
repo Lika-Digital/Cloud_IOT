@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useAuthStore } from '../store/authStore'
 import {
   getTemplates, createTemplate, updateTemplate, getAdminContracts,
   type ContractTemplate, type CustomerContract,
@@ -60,7 +61,7 @@ export default function Contracts() {
   }
 
   const handleDownloadPdf = (contractId: number) => {
-    const token = localStorage.getItem('auth_token')
+    const token = useAuthStore.getState().token
     const url = `/api/admin/contracts/${contractId}/pdf`
     setPdfError(null)
     fetch(url, { headers: { Authorization: `Bearer ${token}` } })

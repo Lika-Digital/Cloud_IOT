@@ -20,6 +20,9 @@ class Berth(UserBase):
     video_source: Mapped[str] = mapped_column(String(255), nullable=True)
     # Filename of the contracted-ship reference image (relative to frontend/src/assets/)
     reference_image: Mapped[str] = mapped_column(String(255), nullable=True)
+    # Filename of the empty-berth background snapshot (relative to backend/backgrounds/)
+    # Used by the ML worker pre-screening step to skip RT-DETR on unchanged scenes.
+    background_image: Mapped[str] = mapped_column(String(255), nullable=True)
     # RT-DETR minimum detection confidence to declare a vessel present
     detect_conf_threshold: Mapped[float] = mapped_column(Float, default=0.30)
     # DINOv2 cosine-similarity threshold to declare a ship match

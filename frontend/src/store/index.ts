@@ -63,6 +63,7 @@ export interface BerthStatus {
   detected_status: string
   pedestal_id: number | null
   video_source: string | null
+  background_image: string | null
   last_analyzed: string | null
   // ML pipeline outputs
   occupied_bit: number

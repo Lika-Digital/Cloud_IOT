@@ -59,11 +59,19 @@ logger = logging.getLogger(__name__)
 
 # Docker paths take priority; fall back to native Windows paths
 _root = Path(__file__).parent.parent
-MODELS_DIR = Path("/models") if Path("/models").exists() else _root / "backend" / "models"
-ASSETS_DIR = Path("/assets") if Path("/assets").exists() else _root / "frontend" / "src" / "assets"
+MODELS_DIR      = Path("/models")      if Path("/models").exists()      else _root / "backend" / "models"
+ASSETS_DIR      = Path("/assets")      if Path("/assets").exists()      else _root / "frontend" / "src" / "assets"
+BACKGROUNDS_DIR = Path("/backgrounds") if Path("/backgrounds").exists()  else _root / "backend" / "backgrounds"
+BACKGROUNDS_DIR.mkdir(parents=True, exist_ok=True)
 
 RTDETR_PATH = MODELS_DIR / "rtdetr.onnx"
 DINOV2_PATH = MODELS_DIR / "dinov2.onnx"
+
+# Pre-screening: mean-absolute-difference threshold (0–255).
+# Frames whose MAD vs. the background image stays below this value
+# are considered "no change" and the berth is returned as FREE without
+# running the expensive RT-DETR detector.
+PRESCREEN_MAD_THRESHOLD = 18.0
 
 app = FastAPI(title="ML Worker", version="1.0.0")
 
@@ -187,11 +195,27 @@ def _filter_by_zone(
     return result
 
 
+def _compute_mad(frame: Image.Image, background: Image.Image) -> float:
+    """
+    Mean absolute difference (MAD) between a video frame and a stored background
+    reference image.  Both images are resized to a common small resolution
+    (320×240) before comparison so the result is independent of resolution.
+
+    Returns a value in [0, 255].  Values below PRESCREEN_MAD_THRESHOLD indicate
+    "no significant change from the empty-berth reference → FREE".
+    """
+    size = (320, 240)
+    f = np.array(frame.resize(size, Image.BILINEAR).convert("RGB"), dtype=np.float32)
+    b = np.array(background.resize(size, Image.BILINEAR).convert("RGB"), dtype=np.float32)
+    return float(np.mean(np.abs(f - b)))
+
+
 # ── Request / response schemas ────────────────────────────────────────────────
 
 class BerthAnalysisRequest(BaseModel):
     video_source: Optional[str] = None          # filename relative to /assets
     reference_image: Optional[str] = None       # filename relative to /assets
+    background_image: Optional[str] = None      # filename relative to /backgrounds (empty-berth snapshot)
     detect_conf_threshold: float = 0.30
     match_threshold: float = 0.50
 
@@ -214,6 +238,8 @@ class BerthAnalysisResponse(BaseModel):
     alarm: int                                   # 1 when state_code == 2
     match_score: Optional[float]                 # cosine similarity (None if not computed)
     detection_score: Optional[float]             # highest RT-DETR confidence
+    prescreened_free: bool = False               # True when pre-screening short-circuited RT-DETR
+    prescreen_mad: Optional[float] = None        # MAD value from pre-screening (debug)
     error: Optional[str]
 
 
@@ -282,6 +308,34 @@ def analyze_berth(req: BerthAnalysisRequest):
 
     logger.info("Extracted %d frame(s) from %s", len(frames), req.video_source)
 
+    # ── Step 1b: Background pre-screening (cheap pixel diff) ─────────────────
+    # If a stored empty-berth reference is configured, compare each frame against
+    # it using mean absolute difference (MAD).  When all frames look similar to
+    # the empty state (MAD < threshold) we skip the expensive RT-DETR step and
+    # return FREE immediately.  This eliminates false positives from water
+    # reflections, distant boats, and lighting changes.
+    if req.background_image:
+        bg_path = BACKGROUNDS_DIR / req.background_image
+        if bg_path.exists():
+            try:
+                background = Image.open(bg_path).convert("RGB")
+                mads = [_compute_mad(f, background) for f in frames]
+                max_mad = max(mads)
+                logger.info(
+                    "Pre-screening MAD: max=%.1f  threshold=%.1f  background=%s",
+                    max_mad, PRESCREEN_MAD_THRESHOLD, req.background_image,
+                )
+                if max_mad < PRESCREEN_MAD_THRESHOLD:
+                    logger.info("Pre-screening: scene matches empty background → FREE (skipping RT-DETR)")
+                    result.prescreened_free = True
+                    result.prescreen_mad = round(max_mad, 2)
+                    return result
+                result.prescreen_mad = round(max_mad, 2)
+            except Exception as exc:
+                logger.warning("Pre-screening failed (continuing to RT-DETR): %s", exc)
+        else:
+            logger.warning("Background image not found: %s — skipping pre-screening", bg_path)
+
     # ── Step 2: RT-DETR vessel detection across all frames ───────────────────
     rtdetr = _get_rtdetr()
     if rtdetr is None:
@@ -294,8 +348,12 @@ def analyze_berth(req: BerthAnalysisRequest):
     best_frame: Optional[Image.Image] = None
     thresholds = _progressive_thresholds(req.detect_conf_threshold)
 
+    # Minimum bbox area as a fraction of frame area — rejects noise/tiny blobs
+    MIN_AREA_FRACTION = 0.005   # vessel must cover at least 0.5 % of the frame
+
     for frame in frames:
         img_w, img_h = frame.size
+        frame_area = img_w * img_h
         for threshold in thresholds:
             try:
                 detections = rtdetr.detect(frame, conf_threshold=threshold)
@@ -304,10 +362,17 @@ def analyze_berth(req: BerthAnalysisRequest):
                 logger.error(result.error)
                 return result
 
-            # Prefer vessel-class detections; fall back to any class
-            # (marina ships may be classified as non-boat COCO classes)
+            # Reject detections whose bbox is too small (noise / distant objects)
+            detections = [
+                d for d in detections
+                if (d[2] - d[0]) * (d[3] - d[1]) >= MIN_AREA_FRACTION * frame_area
+            ]
+
+            # Prefer vessel-class detections.
+            # Any-class fallback is allowed only at the base (configured) threshold;
+            # at reduced thresholds the noise floor makes non-vessel hits unreliable.
             vessel_dets = [d for d in detections if d[5] in VESSEL_CLASSES]
-            if not vessel_dets:
+            if not vessel_dets and threshold >= thresholds[0]:
                 vessel_dets = detections
 
             # Apply zone filter if requested
@@ -421,3 +486,38 @@ def embed_image(req: EmbedRequest):
     img = Image.open(p).convert("RGB")
     vec = dinov2.embed(img)
     return {"embedding": vec.tolist(), "dim": len(vec)}
+
+
+class CaptureBackgroundRequest(BaseModel):
+    video_source: str       # filename relative to /assets
+    output_name: str        # output JPEG filename saved under /backgrounds
+
+
+@app.post("/capture/background")
+def capture_background(req: CaptureBackgroundRequest):
+    """
+    Extract the middle frame from a video and save it as a JPEG background
+    reference image under /backgrounds.  Call this once when the berth is
+    known to be empty so the pre-screening has a clean baseline.
+    """
+    video_path = ASSETS_DIR / req.video_source
+    if not video_path.exists():
+        return {"error": f"Video not found: {video_path}"}
+
+    try:
+        frames = _extract_frames(video_path, n=5)
+    except Exception as exc:
+        return {"error": f"Frame extraction failed: {exc}"}
+
+    # Use the middle frame as the most representative static background
+    bg_frame = frames[len(frames) // 2]
+
+    out_path = BACKGROUNDS_DIR / req.output_name
+    bg_frame.save(str(out_path), "JPEG", quality=90)
+    logger.info("Background captured: %s  (%dx%d)", out_path, *bg_frame.size)
+    return {
+        "saved": req.output_name,
+        "width": bg_frame.size[0],
+        "height": bg_frame.size[1],
+        "path": str(out_path),
+    }

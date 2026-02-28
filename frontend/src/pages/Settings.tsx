@@ -206,15 +206,20 @@ function SmtpSettingsPanel() {
         host: cfg.host, port: cfg.port, tls: cfg.tls,
         username: cfg.username, password: cfg.password, from_email: cfg.from_email,
       })
-      setMsg({ type: 'success', text: 'SMTP settings saved.' })
-      // Refresh to get masked password indicator
+    } catch {
+      setMsg({ type: 'error', text: 'Failed to save SMTP settings.' })
+      setSaving(false)
+      return
+    }
+    // Refresh to get updated configured flag + masked password
+    try {
       const updated = await getSmtpConfig()
       setCfg(updated)
     } catch {
-      setMsg({ type: 'error', text: 'Failed to save SMTP settings.' })
-    } finally {
-      setSaving(false)
+      // ignore refresh errors — save succeeded
     }
+    setMsg({ type: 'success', text: 'SMTP settings saved.' })
+    setSaving(false)
   }
 
   const handleTest = async () => {
@@ -263,6 +268,7 @@ function SmtpSettingsPanel() {
           <div className="col-span-2 sm:col-span-1">
             <label className="block text-xs text-gray-400 mb-1">SMTP Host</label>
             <input
+              required
               className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-200 text-sm focus:outline-none focus:border-blue-500"
               value={cfg.host}
               onChange={(e) => setCfg((c) => ({ ...c, host: e.target.value }))}

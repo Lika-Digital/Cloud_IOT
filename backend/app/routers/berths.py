@@ -38,6 +38,7 @@ class BerthOut(BaseModel):
     status: str
     detected_status: str
     video_source: Optional[str]
+    background_image: Optional[str] = None
     last_analyzed: Optional[str]
     # ML pipeline outputs
     occupied_bit: int = 0
@@ -101,6 +102,7 @@ def _berth_to_out(b: Berth) -> BerthOut:
         status=b.status,
         detected_status=b.detected_status,
         video_source=b.video_source,
+        background_image=b.background_image,
         last_analyzed=b.last_analyzed.isoformat() if b.last_analyzed else None,
         occupied_bit=b.occupied_bit or 0,
         match_ok_bit=b.match_ok_bit or 0,
@@ -316,6 +318,7 @@ async def trigger_analysis(
     payload = {
         "video_source":          berth.video_source,
         "reference_image":       berth.reference_image,
+        "background_image":      berth.background_image,
         "detect_conf_threshold": berth.detect_conf_threshold or 0.30,
         "match_threshold":       berth.match_threshold or 0.50,
         "use_detection_zone":    bool(berth.use_detection_zone),
@@ -354,6 +357,43 @@ async def trigger_analysis(
         "data": {"berths": [_berth_to_out(b).model_dump()]},
     })
     return res
+
+
+@router.post("/api/admin/berths/{berth_id}/capture-background")
+async def capture_background(
+    berth_id: int,
+    user_db: DBSession = Depends(get_user_db),
+    _admin=Depends(require_admin),
+):
+    """
+    Extract a middle frame from the berth's video source and save it as the
+    background reference image used by the ML pre-screening step.
+    Sets berth.background_image in the DB automatically.
+    """
+    import httpx
+    from ..services.berth_analyzer import ML_WORKER_URL, ML_TIMEOUT_SECONDS
+
+    berth = user_db.get(Berth, berth_id)
+    if not berth:
+        raise HTTPException(status_code=404, detail="Berth not found")
+    if not berth.video_source:
+        raise HTTPException(status_code=400, detail="Berth has no video source configured")
+
+    output_name = f"bg_berth_{berth_id}.jpg"
+    try:
+        async with httpx.AsyncClient(timeout=ML_TIMEOUT_SECONDS) as client:
+            r = await client.post(
+                f"{ML_WORKER_URL}/capture/background",
+                json={"video_source": berth.video_source, "output_name": output_name},
+            )
+            r.raise_for_status()
+            data = r.json()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"ML Worker error: {exc}")
+
+    berth.background_image = output_name
+    user_db.commit()
+    return {"background_image": output_name, "width": data.get("width"), "height": data.get("height")}
 
 
 @router.put("/api/admin/berths/{berth_id}/status")

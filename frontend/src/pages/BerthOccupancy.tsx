@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
-import { getBerths, getBerthCalendar, triggerAnalysis, type BerthOut, type CalendarEntry } from '../api/berths'
+import { getBerths, getBerthCalendar, triggerAnalysis, captureBackground, type BerthOut, type CalendarEntry } from '../api/berths'
 
 // Video assets (bundled via Vite)
 import berthFullVideo from '../assets/Berth Full.mp4'
@@ -36,6 +36,7 @@ export default function BerthOccupancy() {
   const [calendarLoading, setCalendarLoading] = useState(false)
   const [analyzingId, setAnalyzingId] = useState<number | null>(null)
   const [analyzeResult, setAnalyzeResult] = useState<string | null>(null)
+  const [capturingId, setCapturingId] = useState<number | null>(null)
 
   const refresh = () =>
     getBerths()
@@ -57,6 +58,20 @@ export default function BerthOccupancy() {
       setCalendarEntries([])
     }
     setCalendarLoading(false)
+  }
+
+  const handleCaptureBackground = async (berthId: number) => {
+    setCapturingId(berthId)
+    try {
+      const res = await captureBackground(berthId)
+      setAnalyzeResult(`✓ Background set (${res.width}×${res.height})`)
+      await refresh()
+    } catch {
+      setAnalyzeResult('⚠ Failed to capture background')
+    } finally {
+      setCapturingId(null)
+      setTimeout(() => setAnalyzeResult(null), 5000)
+    }
   }
 
   const handleManualAnalyze = async (berthId: number) => {
@@ -197,6 +212,20 @@ export default function BerthOccupancy() {
                           >
                             {analyzingId === b.id ? '⏳ Analyzing…' : '🔄 Analyze'}
                           </button>
+                          {b.video_source && (
+                            <button
+                              onClick={() => handleCaptureBackground(b.id)}
+                              disabled={capturingId === b.id}
+                              title={b.background_image ? `Background set: ${b.background_image}` : 'Capture current video frame as empty-berth baseline'}
+                              className={`text-xs border px-2 py-1 rounded disabled:opacity-50 disabled:cursor-wait transition-colors ${
+                                b.background_image
+                                  ? 'text-green-400 border-green-700/50 hover:text-green-300'
+                                  : 'text-yellow-400 border-yellow-700/50 hover:text-yellow-300'
+                              }`}
+                            >
+                              {capturingId === b.id ? '⏳…' : b.background_image ? '🖼 BG ✓' : '🖼 Set BG'}
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

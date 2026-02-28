@@ -21,6 +21,8 @@ services:
       - ./frontend/src/assets:/assets:ro
       # ONNX model files (place rtdetr.onnx + dinov2.onnx here)
       - ./backend/models:/models:ro
+      # Writable directory for captured background reference frames
+      - ./backend/backgrounds:/backgrounds
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]

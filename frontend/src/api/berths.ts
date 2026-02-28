@@ -24,6 +24,7 @@ export interface BerthOut {
   status: 'free' | 'occupied' | 'reserved'
   detected_status: string
   video_source: string | null
+  background_image: string | null
   last_analyzed: string | null
   occupied_bit: number
   match_ok_bit: number
@@ -49,3 +50,6 @@ export const getBerthCalendar = (berthId: number) =>
 
 export const triggerAnalysis = (berthId: number) =>
   api.post<{ ok: boolean; detected_status: string }>(`/admin/berths/${berthId}/analyze`).then((r) => r.data)
+
+export const captureBackground = (berthId: number) =>
+  api.post<{ background_image: string; width: number; height: number }>(`/admin/berths/${berthId}/capture-background`).then((r) => r.data)

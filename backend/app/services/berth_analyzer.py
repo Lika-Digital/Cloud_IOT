@@ -68,6 +68,7 @@ async def run_berth_analysis():
                     payload = {
                         "video_source":           berth.video_source,
                         "reference_image":        berth.reference_image,
+                        "background_image":       berth.background_image,
                         "detect_conf_threshold":  berth.detect_conf_threshold or 0.30,
                         "match_threshold":        berth.match_threshold or 0.50,
                         "use_detection_zone":     bool(berth.use_detection_zone),

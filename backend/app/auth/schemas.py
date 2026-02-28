@@ -40,3 +40,23 @@ class UserResponse(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(..., min_length=1, max_length=128)
     new_password: str = Field(..., min_length=8, max_length=128)
+
+
+class RegisterRequest(BaseModel):
+    # Use str (not EmailStr) for broad compatibility
+    email: str = Field(..., max_length=254)
+    password: str = Field(..., min_length=8, max_length=128)
+
+
+class UserPatch(BaseModel):
+    role: Optional[str] = Field(None, pattern=r"^(admin|monitor)$")
+    is_active: Optional[bool] = None
+
+
+class SmtpConfigUpdate(BaseModel):
+    host: str = ""
+    port: int = 587
+    tls: bool = True
+    username: str = ""
+    password: str = ""
+    from_email: str = ""

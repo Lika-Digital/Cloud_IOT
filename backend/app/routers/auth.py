@@ -15,6 +15,8 @@ from ..auth.schemas import (
     UserCreate,
     UserResponse,
     ChangePasswordRequest,
+    RegisterRequest,
+    UserPatch,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -83,6 +85,22 @@ def verify_otp_endpoint(body: VerifyOtpRequest, db: Session = Depends(get_user_d
     return TokenResponse(access_token=token, role=user.role, email=user.email)
 
 
+@router.post("/register", status_code=status.HTTP_201_CREATED)
+def register(body: RegisterRequest, db: Session = Depends(get_user_db)):
+    """Public self-registration. Creates a monitor-role account; admin can promote later."""
+    if db.query(User).filter(User.email == body.email).first():
+        raise HTTPException(status_code=400, detail="Email already registered")
+    user = User(
+        email=body.email,
+        password_hash=hash_password(body.password),
+        role="monitor",
+        is_active=True,
+    )
+    db.add(user)
+    db.commit()
+    return {"message": "Account created. You can now sign in."}
+
+
 @router.get("/me", response_model=UserResponse)
 def get_me(current_user: User = Depends(require_any_role)):
     return current_user
@@ -133,20 +151,22 @@ def create_user(
 
 
 @router.patch("/users/{user_id}", response_model=UserResponse)
-def update_user(
+def patch_user(
     user_id: int,
-    body: UserCreate,
-    _: User = Depends(require_admin),
+    body: UserPatch,
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_user_db),
 ):
+    """Partially update a user: role and/or is_active. Admin only."""
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    if body.role not in ("admin", "monitor"):
-        raise HTTPException(status_code=400, detail="Role must be 'admin' or 'monitor'")
-    user.email = body.email
-    user.password_hash = hash_password(body.password)
-    user.role = body.role
+    if body.role is not None:
+        user.role = body.role
+    if body.is_active is not None:
+        if user.id == current_user.id and not body.is_active:
+            raise HTTPException(status_code=400, detail="Cannot deactivate your own account")
+        user.is_active = body.is_active
     db.commit()
     db.refresh(user)
     return user

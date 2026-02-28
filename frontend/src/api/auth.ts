@@ -43,11 +43,17 @@ export const authGetMe = () =>
 export const authChangePassword = (current_password: string, new_password: string) =>
   api.post('/change-password', { current_password, new_password }).then((r) => r.data)
 
+export const authRegister = (email: string, password: string) =>
+  api.post<{ message: string }>('/register', { email, password }).then((r) => r.data)
+
 export const authListUsers = () =>
   api.get<UserResponse[]>('/users').then((r) => r.data)
 
 export const authCreateUser = (data: UserCreate) =>
   api.post<UserResponse>('/users', data).then((r) => r.data)
+
+export const authPatchUser = (id: number, data: { role?: 'admin' | 'monitor'; is_active?: boolean }) =>
+  api.patch<UserResponse>(`/users/${id}`, data).then((r) => r.data)
 
 export const authDeleteUser = (id: number) =>
   api.delete(`/users/${id}`).then((r) => r.data)

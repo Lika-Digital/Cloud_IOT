@@ -4,6 +4,20 @@ from sqlalchemy.orm import Mapped, mapped_column
 from .user_database import UserBase
 
 
+class SmtpConfig(UserBase):
+    """Single-row (id=1) table for runtime SMTP configuration (overrides .env)."""
+    __tablename__ = "smtp_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    host: Mapped[str] = mapped_column(String(255), default="")
+    port: Mapped[int] = mapped_column(Integer, default=587)
+    tls: Mapped[int] = mapped_column(Integer, default=1)      # 0 or 1
+    username: Mapped[str] = mapped_column(String(255), default="")
+    password: Mapped[str] = mapped_column(String(255), default="")
+    from_email: Mapped[str] = mapped_column(String(255), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class User(UserBase):
     __tablename__ = "users"
 

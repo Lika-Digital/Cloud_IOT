@@ -30,6 +30,7 @@ from .routers import berths as berths_router
 from .routers import pedestal_config as pedestal_config_router
 from .routers import external_api_admin as ext_api_admin_router
 from .routers import external_api_gateway as ext_api_gateway_router
+from .routers import settings as settings_router
 from .auth.user_database import init_user_db, UserSessionLocal
 from .auth.models import User
 from .auth.customer_models import BillingConfig
@@ -245,6 +246,15 @@ async def lifespan(app: FastAPI):
     # Seed admin user + billing config + default contract template
     user_db = UserSessionLocal()
     try:
+        # One-time migration: rename old default admin email if found
+        OLD_ADMIN_EMAIL = "admin@iot-dashboard.local"
+        if DEFAULT_ADMIN_EMAIL != OLD_ADMIN_EMAIL:
+            old_admin = user_db.query(User).filter(User.email == OLD_ADMIN_EMAIL).first()
+            if old_admin and not user_db.query(User).filter(User.email == DEFAULT_ADMIN_EMAIL).first():
+                old_admin.email = DEFAULT_ADMIN_EMAIL
+                user_db.commit()
+                logger.info("Migrated admin email: %s → %s", OLD_ADMIN_EMAIL, DEFAULT_ADMIN_EMAIL)
+
         if not user_db.query(User).first():
             if DEFAULT_ADMIN_PASSWORD:
                 user_db.add(User(
@@ -447,6 +457,7 @@ app.include_router(service_orders_router.router)
 app.include_router(reviews_router.router)
 app.include_router(berths_router.router)
 app.include_router(ext_api_admin_router.router)
+app.include_router(settings_router.router)
 app.include_router(ext_api_gateway_router.router)
 
 

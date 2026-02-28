@@ -4,7 +4,8 @@ import FieldHelp from '../components/config/FieldHelp'
 import PedestalConfigForm from '../components/config/PedestalConfigForm'
 import { getPedestals, configurePedestals } from '../api'
 import { useStore, type Pedestal } from '../store'
-import { authListUsers, authCreateUser, authDeleteUser, type UserResponse } from '../api/auth'
+import { authListUsers, authCreateUser, authDeleteUser, authPatchUser, type UserResponse } from '../api/auth'
+import { getSmtpConfig, updateSmtpConfig, testSmtp, type SmtpConfig } from '../api/settings'
 
 export default function Settings() {
   const { setPedestals } = useStore()
@@ -126,6 +127,9 @@ export default function Settings() {
             </div>
           )}
 
+          {/* SMTP / Communication */}
+          <SmtpSettingsPanel />
+
           {/* User Management */}
           <UserManagementPanel />
         </div>
@@ -174,6 +178,183 @@ export default function Settings() {
   )
 }
 
+// ── SMTP Settings Panel ────────────────────────────────────────────────────────
+
+function SmtpSettingsPanel() {
+  const [cfg, setCfg] = useState<SmtpConfig>({
+    host: '', port: 587, tls: true, username: '', password: '', from_email: '',
+    configured: false, source: 'none',
+  })
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  useEffect(() => {
+    getSmtpConfig()
+      .then(setCfg)
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSaving(true)
+    setMsg(null)
+    try {
+      await updateSmtpConfig({
+        host: cfg.host, port: cfg.port, tls: cfg.tls,
+        username: cfg.username, password: cfg.password, from_email: cfg.from_email,
+      })
+      setMsg({ type: 'success', text: 'SMTP settings saved.' })
+      // Refresh to get masked password indicator
+      const updated = await getSmtpConfig()
+      setCfg(updated)
+    } catch {
+      setMsg({ type: 'error', text: 'Failed to save SMTP settings.' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleTest = async () => {
+    setTesting(true)
+    setMsg(null)
+    try {
+      const res = await testSmtp()
+      setMsg({ type: 'success', text: res.message })
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setMsg({ type: 'error', text: detail ?? 'Test email failed.' })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  if (loading) return null
+
+  return (
+    <div className="card space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-white">Email / SMTP</h3>
+        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+          cfg.configured
+            ? 'bg-green-900/50 text-green-400'
+            : 'bg-yellow-900/50 text-yellow-400'
+        }`}>
+          {cfg.configured ? 'Configured' : 'Not configured'}
+        </span>
+      </div>
+
+      {!cfg.configured && (
+        <div className="px-3 py-2.5 rounded-lg bg-yellow-900/20 border border-yellow-700/40 text-yellow-400 text-xs">
+          SMTP is not configured — OTP codes are printed to the server console. Set SMTP below to enable email delivery.
+        </div>
+      )}
+
+      {cfg.source === 'env' && (
+        <div className="px-3 py-2 rounded-lg bg-blue-900/20 border border-blue-700/40 text-blue-400 text-xs">
+          Using .env settings. Save below to override with database settings.
+        </div>
+      )}
+
+      <form onSubmit={handleSave} className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div className="col-span-2 sm:col-span-1">
+            <label className="block text-xs text-gray-400 mb-1">SMTP Host</label>
+            <input
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-200 text-sm focus:outline-none focus:border-blue-500"
+              value={cfg.host}
+              onChange={(e) => setCfg((c) => ({ ...c, host: e.target.value }))}
+              placeholder="smtp.gmail.com"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Port</label>
+            <input
+              type="number"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-200 text-sm focus:outline-none focus:border-blue-500"
+              value={cfg.port}
+              onChange={(e) => setCfg((c) => ({ ...c, port: parseInt(e.target.value) || 587 }))}
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="smtp-tls"
+            checked={cfg.tls}
+            onChange={(e) => setCfg((c) => ({ ...c, tls: e.target.checked }))}
+            className="w-4 h-4"
+          />
+          <label htmlFor="smtp-tls" className="text-xs text-gray-400">Use STARTTLS</label>
+        </div>
+
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">Username</label>
+          <input
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-200 text-sm focus:outline-none focus:border-blue-500"
+            value={cfg.username}
+            onChange={(e) => setCfg((c) => ({ ...c, username: e.target.value }))}
+            placeholder="your@email.com"
+            autoComplete="off"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">Password</label>
+          <input
+            type="password"
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-200 text-sm focus:outline-none focus:border-blue-500"
+            value={cfg.password}
+            onChange={(e) => setCfg((c) => ({ ...c, password: e.target.value }))}
+            placeholder={cfg.configured ? '•••••• (unchanged)' : 'App password'}
+            autoComplete="new-password"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">From Address</label>
+          <input
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-200 text-sm focus:outline-none focus:border-blue-500"
+            value={cfg.from_email}
+            onChange={(e) => setCfg((c) => ({ ...c, from_email: e.target.value }))}
+            placeholder="noreply@yourdomain.com"
+          />
+        </div>
+
+        {msg && (
+          <div className={`text-xs px-3 py-2 rounded-lg ${
+            msg.type === 'success' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'
+          }`}>
+            {msg.text}
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <button
+            type="submit"
+            disabled={saving}
+            className="btn-primary flex-1"
+          >
+            {saving ? 'Saving…' : 'Save Settings'}
+          </button>
+          <button
+            type="button"
+            onClick={handleTest}
+            disabled={testing || !cfg.configured}
+            className="px-4 py-2 bg-gray-700 text-gray-200 text-sm rounded-lg hover:bg-gray-600 transition-colors disabled:opacity-40"
+            title={!cfg.configured ? 'Configure and save SMTP first' : 'Send test email to your admin address'}
+          >
+            {testing ? 'Sending…' : 'Test'}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
 // ── User Management Panel ─────────────────────────────────────────────────────
 
 function UserManagementPanel() {
@@ -209,20 +390,40 @@ function UserManagementPanel() {
     }
   }
 
+  const handleToggleRole = async (user: UserResponse) => {
+    const newRole = user.role === 'admin' ? 'monitor' : 'admin'
+    try {
+      const updated = await authPatchUser(user.id, { role: newRole })
+      setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)))
+    } catch {
+      setAddMsg({ type: 'error', text: 'Failed to update role.' })
+    }
+  }
+
+  const handleToggleActive = async (user: UserResponse) => {
+    try {
+      const updated = await authPatchUser(user.id, { is_active: !user.is_active })
+      setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)))
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setAddMsg({ type: 'error', text: msg ?? 'Failed to update status.' })
+    }
+  }
+
   const handleDelete = async (id: number, email: string) => {
-    if (!confirm(`Delete user ${email}?`)) return
+    if (!confirm(`Delete user ${email}? This cannot be undone.`)) return
     try {
       await authDeleteUser(id)
       setUsers((prev) => prev.filter((u) => u.id !== id))
     } catch {
-      alert('Failed to delete user.')
+      setAddMsg({ type: 'error', text: 'Failed to delete user.' })
     }
   }
 
   return (
     <div className="card space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-white">User Management</h3>
+        <h3 className="font-semibold text-white">Operator Accounts</h3>
         <button
           onClick={() => setShowAdd((v) => !v)}
           className="text-xs px-3 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-600 text-white transition-colors"
@@ -260,14 +461,14 @@ function UserManagementPanel() {
             <input
               type="password"
               required
-              minLength={6}
+              minLength={8}
               maxLength={128}
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
               className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm"
-              placeholder="Min 6 characters"
+              placeholder="Min 8 characters"
             />
-            <FieldHelp example="min 6 chars" hint="User can change after first login" />
+            <FieldHelp example="min 8 chars" hint="User can change after first login" />
           </div>
           <div>
             <label className="block text-xs text-gray-400 mb-1">Role</label>
@@ -291,24 +492,46 @@ function UserManagementPanel() {
         {users.map((u) => (
           <div
             key={u.id}
-            className="flex items-center justify-between py-2 px-3 rounded-lg bg-gray-800/50 border border-gray-700/50"
+            className="flex items-start justify-between py-2 px-3 rounded-lg bg-gray-800/50 border border-gray-700/50"
           >
-            <div>
-              <p className="text-sm text-gray-200">{u.email}</p>
-              <p className="text-xs text-gray-500 capitalize">{u.role}</p>
+            <div className="min-w-0 flex-1">
+              <p className={`text-sm truncate ${u.is_active ? 'text-gray-200' : 'text-gray-500 line-through'}`}>
+                {u.email}
+              </p>
+              <p className="text-xs text-gray-600 mt-0.5">
+                Joined {new Date(u.created_at).toLocaleDateString()}
+              </p>
             </div>
-            <div className="flex items-center gap-2">
-              <span className={`text-xs px-2 py-0.5 rounded-full border ${
-                u.role === 'admin'
-                  ? 'bg-blue-900/30 text-blue-400 border-blue-700/40'
-                  : 'bg-green-900/30 text-green-400 border-green-700/40'
-              }`}>
+            <div className="flex items-center gap-1 ml-2 flex-shrink-0">
+              {/* Role badge / toggle */}
+              <button
+                onClick={() => handleToggleRole(u)}
+                title={`Click to make ${u.role === 'admin' ? 'Monitor' : 'Admin'}`}
+                className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                  u.role === 'admin'
+                    ? 'bg-blue-900/30 text-blue-400 border-blue-700/40 hover:bg-red-900/30 hover:text-red-400 hover:border-red-700/40'
+                    : 'bg-green-900/30 text-green-400 border-green-700/40 hover:bg-blue-900/30 hover:text-blue-400 hover:border-blue-700/40'
+                }`}
+              >
                 {u.role}
-              </span>
+              </button>
+              {/* Active toggle */}
+              <button
+                onClick={() => handleToggleActive(u)}
+                title={u.is_active ? 'Deactivate account' : 'Activate account'}
+                className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                  u.is_active
+                    ? 'bg-gray-700/50 text-gray-400 border-gray-600/40 hover:bg-red-900/30 hover:text-red-400 hover:border-red-700/40'
+                    : 'bg-red-900/30 text-red-500 border-red-700/40 hover:bg-green-900/30 hover:text-green-400 hover:border-green-700/40'
+                }`}
+              >
+                {u.is_active ? 'Active' : 'Inactive'}
+              </button>
+              {/* Delete */}
               <button
                 onClick={() => handleDelete(u.id, u.email)}
                 className="text-xs text-gray-600 hover:text-red-400 transition-colors px-1"
-                title="Delete user"
+                title="Delete user permanently"
               >
                 ✕
               </button>

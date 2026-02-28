@@ -12,6 +12,7 @@ import Contracts from './pages/Contracts'
 import BerthOccupancy from './pages/BerthOccupancy'
 import ApiGateway from './pages/ApiGateway'
 import LoginPage from './pages/LoginPage'
+import Register from './pages/Register'
 import ProtectedRoute from './components/auth/ProtectedRoute'
 import { useWebSocket } from './hooks/useWebSocket'
 
@@ -46,6 +47,7 @@ function AppInner() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<Register />} />
       <Route
         path="/"
         element={

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { authLogin, authVerifyOtp } from '../api/auth'
 import { useAuthStore } from '../store/authStore'
 
@@ -151,7 +151,14 @@ export default function LoginPage() {
           )}
         </div>
 
-        {/* Default credentials are available in the server console on first startup */}
+        <div className="mt-4 text-center">
+          <Link
+            to="/register"
+            className="text-sm text-gray-500 hover:text-gray-300 transition-colors"
+          >
+            No account? Request access
+          </Link>
+        </div>
       </div>
     </div>
   )

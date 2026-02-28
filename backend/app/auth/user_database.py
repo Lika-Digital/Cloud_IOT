@@ -62,6 +62,7 @@ def _migrate_user_schema():
         ("berths",    "zone_y1",               "REAL NOT NULL DEFAULT 0.20"),
         ("berths",    "zone_x2",               "REAL NOT NULL DEFAULT 0.80"),
         ("berths",    "zone_y2",               "REAL NOT NULL DEFAULT 0.80"),
+        ("berths",    "background_image",      "TEXT"),
     ]
 
     with user_engine.connect() as conn:

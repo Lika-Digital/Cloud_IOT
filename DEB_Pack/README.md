@@ -36,16 +36,20 @@ chmod +x build_deb.sh
 
 ## Deploy to Ubuntu server
 
+> **Requirements:** Ubuntu 22.04+, `sudo` access, internet connection (the post-install script downloads additional dependencies on a fresh server).
+
 ```bash
 # Copy package to server
 scp cloud-iot_1.0.0_amd64.deb user@server:~/
 
-# Install (requires sudo)
+# Install — use apt (not dpkg) so APT dependencies are resolved automatically
 ssh user@server
-sudo dpkg -i cloud-iot_1.0.0_amd64.deb
+sudo apt install ./cloud-iot_1.0.0_amd64.deb
 ```
 
-Installation takes 3–5 minutes (downloads dependencies, builds frontend, starts services).
+Installation takes 3–5 minutes on a fresh server (downloads Python 3.11+, Node.js 20, Docker CE if missing, builds frontend, starts services).
+
+> **Airgapped servers:** Pre-install Docker CE, Node.js 20, and Python 3.11 manually before running `apt install`, then the post-install script will skip those downloads.
 
 ---
 

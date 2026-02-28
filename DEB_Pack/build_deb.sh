@@ -37,6 +37,7 @@ rsync -a --quiet \
     --exclude '__pycache__' \
     --exclude '*.pyc' \
     --exclude '.venv' \
+    --exclude '.env' \
     --exclude 'pedestal.db' \
     --exclude 'data/' \
     --exclude 'models/' \
@@ -78,6 +79,8 @@ fi
 
 # ── Set DEBIAN script permissions ─────────────────────────────────────────────
 echo "[build] Setting permissions..."
+chmod 755 "$PKG_DIR/DEBIAN"
+chmod 644 "$PKG_DIR/DEBIAN/control"
 chmod 755 "$PKG_DIR/DEBIAN/postinst"
 chmod 755 "$PKG_DIR/DEBIAN/prerm"
 chmod 755 "$PKG_DIR/DEBIAN/postrm"

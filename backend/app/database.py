@@ -42,8 +42,10 @@ def _migrate_schema():
 
     # (table, column, definition)
     migrations = [
-        ("pedestals", "camera_ip",   "TEXT"),
-        ("pedestals", "initialized", "INTEGER NOT NULL DEFAULT 0"),
+        ("pedestals", "camera_ip",      "TEXT"),
+        ("pedestals", "initialized",    "INTEGER NOT NULL DEFAULT 0"),
+        ("pedestals", "mobile_enabled", "INTEGER NOT NULL DEFAULT 0"),
+        ("pedestals", "ai_enabled",     "INTEGER NOT NULL DEFAULT 0"),
         ("sessions",  "customer_id", "INTEGER"),
         ("sessions",  "deny_reason", "TEXT"),
         # pedestal_configs columns (table created by metadata, but ALTER handles existing DBs)

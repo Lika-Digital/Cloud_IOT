@@ -39,7 +39,11 @@ export const updatePedestal = (id: number, data: Partial<Pedestal>) =>
 export const createPedestal = (data: { name: string; location?: string }) =>
   api.post<Pedestal>('/pedestals', data).then((r) => r.data)
 export const getSimulatorStatus = (id: number) =>
-  api.get<{ running: boolean }>(`/pedestals/${id}/simulator/status`).then((r) => r.data)
+  api.get<{ running: boolean; in_simulator_mode: boolean }>(`/pedestals/${id}/simulator/status`).then((r) => r.data)
+export const startSimulator = (id: number) =>
+  api.post<{ running: boolean; pedestal_id: number }>(`/pedestals/${id}/simulator/start`).then((r) => r.data)
+export const stopSimulator = (id: number) =>
+  api.post<{ running: boolean; pedestal_id: number }>(`/pedestals/${id}/simulator/stop`).then((r) => r.data)
 export const configurePedestals = (count: number) =>
   api.post<Pedestal[]>(`/pedestals/configure`, null, { params: { count } }).then((r) => r.data)
 

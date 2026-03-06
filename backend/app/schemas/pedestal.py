@@ -7,8 +7,10 @@ class PedestalBase(BaseModel):
     location: Optional[str] = None
     ip_address: Optional[str] = None
     camera_ip: Optional[str] = None
-    data_mode: str = "synthetic"
+    data_mode: str = "real"
     initialized: bool = False
+    mobile_enabled: bool = False
+    ai_enabled: bool = False
 
 
 class PedestalCreate(PedestalBase):
@@ -22,6 +24,8 @@ class PedestalUpdate(BaseModel):
     camera_ip: Optional[str] = None
     data_mode: Optional[str] = None
     initialized: Optional[bool] = None
+    mobile_enabled: Optional[bool] = None
+    ai_enabled: Optional[bool] = None
 
 
 class PedestalResponse(PedestalBase):

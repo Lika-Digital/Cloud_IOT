@@ -11,8 +11,10 @@ class Pedestal(Base):
     location: Mapped[str] = mapped_column(String(200), nullable=True)
     ip_address: Mapped[str] = mapped_column(String(50), nullable=True)
     camera_ip: Mapped[str] = mapped_column(String(50), nullable=True)
-    data_mode: Mapped[str] = mapped_column(String(20), default="synthetic")
+    data_mode: Mapped[str] = mapped_column(String(20), default="real")
     initialized: Mapped[bool] = mapped_column(Boolean, default=False)
+    mobile_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    ai_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
     sessions: Mapped[list["Session"]] = relationship(  # noqa: F821
         "Session", back_populates="pedestal", cascade="all, delete-orphan"

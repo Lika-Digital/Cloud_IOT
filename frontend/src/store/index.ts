@@ -10,6 +10,8 @@ export interface Pedestal {
   camera_ip: string | null
   data_mode: 'synthetic' | 'real'
   initialized: boolean
+  mobile_enabled: boolean
+  ai_enabled: boolean
 }
 
 export interface SensorReading {

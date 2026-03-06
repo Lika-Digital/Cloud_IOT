@@ -22,7 +22,7 @@ def pedestal_status(
 ):
     """Return all pedestals with their currently occupied sockets."""
     from ..models.pedestal import Pedestal
-    pedestals = db.query(Pedestal).order_by(Pedestal.id).all()
+    pedestals = db.query(Pedestal).filter(Pedestal.mobile_enabled == True).order_by(Pedestal.id).all()  # noqa: E712
     result = []
     for p in pedestals:
         active = (

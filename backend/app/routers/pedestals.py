@@ -41,7 +41,7 @@ def configure_pedestals(
             p = Pedestal(
                 name=f"Pedestal {i}",
                 location=f"Marina Berth {chr(64 + i)}",
-                data_mode="synthetic",
+                data_mode="real",
             )
             db.add(p)
         db.commit()
@@ -66,16 +66,8 @@ def configure_pedestals(
             db.delete(p)
         db.commit()
 
-    # Restart simulator if running with updated pedestal list
-    if simulator_manager.is_running:
-        all_pedestals = db.query(Pedestal).order_by(Pedestal.id).all()
-        pedestal_ids = [p.id for p in all_pedestals]
-        simulator_manager.stop()
-        simulator_manager.start(
-            pedestal_ids=pedestal_ids,
-            broker_host=settings.mqtt_broker_host,
-            broker_port=settings.mqtt_broker_port,
-        )
+    # Sync simulator with current set of synthetic-mode pedestals
+    _sync_simulator(db)
 
     return db.query(Pedestal).order_by(Pedestal.id).all()
 
@@ -112,28 +104,69 @@ def set_mode(
     if not pedestal:
         raise HTTPException(status_code=404, detail="Pedestal not found")
 
-    if mode == "synthetic":
-        pedestal.data_mode = "synthetic"
-        pedestal.initialized = False  # reset — real pedestal check no longer valid
-        all_pedestals = db.query(Pedestal).order_by(Pedestal.id).all()
-        pedestal_ids = [p.id for p in all_pedestals]
+    pedestal.data_mode = mode
+    pedestal.initialized = False
+    if mode == "real" and ip_address:
+        pedestal.ip_address = ip_address
+
+    db.commit()
+    db.refresh(pedestal)
+    _sync_simulator(db)
+    return pedestal
+
+
+@router.post("/{pedestal_id}/simulator/start")
+def start_simulator(
+    pedestal_id: int,
+    db: DBSession = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Set pedestal to synthetic mode and start simulator for all synthetic pedestals."""
+    pedestal = db.get(Pedestal, pedestal_id)
+    if not pedestal:
+        raise HTTPException(status_code=404, detail="Pedestal not found")
+    pedestal.data_mode = "synthetic"
+    pedestal.initialized = False
+    db.commit()
+    _sync_simulator(db)
+    return {"running": simulator_manager.is_running, "pedestal_id": pedestal_id}
+
+
+@router.post("/{pedestal_id}/simulator/stop")
+def stop_simulator(
+    pedestal_id: int,
+    db: DBSession = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Set pedestal to real mode and restart simulator for remaining synthetic pedestals."""
+    pedestal = db.get(Pedestal, pedestal_id)
+    if not pedestal:
+        raise HTTPException(status_code=404, detail="Pedestal not found")
+    pedestal.data_mode = "real"
+    pedestal.initialized = False
+    db.commit()
+    _sync_simulator(db)
+    return {"running": simulator_manager.is_running, "pedestal_id": pedestal_id}
+
+
+@router.get("/{pedestal_id}/simulator/status")
+def simulator_status(pedestal_id: int, db: DBSession = Depends(get_db)):
+    pedestal = db.get(Pedestal, pedestal_id)
+    in_sim_mode = pedestal is not None and pedestal.data_mode == "synthetic"
+    running = simulator_manager.is_running and in_sim_mode
+    return {"running": running, "in_simulator_mode": in_sim_mode}
+
+
+def _sync_simulator(db: DBSession) -> None:
+    """Restart or stop the simulator based on which pedestals are in synthetic mode."""
+    synthetic_ids = [
+        p.id for p in db.query(Pedestal).filter(Pedestal.data_mode == "synthetic").all()
+    ]
+    if synthetic_ids:
         simulator_manager.start(
-            pedestal_ids=pedestal_ids,
+            pedestal_ids=synthetic_ids,
             broker_host=settings.mqtt_broker_host,
             broker_port=settings.mqtt_broker_port,
         )
     else:
-        pedestal.data_mode = "real"
-        pedestal.initialized = False  # must re-run diagnostics after connecting
-        if ip_address:
-            pedestal.ip_address = ip_address
         simulator_manager.stop()
-
-    db.commit()
-    db.refresh(pedestal)
-    return pedestal
-
-
-@router.get("/{pedestal_id}/simulator/status")
-def simulator_status(pedestal_id: int):
-    return {"running": simulator_manager.is_running}

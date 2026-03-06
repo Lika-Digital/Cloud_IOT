@@ -140,8 +140,9 @@ export default function Settings() {
             <h3 className="font-semibold text-white mb-3">Quick Start</h3>
             <ol className="text-sm text-gray-400 space-y-2 list-decimal list-inside">
               <li>Set number of pedestals above and click Apply</li>
-              <li>Select <strong className="text-white">Synthetic Data</strong> mode and click Apply</li>
-              <li>Go to Dashboard — pedestal cards appear</li>
+              <li>Select a pedestal and choose <strong className="text-white">Simulator</strong> mode, then click <strong className="text-white">Start Simulator</strong></li>
+              <li>Enable <strong className="text-white">Mobile App Access</strong> for pedestals you want visible in the customer app</li>
+              <li>Go to Dashboard — pedestal cards appear with live data</li>
               <li>Click a pedestal card to open its detail view</li>
               <li>Click socket zones to Allow / Deny / Stop sessions</li>
             </ol>

@@ -1,8 +1,16 @@
 import { useEffect, useRef } from 'react'
+import { Platform } from 'react-native'
 import { useAuthStore } from '../store/authStore'
 import { useSessionStore } from '../store/sessionStore'
 
-const WS_BASE = process.env.EXPO_PUBLIC_WS_URL ?? 'ws://localhost:8000/ws'
+function resolveWsUrl(): string {
+  if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location.hostname === 'localhost') {
+    return 'ws://localhost:8000/ws'
+  }
+  return process.env.EXPO_PUBLIC_WS_URL ?? 'ws://localhost:8000/ws'
+}
+
+const WS_BASE = resolveWsUrl()
 
 export function useWebSocket(
   onChatMessage?: (msg: { customer_id: number; message: string; direction: string; created_at: string }) => void,

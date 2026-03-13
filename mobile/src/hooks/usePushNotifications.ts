@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { Platform } from 'react-native'
 import Constants from 'expo-constants'
 
 // expo-notifications remote push was removed from Expo Go in SDK 53.
@@ -9,7 +10,8 @@ export function usePushNotifications() {
   const notificationListener = useRef<any>(null)
 
   useEffect(() => {
-    if (IS_EXPO_GO) return  // push not supported in Expo Go SDK 53+
+    if (Platform.OS === 'web') return  // push not supported on web
+    if (IS_EXPO_GO) return             // push not supported in Expo Go SDK 53+
 
     async function setup() {
       const Notifications = await import('expo-notifications')

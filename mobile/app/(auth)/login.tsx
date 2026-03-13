@@ -26,7 +26,11 @@ export default function LoginScreen() {
       if (e?.code === 'ECONNABORTED' || e?.message?.includes('timeout')) {
         setError('Request timed out.\nCheck Wi-Fi and that the backend runs with --host 0.0.0.0')
       } else if (!e?.response) {
-        setError('Cannot connect to server.\nCheck Wi-Fi and EXPO_PUBLIC_API_URL in .env')
+        const isWeb = Platform.OS === 'web'
+        setError(isWeb
+          ? 'Cannot connect to server.\nMake sure the backend is running:\nuvicorn app.main:app --reload'
+          : 'Cannot connect to server.\nCheck Wi-Fi and EXPO_PUBLIC_API_URL in .env'
+        )
       } else {
         setError(e?.response?.data?.detail ?? 'Login failed')
       }

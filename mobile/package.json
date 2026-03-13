@@ -4,12 +4,13 @@
   "main": "expo-router/entry",
   "scripts": {
     "setup-env": "node scripts/setup-env.js",
-    "start": "node scripts/setup-env.js && expo start",
+    "start": "node scripts/setup-env.js && expo start --web",
     "android": "node scripts/setup-env.js && expo start --android",
     "ios": "node scripts/setup-env.js && expo start --ios",
     "web": "node scripts/setup-env.js && expo start --web"
   },
   "dependencies": {
+    "@expo/metro-runtime": "~6.1.2",
     "@react-native-async-storage/async-storage": "^2.2.0",
     "axios": "^1.13.5",
     "expo": "~54.0.33",
@@ -23,12 +24,14 @@
     "expo-status-bar": "~3.0.9",
     "expo-video": "~3.0.16",
     "react": "19.1.0",
+    "react-dom": "19.1.0",
     "react-native": "0.81.5",
     "react-native-gesture-handler": "~2.28.0",
     "react-native-reanimated": "~4.1.1",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-screens": "~4.16.0",
     "react-native-signature-canvas": "^5.0.2",
+    "react-native-web": "^0.21.0",
     "react-native-webview": "^13.16.0",
     "react-native-worklets": "0.5.1",
     "zustand": "^5.0.11"

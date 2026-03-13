@@ -20,11 +20,16 @@ const HELP_ITEMS = [
 
 // ─── Extract a readable message from any Axios error ─────────────────────────
 function extractError(e: any): string {
+  const isWeb = Platform.OS === 'web'
   if (e?.code === 'ECONNABORTED' || e?.message?.includes('timeout')) {
-    return 'Request timed out.\nMake sure:\n• Phone and PC are on the same Wi-Fi\n• Backend is running with --host 0.0.0.0\n• EXPO_PUBLIC_API_URL is set to the PC\'s LAN IP (not localhost)'
+    return isWeb
+      ? 'Request timed out.\nMake sure the backend is running:\nuvicorn app.main:app --reload'
+      : 'Request timed out.\nMake sure:\n• Phone and PC are on the same Wi-Fi\n• Backend is running with --host 0.0.0.0\n• EXPO_PUBLIC_API_URL is set to the PC\'s LAN IP (not localhost)'
   }
   if (!e?.response) {
-    return 'Cannot connect to server.\nMake sure:\n• Phone and PC are on the same Wi-Fi\n• Backend is running with --host 0.0.0.0\n• EXPO_PUBLIC_API_URL is set to the PC\'s LAN IP (not localhost)'
+    return isWeb
+      ? 'Cannot connect to server.\nMake sure the backend is running:\nuvicorn app.main:app --reload'
+      : 'Cannot connect to server.\nMake sure:\n• Phone and PC are on the same Wi-Fi\n• Backend is running with --host 0.0.0.0\n• EXPO_PUBLIC_API_URL is set to the PC\'s LAN IP (not localhost)'
   }
   const detail = e.response.data?.detail
   if (Array.isArray(detail) && detail.length > 0) {

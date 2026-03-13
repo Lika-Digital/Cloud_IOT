@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   View, Text, StyleSheet, SafeAreaView, ScrollView,
-  TouchableOpacity, Alert, ActivityIndicator,
+  TouchableOpacity, Alert, ActivityIndicator, Platform,
 } from 'react-native'
 import * as FileSystem from 'expo-file-system'
 import * as Sharing from 'expo-sharing'
@@ -12,7 +12,10 @@ import {
 import { SignaturePad } from '../../src/components/SignaturePad'
 import { getToken } from '../../src/store/authStore'
 
-const BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8000'
+const BASE_URL =
+  Platform.OS === 'web' && typeof window !== 'undefined' && window.location.hostname === 'localhost'
+    ? 'http://localhost:8000'
+    : (process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8000')
 
 type Tab = 'pending' | 'signed'
 
@@ -62,6 +65,23 @@ export default function ContractsScreen() {
   const handleDownloadPdf = async (contractId: number) => {
     const token = getToken()
     const url = `${BASE_URL}/api/customer/contracts/${contractId}/pdf`
+
+    if (Platform.OS === 'web') {
+      try {
+        const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+        const blob = await resp.blob()
+        const objectUrl = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = objectUrl
+        a.download = `contract_${contractId}.pdf`
+        a.click()
+        URL.revokeObjectURL(objectUrl)
+      } catch {
+        Alert.alert('Error', 'Failed to download PDF.')
+      }
+      return
+    }
+
     const localPath = `${(FileSystem as any).documentDirectory}contract_${contractId}.pdf`
     try {
       const { uri } = await FileSystem.downloadAsync(url, localPath, {

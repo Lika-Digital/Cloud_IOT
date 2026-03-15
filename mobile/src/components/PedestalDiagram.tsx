@@ -1,17 +1,44 @@
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native'
+import { useState } from 'react'
+import {
+  View, Text, TouchableOpacity, StyleSheet, Image,
+  LayoutChangeEvent, Alert,
+} from 'react-native'
+import { useTheme } from '../hooks/useTheme'
 
 export type SelectionType = 'electricity' | 'water' | null
 
 interface Props {
   pedestalName: string
   location: string | null
-  occupiedSockets: number[]   // socket IDs currently in use (pending/active)
+  occupiedSockets: number[]
   waterOccupied: boolean
   selectedType: SelectionType
   selectedSocketId: number | null
   onSelectSocket: (id: number) => void
   onSelectWater: () => void
 }
+
+interface Zone { leftPct?: number; rightPct?: number; topPct: number }
+interface ElecZone extends Zone { id: number }
+interface WaterZone extends Zone { id: string }
+
+// Zone positions as fractions (matching frontend PedestalView.tsx SOCKET_ZONES)
+// left/rightPct are from the respective edge; topPct from top
+const ELECTRICITY_ZONES: ElecZone[] = [
+  { id: 1, leftPct: 0.03,  topPct: 0.37 },
+  { id: 2, leftPct: 0.03,  topPct: 0.52 },
+  { id: 3, rightPct: 0.03, topPct: 0.37 },
+  { id: 4, rightPct: 0.03, topPct: 0.52 },
+]
+
+const WATER_ZONES: WaterZone[] = [
+  { id: 'wl', leftPct: 0.08,  topPct: 0.84 },
+  { id: 'wr', rightPct: 0.08, topPct: 0.84 },
+]
+
+const IMG_HEIGHT = 320
+const SOCK_R = 24   // circle radius for sockets
+const WATER_R = 20  // circle radius for water
 
 export function PedestalDiagram({
   pedestalName,
@@ -23,228 +50,209 @@ export function PedestalDiagram({
   onSelectSocket,
   onSelectWater,
 }: Props) {
-  return (
-    <View style={styles.pedestal}>
-      {/* ── Header ──────────────────────────────────────────────── */}
-      <View style={styles.header}>
-        <Text style={styles.headerLabel}>MARINA PEDESTAL</Text>
-        <Text style={styles.headerName}>{pedestalName}</Text>
-        {location ? <Text style={styles.headerLocation}>{location}</Text> : null}
-      </View>
+  const t = useTheme()
+  const [imgW, setImgW] = useState(0)
 
-      {/* ── Electricity section ──────────────────────────────────── */}
-      <View style={styles.section}>
-        <View style={styles.sectionTitleRow}>
-          <View style={styles.sectionBar} />
-          <Text style={styles.sectionLabel}>⚡  ELECTRICITY</Text>
-          <View style={styles.sectionBar} />
-        </View>
+  const onLayout = (e: LayoutChangeEvent) => setImgW(e.nativeEvent.layout.width)
 
-        <View style={styles.socketGrid}>
-          {[1, 2, 3, 4].map((id) => {
-            const occupied = occupiedSockets.includes(id)
-            const selected = selectedType === 'electricity' && selectedSocketId === id
-            return (
-              <TouchableOpacity
-                key={id}
-                style={[
-                  styles.socket,
-                  occupied && styles.socketOccupied,
-                  selected && styles.socketSelected,
-                  !occupied && !selected && styles.socketFree,
-                ]}
-                onPress={() => onSelectSocket(id)}
-                disabled={occupied}
-                activeOpacity={0.75}
-              >
-                {/* Socket face — schematic of a CEE plug */}
-                <View style={[styles.socketFace, occupied ? styles.faceDim : selected ? styles.faceSelected : styles.faceFree]}>
-                  <View style={styles.pinsRow}>
-                    <View style={[styles.pin, occupied ? styles.pinDim : styles.pinActive]} />
-                    <View style={[styles.pin, occupied ? styles.pinDim : styles.pinActive]} />
-                  </View>
-                  <View style={[styles.pin, styles.pinGnd, occupied ? styles.pinDim : styles.pinActive]} />
-                </View>
-
-                <Text style={[styles.socketNum, occupied ? styles.textDim : selected ? styles.textSelected : styles.textFree]}>
-                  {id}
-                </Text>
-                <Text style={[styles.socketStatus, occupied ? styles.statusOccupied : selected ? styles.statusSelected : styles.statusFree]}>
-                  {occupied ? 'IN USE' : selected ? 'SELECTED' : 'FREE'}
-                </Text>
-              </TouchableOpacity>
-            )
-          })}
-        </View>
-      </View>
-
-      {/* ── Divider ──────────────────────────────────────────────── */}
-      <View style={styles.divider} />
-
-      {/* ── Water section ────────────────────────────────────────── */}
-      <View style={styles.section}>
-        <View style={styles.sectionTitleRow}>
-          <View style={styles.sectionBar} />
-          <Text style={styles.sectionLabel}>💧  WATER</Text>
-          <View style={styles.sectionBar} />
-        </View>
-
-        <TouchableOpacity
-          style={[
-            styles.waterBtn,
-            waterOccupied && styles.waterOccupied,
-            selectedType === 'water' && !waterOccupied && styles.waterSelected,
-            !waterOccupied && selectedType !== 'water' && styles.waterFree,
-          ]}
-          onPress={onSelectWater}
-          disabled={waterOccupied}
-          activeOpacity={0.75}
-        >
-          {/* Water tap schematic */}
-          <View style={styles.tapIcon}>
-            <View style={[styles.tapBody, waterOccupied ? styles.tapDim : selectedType === 'water' ? styles.tapSel : styles.tapNormal]} />
-            <View style={[styles.tapHandle, waterOccupied ? styles.tapDim : selectedType === 'water' ? styles.tapSel : styles.tapNormal]} />
-            <View style={[styles.tapSpout, waterOccupied ? styles.tapDim : selectedType === 'water' ? styles.tapSel : styles.tapNormal]} />
-          </View>
-          <View style={styles.waterInfo}>
-            <Text style={[styles.waterLabel, waterOccupied ? styles.textDim : selectedType === 'water' ? styles.textSelected : styles.textFree]}>
-              Fresh Water
-            </Text>
-            <Text style={[styles.waterStatus, waterOccupied ? styles.statusOccupied : selectedType === 'water' ? styles.statusSelected : styles.statusFree]}>
-              {waterOccupied ? 'IN USE' : selectedType === 'water' ? 'SELECTED' : 'FREE'}
-            </Text>
-          </View>
-        </TouchableOpacity>
-      </View>
-
-      {/* ── Footer legend ─────────────────────────────────────────── */}
-      <View style={styles.legend}>
-        <LegendDot color="#22c55e" label="Free" />
-        <LegendDot color="#3b82f6" label="Selected" />
-        <LegendDot color="#ef4444" label="In Use" />
-      </View>
-    </View>
+  const showHelp = () => Alert.alert(
+    'Pedestal Guide',
+    'Tap a numbered circle on the pedestal image to select an electricity socket.\n\nTap 💧 to select a water connection.\n\n🟢 Green = free to use\n🔵 Blue = your selection\n🔴 Red = currently in use by another customer\n\nAfter selecting, tap the Request button below.',
   )
-}
 
-function LegendDot({ color, label }: { color: string; label: string }) {
+  const getX = (zone: { leftPct?: number; rightPct?: number }, r: number) => {
+    if (imgW === 0) return 0
+    if (zone.leftPct !== undefined) return zone.leftPct * imgW - r
+    return imgW - (zone.rightPct ?? 0) * imgW - r
+  }
+
+  const getY = (topPct: number, r: number) => topPct * IMG_HEIGHT - r
+
   return (
-    <View style={styles.legendItem}>
-      <View style={[styles.legendDot, { backgroundColor: color }]} />
-      <Text style={styles.legendLabel}>{label}</Text>
+    <View style={[styles.pedestal, { backgroundColor: t.cardAlt, borderColor: t.border }]}>
+      {/* ── Header ─────────────────────────────────────────────── */}
+      <View style={[styles.header, { backgroundColor: t.card, borderBottomColor: t.border }]}>
+        <View style={styles.headerRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.headerLabel, { color: t.textMuted }]}>MARINA PEDESTAL</Text>
+            <Text style={[styles.headerName, { color: t.textPrimary }]}>{pedestalName}</Text>
+            {location ? <Text style={[styles.headerLoc, { color: t.textMuted }]}>{location}</Text> : null}
+          </View>
+          <TouchableOpacity
+            style={[styles.helpBtn, { backgroundColor: t.accentBg }]}
+            onPress={showHelp}
+          >
+            <Text style={[styles.helpBtnTxt, { color: t.accentLight }]}>?</Text>
+          </TouchableOpacity>
+        </View>
+        <Text style={[styles.hint, { color: t.textMuted }]}>
+          Tap a socket circle or water icon on the pedestal
+        </Text>
+      </View>
+
+      {/* ── Pedestal image with clickable zones ──────────────── */}
+      <View style={styles.imgContainer} onLayout={onLayout}>
+        <Image
+          source={require('../../assets/pedestal.jpg')}
+          style={styles.img}
+          resizeMode="stretch"
+        />
+
+        {imgW > 0 && (
+          <>
+            {/* Electricity socket circles */}
+            {ELECTRICITY_ZONES.map((zone) => {
+              const occupied = occupiedSockets.includes(zone.id)
+              const selected = selectedType === 'electricity' && selectedSocketId === zone.id
+              const x = getX(zone, SOCK_R)
+              const y = getY(zone.topPct, SOCK_R)
+
+              const bg = occupied ? '#1c1917' : selected ? '#1e3a5f' : '#14532d'
+              const border = occupied ? '#57534e' : selected ? '#3b82f6' : '#22c55e'
+              const color = occupied ? '#78716c' : selected ? '#60a5fa' : '#4ade80'
+
+              return (
+                <TouchableOpacity
+                  key={zone.id}
+                  style={[
+                    styles.circle,
+                    {
+                      left: x,
+                      top: y,
+                      width: SOCK_R * 2,
+                      height: SOCK_R * 2,
+                      borderRadius: SOCK_R,
+                      backgroundColor: bg,
+                      borderColor: border,
+                      opacity: occupied ? 0.65 : 1,
+                    },
+                  ]}
+                  onPress={() => !occupied && onSelectSocket(zone.id)}
+                  disabled={occupied}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.circleNum, { color }]}>{zone.id}</Text>
+                </TouchableOpacity>
+              )
+            })}
+
+            {/* Water circles */}
+            {WATER_ZONES.map((zone) => {
+              const selected = selectedType === 'water'
+              const x = getX(zone, WATER_R)
+              const y = getY(zone.topPct, WATER_R)
+
+              const bg = waterOccupied ? '#1c1917' : selected ? '#1e3a5f' : '#164e63'
+              const border = waterOccupied ? '#57534e' : selected ? '#3b82f6' : '#06b6d4'
+
+              return (
+                <TouchableOpacity
+                  key={zone.id}
+                  style={[
+                    styles.circle,
+                    {
+                      left: x,
+                      top: y,
+                      width: WATER_R * 2,
+                      height: WATER_R * 2,
+                      borderRadius: WATER_R,
+                      backgroundColor: bg,
+                      borderColor: border,
+                      opacity: waterOccupied ? 0.65 : 1,
+                    },
+                  ]}
+                  onPress={() => !waterOccupied && onSelectWater()}
+                  disabled={waterOccupied}
+                  activeOpacity={0.7}
+                >
+                  <Text style={{ fontSize: 13 }}>💧</Text>
+                </TouchableOpacity>
+              )
+            })}
+          </>
+        )}
+      </View>
+
+      {/* ── Selection badge ──────────────────────────────────── */}
+      <View style={[styles.selRow, { borderTopColor: t.border }]}>
+        {selectedType === null ? (
+          <Text style={[styles.selHint, { color: t.textMuted }]}>Nothing selected — tap above</Text>
+        ) : selectedType === 'electricity' ? (
+          <View style={[styles.badge, { backgroundColor: '#1e3a5f', borderColor: '#3b82f6' }]}>
+            <Text style={{ color: '#60a5fa', fontWeight: '700', fontSize: 13 }}>
+              ⚡ Socket {selectedSocketId} selected
+            </Text>
+          </View>
+        ) : (
+          <View style={[styles.badge, { backgroundColor: '#164e63', borderColor: '#06b6d4' }]}>
+            <Text style={{ color: '#67e8f9', fontWeight: '700', fontSize: 13 }}>
+              💧 Water tap selected
+            </Text>
+          </View>
+        )}
+      </View>
+
+      {/* ── Legend ───────────────────────────────────────────── */}
+      <View style={[styles.legend, { backgroundColor: t.card, borderTopColor: t.border }]}>
+        {[['#22c55e', 'Free'], ['#3b82f6', 'Selected'], ['#ef4444', 'In Use']].map(([color, label]) => (
+          <View key={label} style={styles.legendItem}>
+            <View style={[styles.dot, { backgroundColor: color }]} />
+            <Text style={[styles.legendTxt, { color: t.textMuted }]}>{label}</Text>
+          </View>
+        ))}
+      </View>
     </View>
   )
 }
 
 const styles = StyleSheet.create({
-  pedestal: {
-    backgroundColor: '#1a2332',
-    borderRadius: 16,
-    borderWidth: 2,
-    borderColor: '#2d4a6e',
+  pedestal: { borderRadius: 16, borderWidth: 1.5, overflow: 'hidden' },
+
+  header: { padding: 14, borderBottomWidth: 1 },
+  headerRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 4 },
+  headerLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 2 },
+  headerName: { fontSize: 17, fontWeight: '800', marginTop: 1 },
+  headerLoc: { fontSize: 11, marginTop: 1 },
+  hint: { fontSize: 12, fontStyle: 'italic' },
+
+  helpBtn: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  helpBtnTxt: { fontSize: 15, fontWeight: '800' },
+
+  imgContainer: {
+    width: '100%',
+    height: IMG_HEIGHT,
+    position: 'relative',
     overflow: 'hidden',
   },
-
-  // Header
-  header: {
-    backgroundColor: '#0f1d2e',
-    padding: 14,
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: '#2d4a6e',
+  img: {
+    position: 'absolute',
+    top: 0, left: 0,
+    width: '100%',
+    height: IMG_HEIGHT,
   },
-  headerLabel: { color: '#4b7bb5', fontSize: 10, fontWeight: '700', letterSpacing: 2 },
-  headerName: { color: '#e2f0ff', fontSize: 18, fontWeight: '800', marginTop: 2 },
-  headerLocation: { color: '#6b8fb5', fontSize: 12, marginTop: 2 },
 
-  // Sections
-  section: { padding: 16 },
-  sectionTitleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 14, gap: 8 },
-  sectionBar: { flex: 1, height: 1, backgroundColor: '#2d4a6e' },
-  sectionLabel: { color: '#7fa8d4', fontSize: 12, fontWeight: '700', letterSpacing: 1 },
-
-  divider: { height: 1, backgroundColor: '#2d4a6e', marginHorizontal: 16 },
-
-  // Socket grid
-  socketGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  socket: {
-    width: '47%',
-    borderRadius: 12,
-    borderWidth: 2,
-    padding: 12,
-    alignItems: 'center',
-    gap: 6,
-  },
-  socketFree:     { borderColor: '#22c55e', backgroundColor: '#0d2218' },
-  socketSelected: { borderColor: '#3b82f6', backgroundColor: '#0d1e3a' },
-  socketOccupied: { borderColor: '#374151', backgroundColor: '#111827', opacity: 0.6 },
-
-  // Socket face (plug schematic)
-  socketFace: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 2,
+  circle: {
+    position: 'absolute',
+    borderWidth: 2.5,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 3,
+    elevation: 5,
   },
-  faceFree:     { borderColor: '#22c55e', backgroundColor: '#0a1f15' },
-  faceSelected: { borderColor: '#3b82f6', backgroundColor: '#0a1428' },
-  faceDim:      { borderColor: '#374151', backgroundColor: '#1a1a1a' },
-  pinsRow: { flexDirection: 'row', gap: 10 },
-  pin: { width: 5, height: 10, borderRadius: 2 },
-  pinGnd: { width: 5, height: 10, borderRadius: 2 },
-  pinActive: { backgroundColor: '#9ca3af' },
-  pinDim:    { backgroundColor: '#374151' },
+  circleNum: { fontSize: 16, fontWeight: '900' },
 
-  socketNum:    { fontSize: 20, fontWeight: '800' },
-  socketStatus: { fontSize: 9, fontWeight: '700', letterSpacing: 1 },
+  selRow: { paddingVertical: 10, paddingHorizontal: 14, borderTopWidth: 1, alignItems: 'center' },
+  selHint: { fontSize: 12, fontStyle: 'italic' },
+  badge: { paddingHorizontal: 16, paddingVertical: 7, borderRadius: 20, borderWidth: 1 },
 
-  textFree:     { color: '#22c55e' },
-  textSelected: { color: '#60a5fa' },
-  textDim:      { color: '#4b5563' },
-  statusFree:      { color: '#16a34a' },
-  statusSelected:  { color: '#2563eb' },
-  statusOccupied:  { color: '#dc2626' },
-
-  // Water button
-  waterBtn: {
-    borderRadius: 12,
-    borderWidth: 2,
-    padding: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 16,
-  },
-  waterFree:     { borderColor: '#22c55e', backgroundColor: '#0d2218' },
-  waterSelected: { borderColor: '#3b82f6', backgroundColor: '#0d1e3a' },
-  waterOccupied: { borderColor: '#374151', backgroundColor: '#111827', opacity: 0.6 },
-
-  // Tap schematic
-  tapIcon: { alignItems: 'center', width: 36, gap: 2 },
-  tapHandle: { width: 28, height: 8, borderRadius: 4 },
-  tapBody:   { width: 20, height: 20, borderRadius: 4 },
-  tapSpout:  { width: 14, height: 8, borderRadius: 4, marginLeft: 10 },
-  tapNormal: { backgroundColor: '#9ca3af' },
-  tapSel:    { backgroundColor: '#60a5fa' },
-  tapDim:    { backgroundColor: '#374151' },
-
-  waterInfo: { flex: 1 },
-  waterLabel:  { fontSize: 15, fontWeight: '700' },
-  waterStatus: { fontSize: 10, fontWeight: '700', letterSpacing: 1, marginTop: 2 },
-
-  // Legend
   legend: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 20,
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#2d4a6e',
-    backgroundColor: '#0f1d2e',
+    flexDirection: 'row', justifyContent: 'center', gap: 20,
+    paddingVertical: 10, borderTopWidth: 1,
   },
-  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  legendDot:  { width: 8, height: 8, borderRadius: 4 },
-  legendLabel: { color: '#6b8fb5', fontSize: 11 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  dot: { width: 8, height: 8, borderRadius: 4 },
+  legendTxt: { fontSize: 11 },
 })

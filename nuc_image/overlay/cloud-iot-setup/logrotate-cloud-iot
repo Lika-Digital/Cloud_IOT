@@ -1,0 +1,74 @@
+# ============================================================================
+# Cloud IoT NUC v2.0 — Log Rotation Configuration
+# Prevents disk fill-up from sensor data, camera logs, and MQTT logs
+# ============================================================================
+
+# ── FastAPI backend / uvicorn logs ────────────────────────────────────────────
+/var/log/cloud-iot/*.log {
+    daily
+    missingok
+    rotate 14
+    compress
+    delaycompress
+    notifempty
+    copytruncate
+    maxsize 50M
+    dateext
+    dateformat -%Y%m%d
+}
+
+# ── nginx access and error logs ───────────────────────────────────────────────
+/var/log/nginx/access.log
+/var/log/nginx/error.log {
+    daily
+    missingok
+    rotate 7
+    compress
+    delaycompress
+    notifempty
+    maxsize 100M
+    sharedscripts
+    postrotate
+        [ -f /var/run/nginx.pid ] && kill -USR1 $(cat /var/run/nginx.pid) || true
+    endscript
+}
+
+# ── Mosquitto MQTT broker logs ────────────────────────────────────────────────
+# Mosquitto writes to Docker volume; rotate via Docker log driver settings.
+# If mosquitto logs to host path, add it here:
+/var/lib/cloud-iot/mosquitto/log/*.log {
+    weekly
+    missingok
+    rotate 8
+    compress
+    delaycompress
+    notifempty
+    copytruncate
+    maxsize 20M
+}
+
+# ── Camera integration / ML worker logs ──────────────────────────────────────
+# Camera frames and ship detection generate verbose logs — keep only 7 days
+/var/log/cloud-iot/camera*.log
+/var/log/cloud-iot/ml_worker*.log {
+    daily
+    missingok
+    rotate 7
+    compress
+    delaycompress
+    notifempty
+    copytruncate
+    maxsize 20M
+    dateext
+    dateformat -%Y%m%d
+}
+
+# ── Setup wizard log (one-time, compress and keep 1 rotation) ────────────────
+/var/log/cloud-iot-setup.log {
+    monthly
+    missingok
+    rotate 1
+    compress
+    notifempty
+    copytruncate
+}

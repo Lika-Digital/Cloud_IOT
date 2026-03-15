@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
 import {
   View, Text, TouchableOpacity, StyleSheet, Modal,
-  ActivityIndicator, ScrollView,
+  ActivityIndicator, ScrollView, Alert,
 } from 'react-native'
 import { startSession } from '../api/sessions'
 import { getPedestalStatus, type PedestalStatus } from '../api/pedestals'
 import { useSessionStore } from '../store/sessionStore'
 import { PedestalDiagram, type SelectionType } from './PedestalDiagram'
+import { useTheme } from '../hooks/useTheme'
 
 interface Props {
   visible: boolean
@@ -14,6 +15,7 @@ interface Props {
 }
 
 export function StartSessionModal({ visible, onClose }: Props) {
+  const t = useTheme()
   const [pedestals, setPedestals] = useState<PedestalStatus[]>([])
   const [selectedPedestal, setSelectedPedestal] = useState<PedestalStatus | null>(null)
   const [selType, setSelType] = useState<SelectionType>(null)
@@ -88,9 +90,20 @@ export function StartSessionModal({ visible, onClose }: Props) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.overlay}>
-        <View style={styles.sheet}>
-          <View style={styles.handle} />
-          <Text style={styles.title}>Start Session</Text>
+        <View style={[styles.sheet, { backgroundColor: t.bgSecondary }]}>
+          <View style={[styles.handle, { backgroundColor: t.border }]} />
+          <View style={styles.titleRow}>
+            <Text style={[styles.title, { color: t.textPrimary }]}>Start Session</Text>
+            <TouchableOpacity
+              style={[styles.helpBtn, { backgroundColor: t.accentBg }]}
+              onPress={() => Alert.alert(
+                'How to start a session',
+                '1. If there are multiple pedestals, select yours first.\n\n2. Tap a numbered circle on the pedestal image to choose an electricity socket, or tap the water icon for water.\n\n🟢 Green = free\n🔵 Blue = selected\n🔴 Red = in use\n\n3. Tap "Request" to send your connection request to the marina operator.\n\nYou will be notified when the operator approves or denies your request.',
+              )}
+            >
+              <Text style={[styles.helpBtnText, { color: t.accentLight }]}>?</Text>
+            </TouchableOpacity>
+          </View>
 
           {loadingPedestals ? (
             <ActivityIndicator color="#60a5fa" style={{ marginVertical: 40 }} />
@@ -185,7 +198,6 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   sheet: {
-    backgroundColor: '#111827',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     padding: 20,
@@ -193,13 +205,25 @@ const styles = StyleSheet.create({
     maxHeight: '90%',
   },
   handle: {
-    width: 40, height: 4, backgroundColor: '#374151',
+    width: 40, height: 4,
     borderRadius: 2, alignSelf: 'center', marginBottom: 12,
   },
-  title: {
-    color: '#fff', fontSize: 20, fontWeight: '700',
-    textAlign: 'center', marginBottom: 16,
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+    gap: 10,
   },
+  title: {
+    fontSize: 20, fontWeight: '700',
+    textAlign: 'center',
+  },
+  helpBtn: {
+    width: 28, height: 28, borderRadius: 14,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  helpBtnText: { fontSize: 15, fontWeight: '800' },
 
   // Pedestal selector
   pedestalSelector: { marginBottom: 14 },

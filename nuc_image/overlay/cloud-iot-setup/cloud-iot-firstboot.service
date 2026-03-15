@@ -1,0 +1,24 @@
+[Unit]
+Description=Cloud IoT First Boot Setup Wizard
+Documentation=https://github.com/Lika-Digital/Cloud_IOT
+After=network-online.target multi-user.target
+Wants=network-online.target
+ConditionPathExists=/opt/cloud-iot-setup/firstboot-setup.sh
+ConditionPathExists=!/etc/cloud-iot-setup-complete
+
+[Service]
+Type=oneshot
+ExecStart=/opt/cloud-iot-setup/firstboot-setup.sh
+StandardInput=tty-force
+StandardOutput=inherit
+StandardError=inherit
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+RemainAfterExit=yes
+
+# Allow enough time for full install (30 min timeout)
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target

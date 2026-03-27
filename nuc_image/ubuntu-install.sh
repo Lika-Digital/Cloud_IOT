@@ -284,6 +284,7 @@ cat > "${APP_DIR}/backend/app/services/simulator_manager.py" << 'SIMEOF'
 """Simulator disabled on NUC deployment."""
 class _Stub:
     is_running = False
+    def start(self, **kwargs): pass
     def stop(self): pass
 simulator_manager = _Stub()
 SIMEOF

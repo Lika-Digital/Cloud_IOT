@@ -167,6 +167,12 @@ export const useStore = create<AppStore>((set) => ({
 
   addSession: (session) =>
     set((s) => {
+      // Idempotency: ignore if already tracked in either list
+      const alreadyExists =
+        s.pendingSessions.some((sess) => sess.id === session.id) ||
+        s.activeSessions.some((sess) => sess.id === session.id)
+      if (alreadyExists) return {}
+
       if (session.status === 'pending') {
         return { pendingSessions: [...s.pendingSessions, session] }
       }

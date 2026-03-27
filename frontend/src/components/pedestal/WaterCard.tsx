@@ -1,5 +1,5 @@
 import { useStore } from '../../store'
-import { allowSession, denySession, stopSession } from '../../api'
+import { stopSession } from '../../api'
 
 interface WaterCardProps {
   pedestalId: number
@@ -14,18 +14,6 @@ export default function WaterCard({ pedestalId }: WaterCardProps) {
   const activeSession = activeSessions.find(
     (s) => s.pedestal_id === pedestalId && s.type === 'water'
   )
-
-  const handleAllow = async () => {
-    if (!pendingSession) return
-    const updated = await allowSession(pendingSession.id)
-    updateSession({ id: updated.id, status: 'active' })
-  }
-
-  const handleDeny = async () => {
-    if (!pendingSession) return
-    const updated = await denySession(pendingSession.id)
-    updateSession({ id: updated.id, status: 'denied' })
-  }
 
   const handleStop = async () => {
     if (!activeSession) return
@@ -64,15 +52,7 @@ export default function WaterCard({ pedestalId }: WaterCardProps) {
 
       {pendingSession && !activeSession && (
         <div className="mb-3">
-          <p className="text-sm text-amber-400 mb-2">Water flow detected — awaiting approval</p>
-          <div className="flex gap-2">
-            <button className="btn-success text-sm flex-1" onClick={handleAllow}>
-              Allow
-            </button>
-            <button className="btn-danger text-sm flex-1" onClick={handleDeny}>
-              Deny
-            </button>
-          </div>
+          <p className="text-sm text-amber-400">Session starting…</p>
         </div>
       )}
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Platform } from 'react-native'
+import { Platform, Alert } from 'react-native'
 import { useAuthStore } from '../store/authStore'
 import { useSessionStore } from '../store/sessionStore'
 
@@ -47,6 +47,12 @@ export function useWebSocket(
           if (activeSession && msg.data.session_id === activeSession.id) {
             setActiveSession(null)
             clearLive()
+            if (msg.data.stopped_by === 'operator') {
+              Alert.alert(
+                'Session Stopped',
+                'Your session was manually stopped by the marina operator.',
+              )
+            }
           }
           break
         }

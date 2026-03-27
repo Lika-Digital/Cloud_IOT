@@ -6,6 +6,7 @@ from ..auth.user_database import get_user_db
 from ..auth.customer_models import Customer
 from ..auth.customer_dependencies import require_customer
 from ..services.session_service import session_service
+from ..services.mqtt_client import mqtt_service
 from ..services.websocket_manager import ws_manager
 from ..services.invoice_service import create_invoice_for_session
 from ..schemas.session import SessionResponse
@@ -79,6 +80,15 @@ async def start_session(
         db, body.pedestal_id, socket_id, body.type, customer_id=customer.id
     )
 
+    # Auto-activate immediately — no operator approval required
+    session_service.activate(db, session)
+    control_topic = (
+        f"pedestal/{session.pedestal_id}/socket/{session.socket_id}/control"
+        if session.type == "electricity"
+        else f"pedestal/{session.pedestal_id}/water/control"
+    )
+    mqtt_service.publish(control_topic, "allow")
+
     await ws_manager.broadcast({
         "event": "session_created",
         "data": {
@@ -86,7 +96,7 @@ async def start_session(
             "pedestal_id": session.pedestal_id,
             "socket_id": session.socket_id,
             "type": session.type,
-            "status": "pending",
+            "status": "active",
             "started_at": session.started_at.isoformat(),
             "customer_id": customer.id,
             "customer_name": customer.name,

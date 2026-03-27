@@ -206,6 +206,21 @@ def delete_sensor(
     return {"ok": True}
 
 
+@router.post("/api/admin/discovery/scan")
+async def scan_all_devices(
+    subnet: str = "",
+    _user = Depends(require_admin),
+):
+    """
+    Run full network scan: ONVIF WS-Discovery (cameras) + HTTP subnet scan (TME sensors).
+    Returns {cameras: [...], temp_sensors: [...], subnet: "..."}.
+    Subnet is auto-detected from NUC's network interface if not provided.
+    """
+    from ..services.discovery import scan_all
+    result = await scan_all(subnet=subnet, timeout=5.0)
+    return result
+
+
 @router.post("/api/admin/pedestal/{pedestal_id}/discover/mdns")
 async def discover_mdns(
     pedestal_id: int,

@@ -100,6 +100,29 @@ export interface DiscoveredDevice {
   type: string
 }
 
+export interface DiscoveredCamera {
+  ip: string
+  onvif_url: string
+  type: 'camera_onvif'
+  name: string
+}
+
+export interface DiscoveredTempSensor {
+  ip: string
+  port: number
+  protocol: 'http' | 'modbus_tcp'
+  type: 'temp_sensor_tme'
+  name: string
+  temperature: number | null
+  unit: string
+}
+
+export interface ScanAllResult {
+  cameras: DiscoveredCamera[]
+  temp_sensors: DiscoveredTempSensor[]
+  subnet: string
+}
+
 export interface SnmpDevice {
   ip: string
   sysDescr: string
@@ -130,6 +153,9 @@ export const addSensor = (id: number, data: SensorCreate) =>
 
 export const deleteSensor = (sensorId: number) =>
   api.delete(`/admin/pedestal/sensors/${sensorId}`).then((r) => r.data)
+
+export const scanAllDevices = (subnet?: string) =>
+  api.post<ScanAllResult>('/admin/discovery/scan', null, { params: subnet ? { subnet } : undefined }).then((r) => r.data)
 
 export const runMdnsScan = (id: number) =>
   api.post<{ discovered: DiscoveredDevice[] }>(`/admin/pedestal/${id}/discover/mdns`).then((r) => r.data)

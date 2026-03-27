@@ -7,6 +7,7 @@ import { useStore } from '../../store'
 import type { Pedestal } from '../../store'
 import RealPedestalModal from './RealPedestalModal'
 import DiagnosticsModal from './DiagnosticsModal'
+import HelpBubble from '../ui/HelpBubble'
 
 export default function ConfigPanel() {
   const { setPedestals, updatePedestal } = useStore()
@@ -120,7 +121,7 @@ export default function ConfigPanel() {
             <div className="text-sm text-gray-400 space-y-1">
               <p>Name: <span className="text-gray-200">{selected.name}</span></p>
               <p>Location: <span className="text-gray-200">{selected.location ?? '—'}</span></p>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
                 <span className={`text-xs px-2 py-0.5 rounded-full border ${
                   selected.initialized
                     ? 'bg-green-900/30 text-green-400 border-green-700/40'
@@ -128,6 +129,11 @@ export default function ConfigPanel() {
                 }`}>
                   {selected.initialized ? '● Initialized' : '○ Not initialized'}
                 </span>
+                <HelpBubble text={
+                  selected.initialized
+                    ? 'Hardware has been verified. The system confirmed MQTT communication with the Arduino and all sensors responded to a diagnostics request.'
+                    : 'Hardware not yet verified.\n\nThis means the Arduino has not yet responded to a diagnostics request over MQTT. Once the Arduino is connected and MQTT is working, click "Run Diagnostics" to verify the connection and mark this pedestal as initialized.'
+                } />
               </div>
             </div>
 
@@ -153,13 +159,20 @@ export default function ConfigPanel() {
                 >
                   Edit Connection
                 </button>
-                <button
-                  onClick={() => setShowDiagnostics(true)}
-                  disabled={loading}
-                  className="flex-1 px-3 py-2 rounded-lg bg-blue-700 hover:bg-blue-600 text-white text-sm font-medium transition-colors disabled:opacity-40"
-                >
-                  Run Diagnostics
-                </button>
+                <div className="flex-1 flex items-center gap-1.5">
+                  <button
+                    onClick={() => setShowDiagnostics(true)}
+                    disabled={loading}
+                    className="flex-1 px-3 py-2 rounded-lg bg-blue-700 hover:bg-blue-600 text-white text-sm font-medium transition-colors disabled:opacity-40"
+                  >
+                    Run Diagnostics
+                  </button>
+                  <HelpBubble text={
+                    'Tests MQTT communication with the Arduino OPTA.\n\n' +
+                    'Sends a diagnostics request and waits for the Arduino to reply with readings from all 8 sensors: sockets 1–4, water meter, temperature, moisture, and camera.\n\n' +
+                    'Use this after the Arduino is powered on and connected to confirm everything is working. A successful run marks the pedestal as Initialized.'
+                  } />
+                </div>
               </div>
             </div>
 

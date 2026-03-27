@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getPedestals } from '../../api'
+import HelpBubble from '../ui/HelpBubble'
 import type { Pedestal } from '../../store'
 import {
   getPedestalConfig,
@@ -242,11 +243,20 @@ export default function DevicesPanel() {
       {/* ── Network Scan ─────────────────────────────────────────────────────── */}
       <div className="rounded-lg border border-gray-700 bg-gray-800/30 p-4 space-y-3">
         <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-white">Auto-Discovery</p>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Scans LAN for ONVIF cameras and Papouch TME sensors
-            </p>
+          <div className="flex items-start gap-2">
+            <div>
+              <p className="text-sm font-medium text-white">Auto-Discovery</p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Scans LAN for ONVIF cameras and Papouch TME sensors
+              </p>
+            </div>
+            <HelpBubble text={
+              'Scans your local network (LAN) to automatically find hardware devices.\n\n' +
+              '📷 Cameras — sends an ONVIF WS-Discovery UDP multicast to detect any ONVIF-compatible IP camera (e.g. D-Link DCS-TF2283AI-DL).\n\n' +
+              '🌡 Temperature sensors — probes every IP on your /24 subnet looking for a Papouch TME HTTP response.\n\n' +
+              'Scan takes up to 5 seconds. Found devices appear below with an Assign button to fill in the fields automatically.\n\n' +
+              'Use manual entry below if auto-discovery does not find your device.'
+            } />
           </div>
           <button
             onClick={handleScan}

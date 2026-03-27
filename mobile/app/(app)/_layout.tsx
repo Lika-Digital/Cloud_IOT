@@ -1,9 +1,23 @@
+import { useCallback } from 'react'
 import { Tabs } from 'expo-router'
 import { Text } from 'react-native'
 import { useTheme } from '../../src/hooks/useTheme'
+import { useWebSocket } from '../../src/hooks/useWebSocket'
+import { useSessionStore, type IncomingChatMessage } from '../../src/store/sessionStore'
 
 export default function AppLayout() {
   const t = useTheme()
+  const { setLatestChatMsg } = useSessionStore()
+
+  // Route incoming chat messages to the store so the Chat screen can pick them up.
+  const handleChatMsg = useCallback((msg: IncomingChatMessage) => {
+    setLatestChatMsg(msg)
+  }, [setLatestChatMsg])
+
+  // Single persistent WS connection for the entire app session.
+  // Lives here (layout) so it stays connected regardless of active tab.
+  useWebSocket(handleChatMsg)
+
   return (
     <Tabs
       screenOptions={{

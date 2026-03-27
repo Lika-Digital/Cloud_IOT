@@ -11,7 +11,6 @@ import { useThemeStore } from '../../src/store/themeStore'
 import { getMySessions } from '../../src/api/sessions'
 import { SessionStatusCard } from '../../src/components/SessionStatusCard'
 import { StartSessionModal } from '../../src/components/StartSessionModal'
-import { useWebSocket } from '../../src/hooks/useWebSocket'
 import { stopMySession } from '../../src/api/sessions'
 import { getPendingContracts, getMyContracts, type CustomerContract } from '../../src/api/contracts'
 import { ShipCameraModal } from '../../src/components/ShipCameraModal'
@@ -32,8 +31,6 @@ export default function HomeScreen() {
   const [pendingCount, setPendingCount] = useState(0)
   const [signedContract, setSignedContract] = useState<CustomerContract | null>(null)
   const [contractsLoaded, setContractsLoaded] = useState(false)
-
-  useWebSocket()
 
   useEffect(() => {
     getMySessions().then((sessions) => {

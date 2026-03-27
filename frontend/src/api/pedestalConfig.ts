@@ -37,10 +37,15 @@ export interface PedestalConfigData {
   sensor_config_mode: 'auto' | 'manual'
   mdns_discovered: DiscoveredDevice[]
   snmp_discovered: SnmpDevice[]
+  temp_sensor_ip: string | null
+  temp_sensor_port: number
+  temp_sensor_protocol: 'http' | 'modbus_tcp'
   opta_connected: boolean
   last_heartbeat: string | null
   camera_reachable: boolean
   last_camera_check: string | null
+  temp_sensor_reachable: boolean
+  last_temp_sensor_check: string | null
   updated_at: string | null
   sensors: PedestalSensorData[]
 }
@@ -73,6 +78,9 @@ export interface PedestalConfigUpdate {
   camera_username?: string
   camera_password?: string
   sensor_config_mode?: 'auto' | 'manual'
+  temp_sensor_ip?: string
+  temp_sensor_port?: number
+  temp_sensor_protocol?: 'http' | 'modbus_tcp'
 }
 
 export interface SensorCreate {
@@ -102,6 +110,8 @@ export interface PedestalHealth {
   last_heartbeat: string | null
   camera_reachable: boolean
   last_camera_check: string | null
+  temp_sensor_reachable: boolean
+  last_temp_sensor_check: string | null
 }
 
 // ─── API calls ────────────────────────────────────────────────────────────────

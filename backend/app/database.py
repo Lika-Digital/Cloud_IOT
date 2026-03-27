@@ -68,7 +68,12 @@ def _migrate_schema():
         ("pedestal_configs", "last_heartbeat",    "DATETIME"),
         ("pedestal_configs", "camera_reachable",  "INTEGER DEFAULT 0"),
         ("pedestal_configs", "last_camera_check", "DATETIME"),
-        ("pedestal_configs", "updated_at",        "DATETIME"),
+        ("pedestal_configs", "updated_at",           "DATETIME"),
+        ("pedestal_configs", "temp_sensor_ip",       "TEXT"),
+        ("pedestal_configs", "temp_sensor_port",     "INTEGER DEFAULT 80"),
+        ("pedestal_configs", "temp_sensor_protocol", "TEXT DEFAULT 'http'"),
+        ("pedestal_configs", "temp_sensor_reachable","INTEGER DEFAULT 0"),
+        ("pedestal_configs", "last_temp_sensor_check","DATETIME"),
         # external_api_config columns (table created by metadata; ALTER handles existing DBs)
         ("external_api_config", "api_key",              "TEXT"),
         ("external_api_config", "allowed_endpoints",    "TEXT DEFAULT '[]'"),

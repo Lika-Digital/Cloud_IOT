@@ -36,6 +36,9 @@ class PedestalConfigUpdate(BaseModel):
     camera_username: Optional[str] = None
     camera_password: Optional[str] = None
     sensor_config_mode: Optional[str] = None   # "auto" | "manual"
+    temp_sensor_ip: Optional[str] = None
+    temp_sensor_port: Optional[int] = None
+    temp_sensor_protocol: Optional[str] = None  # "http" | "modbus_tcp"
 
 
 class SensorCreate(BaseModel):
@@ -80,10 +83,15 @@ def _config_to_dict(cfg: PedestalConfig) -> dict:
         "sensor_config_mode": cfg.sensor_config_mode,
         "mdns_discovered": json.loads(cfg.mdns_discovered) if cfg.mdns_discovered else [],
         "snmp_discovered": json.loads(cfg.snmp_discovered) if cfg.snmp_discovered else [],
+        "temp_sensor_ip": cfg.temp_sensor_ip,
+        "temp_sensor_port": cfg.temp_sensor_port,
+        "temp_sensor_protocol": cfg.temp_sensor_protocol,
         "opta_connected": bool(cfg.opta_connected),
         "last_heartbeat": cfg.last_heartbeat.isoformat() if cfg.last_heartbeat else None,
         "camera_reachable": bool(cfg.camera_reachable),
         "last_camera_check": cfg.last_camera_check.isoformat() if cfg.last_camera_check else None,
+        "temp_sensor_reachable": bool(cfg.temp_sensor_reachable),
+        "last_temp_sensor_check": cfg.last_temp_sensor_check.isoformat() if cfg.last_temp_sensor_check else None,
         "updated_at": cfg.updated_at.isoformat() if cfg.updated_at else None,
     }
 
@@ -248,5 +256,7 @@ def get_health(
             "last_heartbeat": cfg.last_heartbeat.isoformat() if cfg.last_heartbeat else None,
             "camera_reachable": bool(cfg.camera_reachable),
             "last_camera_check": cfg.last_camera_check.isoformat() if cfg.last_camera_check else None,
+            "temp_sensor_reachable": bool(cfg.temp_sensor_reachable),
+            "last_temp_sensor_check": cfg.last_temp_sensor_check.isoformat() if cfg.last_temp_sensor_check else None,
         }
     return result

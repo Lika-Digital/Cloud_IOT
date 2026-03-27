@@ -74,6 +74,10 @@ export interface BerthStatus {
   alarm: number
   match_score: number | null
   analysis_error: string | null
+  // Camera info (enriched from pedestal config)
+  camera_stream_url?: string | null
+  camera_reachable?: boolean
+  reference_image_count?: number
 }
 
 export interface PedestalHealth {

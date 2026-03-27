@@ -184,7 +184,7 @@ export default function BerthOccupancy() {
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <CameraStatusDot reachable={b.camera_reachable} hasUrl={!!b.camera_stream_url} />
+                        <CameraStatusDot reachable={b.camera_reachable ?? false} hasUrl={!!b.camera_stream_url} />
                       </td>
                       <td className="px-4 py-3 text-gray-400 text-xs">
                         {b.last_analyzed ? new Date(b.last_analyzed).toLocaleTimeString() : '—'}
@@ -239,12 +239,12 @@ export default function BerthOccupancy() {
                             onClick={() => setRefModalBerth(b as BerthOut)}
                             title="Manage reference ship images for matching"
                             className={`text-xs border px-2 py-1 rounded transition-colors ${
-                              b.reference_image_count > 0
+                              (b.reference_image_count ?? 0) > 0
                                 ? 'text-green-400 border-green-700/50 hover:text-green-300'
                                 : 'text-yellow-400 border-yellow-700/50 hover:text-yellow-300'
                             }`}
                           >
-                            🖼 Refs {b.reference_image_count > 0 ? `(${b.reference_image_count})` : ''}
+                            🖼 Refs {(b.reference_image_count ?? 0) > 0 ? `(${b.reference_image_count})` : ''}
                           </button>
                         </div>
                       </td>

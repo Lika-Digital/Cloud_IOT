@@ -199,6 +199,9 @@ echo ""
 ask_yn "Proceed with installation?" "y" || error "Cancelled by user."
 
 JWT_SECRET=$(openssl rand -hex 32)
+# Strip any stray newlines/carriage-returns from collected values
+ADMIN_EMAIL=$(echo "$ADMIN_EMAIL" | tr -d '\n\r')
+ADMIN_PASSWORD=$(echo "$ADMIN_PASSWORD" | tr -d '\n\r')
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # INSTALLATION
@@ -276,8 +279,14 @@ def make_invoice_pdf(*a, **kw):
 PDFEOF
 sed -i '/reportlab/d' "${APP_DIR}/backend/requirements.txt"
 
-# Remove simulator
-rm -f "${APP_DIR}/backend/app/services/simulator_manager.py" 2>/dev/null || true
+# Stub out simulator (not used on NUC)
+cat > "${APP_DIR}/backend/app/services/simulator_manager.py" << 'SIMEOF'
+"""Simulator disabled on NUC deployment."""
+class _Stub:
+    is_running = False
+    def stop(self): pass
+simulator_manager = _Stub()
+SIMEOF
 
 info "Application copied to ${APP_DIR}"
 

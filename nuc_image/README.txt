@@ -1,6 +1,6 @@
 ================================================================================
   Cloud IoT Marina Pedestal Management System
-  NUC Installation Guide — Release v2.0
+  NUC Installation Guide — Release v3.0 Light
   Created by Lika Digital — info@lika.digital
 ================================================================================
 
@@ -135,8 +135,8 @@ STEP 6 — CLONE THE REPOSITORY
 
     git clone https://github.com/Lika-Digital/Cloud_IOT.git
     cd Cloud_IOT
-    git checkout nuc-iot
-    git pull origin nuc-iot
+    git checkout main
+    git pull origin main
 
 
 STEP 7 — RUN THE INSTALL SCRIPT
@@ -230,6 +230,8 @@ SSH REMOTE ACCESS
     sudo cloud-iot logs mqtt         MQTT broker log
     sudo cloud-iot config            Edit .env (auto-restarts backend)
     sudo cloud-iot ip                Show current IP address
+    sudo cloud-iot upgrade           Pull latest code, rebuild, restart
+    sudo cloud-iot version           Show installed version
 
   View configuration:
     sudo cat /opt/cloud-iot/backend/.env
@@ -314,8 +316,54 @@ TROUBLESHOOTING
 
 
 ================================================================================
-  RELEASE NOTES — v2.0
+  RELEASE NOTES
 ================================================================================
+
+  v3.0 Light (2026-03-27) — NUC software upgrade, no ISO required:
+
+    SESSION MANAGEMENT
+    + Sessions auto-start immediately — no operator approval needed
+    + Customers get electricity/water the moment they request it
+    + Removed Allow/Deny workflow from dashboard (NUC real-hardware mode)
+    + Operator can still stop any active session at any time
+
+    DASHBOARD UI
+    + Live IP camera stream in Camera modal (authenticated snapshot polling)
+      Falls back to YOLO/synthetic with "No live stream available" badge
+    + Socket circle hover tooltip shows "Stop Session" (red) when active
+    + Removed "Pending Approval" state from dashboard legend and overview
+    + Help bubbles on Not Initialized, Run Diagnostics, Scan Network states
+
+    DEVICE DISCOVERY & CONFIGURATION
+    + ONVIF WS-Discovery subnet scan for IP cameras
+    + Papouch TME HTTP subnet scan for temperature/humidity sensors
+    + DevicesPanel UI: scan + manual config for Arduino Opta, IP camera, TME
+    + Papouch TME temp sensor added to pedestal config model
+
+    BERTH OCCUPANCY
+    + Lightweight on-demand occupancy check via live snapshot + histogram match
+    + Subnet scan timeout fix — prevents installer hanging on large networks
+
+    MOBILE APP
+    + WebSocket connection moved to app layout — persistent across all tabs
+    + Operator stop session now reliably notifies the mobile customer
+    + Chat receives real-time messages without duplicate WebSocket connection
+    + Duplicate session bug fixed (idempotent store — no double entries)
+
+    TESTING
+    + 81 automated backend tests (full regression suite)
+    + 20 new pedestal config tests: camera, MQTT, TME sensor, site IDs, toggles
+    + 4 new session tests: auto-start, water session, operator stop flow
+
+    NUC INSTALLER
+    + New "cloud-iot upgrade" command — pull latest code, rebuild, restart
+    + New "cloud-iot version" command — show installed version
+    + Removed simulator from NUC deployment (real hardware only)
+    + Fixed AttributeError in simulator stub on configure_pedestals call
+    + Fixed email-validator install (required for Pydantic EmailStr)
+    + Fixed password newline issue in generated .env
+
+  ─────────────────────────────────────────────────────────────────────────────
 
   v2.0 (Ubuntu Server 24.04 LTS — internet-connected install):
     + Ubuntu Server 24.04 LTS — reliable eMMC/NVMe/SSD support out of the box
@@ -339,6 +387,6 @@ TROUBLESHOOTING
 
 
 ================================================================================
-  Cloud IoT Marina Pedestal Management System — v2.0
+  Cloud IoT Marina Pedestal Management System — v3.0 Light
   Lika Digital — https://github.com/Lika-Digital/Cloud_IOT
 ================================================================================

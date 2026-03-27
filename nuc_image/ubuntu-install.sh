@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Cloud IoT NUC v2.0 — Ubuntu Server 24.04 LTS Installer
+# Cloud IoT NUC v3.0 — Ubuntu Server 24.04 LTS Installer
 # Run from the cloned repo: sudo bash nuc_image/ubuntu-install.sh
 # Internet (ethernet) required during install.
 # ============================================================================
@@ -28,7 +28,7 @@ echo -e "${BLUE}${BOLD}"
 cat << 'BANNER'
   ╔══════════════════════════════════════════════════════════════════╗
   ║        Cloud IoT — Marina Pedestal Management System            ║
-  ║               Ubuntu Server 24.04 LTS Installer                 ║
+  ║           Ubuntu Server 24.04 LTS Installer  v3.0              ║
   ╚══════════════════════════════════════════════════════════════════╝
 BANNER
 echo -e "${NC}"
@@ -456,6 +456,8 @@ EOF
 # Management CLI
 cat > /usr/local/bin/cloud-iot << 'CLIEOF'
 #!/usr/bin/env bash
+APP_DIR="/opt/cloud-iot"
+VENV="${APP_DIR}/backend/.venv"
 case "${1:-}" in
   start)   systemctl start  cloud-iot-compose cloud-iot-backend nginx ;;
   stop)    systemctl stop   cloud-iot-backend cloud-iot-compose ;;
@@ -476,8 +478,54 @@ case "${1:-}" in
   config)   "${EDITOR:-nano}" /opt/cloud-iot/backend/.env \
               && systemctl restart cloud-iot-backend ;;
   ip)       hostname -I | awk '{print $1}' ;;
-  update)   systemctl restart cloud-iot-compose cloud-iot-backend nginx ;;
-  *)        echo "Usage: sudo cloud-iot {start|stop|restart|status|logs [backend|nginx|mqtt]|config|ip|update}" ;;
+  upgrade)
+    echo "[cloud-iot] Stopping services..."
+    systemctl stop cloud-iot-backend
+    REPO_DIR=""
+    # Find cloned repo (may be anywhere the user put it)
+    for candidate in ~/Cloud_IOT /home/*/Cloud_IOT /root/Cloud_IOT; do
+      [ -d "$candidate/.git" ] && REPO_DIR="$candidate" && break
+    done
+    if [ -z "$REPO_DIR" ]; then
+      echo "[cloud-iot] ERROR: Cannot find Cloud_IOT git repo. Clone it and re-run upgrade."
+      exit 1
+    fi
+    echo "[cloud-iot] Pulling latest code from $REPO_DIR ..."
+    git -C "$REPO_DIR" pull origin main
+    echo "[cloud-iot] Copying updated application..."
+    for d in backend frontend; do
+      [ -d "${REPO_DIR}/${d}" ] && cp -r "${REPO_DIR}/${d}/." "${APP_DIR}/${d}/"
+    done
+    rm -rf "${APP_DIR}/backend/.venv" \
+           "${APP_DIR}/frontend/node_modules" 2>/dev/null || true
+    find "${APP_DIR}/backend" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    # Stub out simulator
+    cat > "${APP_DIR}/backend/app/services/simulator_manager.py" << 'SIMEOF'
+"""Simulator disabled on NUC deployment."""
+class _Stub:
+    is_running = False
+    def start(self, **kwargs): pass
+    def stop(self): pass
+simulator_manager = _Stub()
+SIMEOF
+    sed -i '/reportlab/d' "${APP_DIR}/backend/requirements.txt" 2>/dev/null || true
+    echo "[cloud-iot] Rebuilding frontend..."
+    cd "${APP_DIR}/frontend" && npm ci --prefer-offline --no-audit --no-fund && npm run build && rm -rf node_modules
+    echo "[cloud-iot] Updating Python packages..."
+    "${VENV}/bin/pip" install -r "${APP_DIR}/backend/requirements.txt" -q
+    echo "[cloud-iot] Restarting services..."
+    systemctl start cloud-iot-backend
+    systemctl restart nginx
+    echo "[cloud-iot] Upgrade complete."
+    ;;
+  version)
+    echo "Cloud IoT NUC v3.0"
+    if [ -d "${APP_DIR}/.git" ] || git -C "$APP_DIR" rev-parse &>/dev/null 2>&1; then
+      git -C "$APP_DIR" log -1 --format="%h %s (%ci)" 2>/dev/null || true
+    fi ;;
+  *)
+    echo "Usage: sudo cloud-iot {start|stop|restart|status|logs [backend|nginx|mqtt]|config|ip|upgrade|version}"
+    ;;
 esac
 CLIEOF
 chmod +x /usr/local/bin/cloud-iot

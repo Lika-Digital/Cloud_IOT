@@ -37,10 +37,15 @@ export interface PedestalConfigData {
   sensor_config_mode: 'auto' | 'manual'
   mdns_discovered: DiscoveredDevice[]
   snmp_discovered: SnmpDevice[]
+  temp_sensor_ip: string | null
+  temp_sensor_port: number
+  temp_sensor_protocol: 'http' | 'modbus_tcp'
   opta_connected: boolean
   last_heartbeat: string | null
   camera_reachable: boolean
   last_camera_check: string | null
+  temp_sensor_reachable: boolean
+  last_temp_sensor_check: string | null
   updated_at: string | null
   sensors: PedestalSensorData[]
 }
@@ -73,6 +78,9 @@ export interface PedestalConfigUpdate {
   camera_username?: string
   camera_password?: string
   sensor_config_mode?: 'auto' | 'manual'
+  temp_sensor_ip?: string
+  temp_sensor_port?: number
+  temp_sensor_protocol?: 'http' | 'modbus_tcp'
 }
 
 export interface SensorCreate {
@@ -92,6 +100,29 @@ export interface DiscoveredDevice {
   type: string
 }
 
+export interface DiscoveredCamera {
+  ip: string
+  onvif_url: string
+  type: 'camera_onvif'
+  name: string
+}
+
+export interface DiscoveredTempSensor {
+  ip: string
+  port: number
+  protocol: 'http' | 'modbus_tcp'
+  type: 'temp_sensor_tme'
+  name: string
+  temperature: number | null
+  unit: string
+}
+
+export interface ScanAllResult {
+  cameras: DiscoveredCamera[]
+  temp_sensors: DiscoveredTempSensor[]
+  subnet: string
+}
+
 export interface SnmpDevice {
   ip: string
   sysDescr: string
@@ -102,6 +133,8 @@ export interface PedestalHealth {
   last_heartbeat: string | null
   camera_reachable: boolean
   last_camera_check: string | null
+  temp_sensor_reachable: boolean
+  last_temp_sensor_check: string | null
 }
 
 // ─── API calls ────────────────────────────────────────────────────────────────
@@ -120,6 +153,9 @@ export const addSensor = (id: number, data: SensorCreate) =>
 
 export const deleteSensor = (sensorId: number) =>
   api.delete(`/admin/pedestal/sensors/${sensorId}`).then((r) => r.data)
+
+export const scanAllDevices = (subnet?: string) =>
+  api.post<ScanAllResult>('/admin/discovery/scan', null, { params: subnet ? { subnet } : undefined }).then((r) => r.data)
 
 export const runMdnsScan = (id: number) =>
   api.post<{ discovered: DiscoveredDevice[] }>(`/admin/pedestal/${id}/discover/mdns`).then((r) => r.data)

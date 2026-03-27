@@ -36,6 +36,9 @@ class PedestalConfigUpdate(BaseModel):
     camera_username: Optional[str] = None
     camera_password: Optional[str] = None
     sensor_config_mode: Optional[str] = None   # "auto" | "manual"
+    temp_sensor_ip: Optional[str] = None
+    temp_sensor_port: Optional[int] = None
+    temp_sensor_protocol: Optional[str] = None  # "http" | "modbus_tcp"
 
 
 class SensorCreate(BaseModel):
@@ -80,10 +83,15 @@ def _config_to_dict(cfg: PedestalConfig) -> dict:
         "sensor_config_mode": cfg.sensor_config_mode,
         "mdns_discovered": json.loads(cfg.mdns_discovered) if cfg.mdns_discovered else [],
         "snmp_discovered": json.loads(cfg.snmp_discovered) if cfg.snmp_discovered else [],
+        "temp_sensor_ip": cfg.temp_sensor_ip,
+        "temp_sensor_port": cfg.temp_sensor_port,
+        "temp_sensor_protocol": cfg.temp_sensor_protocol,
         "opta_connected": bool(cfg.opta_connected),
         "last_heartbeat": cfg.last_heartbeat.isoformat() if cfg.last_heartbeat else None,
         "camera_reachable": bool(cfg.camera_reachable),
         "last_camera_check": cfg.last_camera_check.isoformat() if cfg.last_camera_check else None,
+        "temp_sensor_reachable": bool(cfg.temp_sensor_reachable),
+        "last_temp_sensor_check": cfg.last_temp_sensor_check.isoformat() if cfg.last_temp_sensor_check else None,
         "updated_at": cfg.updated_at.isoformat() if cfg.updated_at else None,
     }
 
@@ -198,6 +206,21 @@ def delete_sensor(
     return {"ok": True}
 
 
+@router.post("/api/admin/discovery/scan")
+async def scan_all_devices(
+    subnet: str = "",
+    _user = Depends(require_admin),
+):
+    """
+    Run full network scan: ONVIF WS-Discovery (cameras) + HTTP subnet scan (TME sensors).
+    Returns {cameras: [...], temp_sensors: [...], subnet: "..."}.
+    Subnet is auto-detected from NUC's network interface if not provided.
+    """
+    from ..services.discovery import scan_all
+    result = await scan_all(subnet=subnet, timeout=5.0)
+    return result
+
+
 @router.post("/api/admin/pedestal/{pedestal_id}/discover/mdns")
 async def discover_mdns(
     pedestal_id: int,
@@ -248,5 +271,7 @@ def get_health(
             "last_heartbeat": cfg.last_heartbeat.isoformat() if cfg.last_heartbeat else None,
             "camera_reachable": bool(cfg.camera_reachable),
             "last_camera_check": cfg.last_camera_check.isoformat() if cfg.last_camera_check else None,
+            "temp_sensor_reachable": bool(cfg.temp_sensor_reachable),
+            "last_temp_sensor_check": cfg.last_temp_sensor_check.isoformat() if cfg.last_temp_sensor_check else None,
         }
     return result

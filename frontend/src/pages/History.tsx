@@ -46,7 +46,7 @@ export default function History() {
       ) : !loadError && sessions.length === 0 ? (
         <div className="card text-center py-12 text-gray-500">
           <p>No sessions found.</p>
-          <p className="text-sm mt-1">Start the simulator and approve some sessions first.</p>
+          <p className="text-sm mt-1">Connect a pedestal and approve some sessions first.</p>
         </div>
       ) : !loadError ? (
         <div className="card overflow-x-auto">

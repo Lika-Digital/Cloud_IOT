@@ -89,13 +89,6 @@ export default function SystemHealth() {
             okText="Connected"
             failText="Disconnected"
           />
-          <InfraCard
-            label="Simulator"
-            ok={summary.simulator_running}
-            okText="Running"
-            failText="Stopped"
-            neutral
-          />
           <StatCard label="Errors (7d)"   value={summary.errors_7d}   color="red" />
           <StatCard label="Warnings (7d)" value={summary.warnings_7d} color="yellow" />
         </div>

@@ -1,0 +1,31 @@
+[Unit]
+Description=Cloud IoT MQTT Broker Watchdog
+Documentation=https://github.com/Lika-Digital/Cloud_IOT
+After=cloud-iot-compose.service cloud-iot-backend.service
+Wants=cloud-iot-compose.service
+
+# Restart if script crashes, but NOT if it exits cleanly (graceful shutdown)
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/cloud-iot-mqtt-watchdog
+
+# Allow full watchdog timeout before systemd gives up
+TimeoutStopSec=90
+
+# Restart on unexpected crash
+Restart=on-failure
+RestartSec=15
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cloud-iot-watchdog
+
+# Watchdog script needs /dev/watchdog access — must run as root
+CapabilityBoundingSet=CAP_SYS_BOOT
+
+[Install]
+WantedBy=multi-user.target

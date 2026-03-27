@@ -6,6 +6,7 @@ sqlalchemy==2.0.35
 aiosqlite==0.20.0
 pydantic==2.9.2
 pydantic-settings==2.5.2
+email-validator==2.2.0
 scikit-learn==1.5.2
 numpy==2.1.2
 python-dotenv==1.0.1
@@ -15,6 +16,8 @@ requests==2.32.3
 reportlab==4.2.5
 zeroconf==0.132.2
 pysnmp==6.2.6
+Pillow>=10.0.0
+python-multipart>=0.0.9
 # Optional — required for YOLO ship detection (needs 64-bit Python + CUDA recommended)
 # ultralytics==8.3.0
 # opencv-python-headless==4.10.0.84

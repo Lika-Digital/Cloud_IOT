@@ -34,11 +34,18 @@ class PedestalConfig(Base):
     mdns_discovered = Column(String, nullable=True)
     snmp_discovered = Column(String, nullable=True)
 
+    # Temp sensor (Papouch TME)
+    temp_sensor_ip       = Column(String, nullable=True)
+    temp_sensor_port     = Column(Integer, default=80)        # HTTP default
+    temp_sensor_protocol = Column(String, default="http")     # "http" | "modbus_tcp"
+
     # Health (updated by background tasks)
-    opta_connected    = Column(Integer, default=0)
-    last_heartbeat    = Column(DateTime, nullable=True)
-    camera_reachable  = Column(Integer, default=0)
-    last_camera_check = Column(DateTime, nullable=True)
+    opta_connected        = Column(Integer, default=0)
+    last_heartbeat        = Column(DateTime, nullable=True)
+    camera_reachable      = Column(Integer, default=0)
+    last_camera_check     = Column(DateTime, nullable=True)
+    temp_sensor_reachable = Column(Integer, default=0)
+    last_temp_sensor_check = Column(DateTime, nullable=True)
 
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

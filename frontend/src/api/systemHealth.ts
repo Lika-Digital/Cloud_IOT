@@ -37,7 +37,6 @@ export interface HealthSummary {
   last_24h_total: number
   last_24h_errors: number
   mqtt_connected: boolean
-  simulator_running: boolean
 }
 
 export const getHealthSummary = () =>

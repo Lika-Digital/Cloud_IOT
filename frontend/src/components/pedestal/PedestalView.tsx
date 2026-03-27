@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useStore } from '../../store'
 import { useAuthStore } from '../../store/authStore'
-import { allowSession, denySession, stopSession } from '../../api'
+import { stopSession } from '../../api'
 import pedestalImg from '../../assets/pedestal.jpg'
 import CameraModal from './CameraModal'
-import DenyDialog from '../sessions/DenyDialog'
 
 // Zone definitions — positions as % of image dimensions
 // Each zone is positioned over the actual socket/pipe on the image
@@ -169,23 +168,45 @@ function ZoneButton({
     posStyle.transform = 'translate(50%, -50%)'
   }
 
+  const tooltipText = isCamera
+    ? 'Camera'
+    : status === 'active'
+      ? 'Stop Session'
+      : zone.label
+
   return (
-    <button
-      style={posStyle}
-      onClick={onClick}
-      title={zone.label}
-      className={`
-        rounded-full border-2 cursor-pointer transition-all duration-200
-        ring-2 shadow-lg ${ringColor} ${bgColor}
-        ${isSelected ? 'scale-110 ring-4' : 'hover:scale-105'}
-        ${status === 'pending' && !isCamera ? 'animate-pulse' : ''}
-      `}
-    >
-      {isCamera && (
-        <span className="flex items-center justify-center w-full h-full text-white text-xs">📷</span>
-      )}
-      {!isCamera && <span className="sr-only">{zone.label}</span>}
-    </button>
+    <div style={posStyle} className="group">
+      <button
+        style={{ width: '100%', height: '100%' }}
+        onClick={onClick}
+        className={`
+          rounded-full border-2 cursor-pointer transition-all duration-200
+          ring-2 shadow-lg ${ringColor} ${bgColor}
+          ${isSelected ? 'scale-110 ring-4' : 'hover:scale-105'}
+          ${status === 'pending' && !isCamera ? 'animate-pulse' : ''}
+        `}
+      >
+        {isCamera && (
+          <span className="flex items-center justify-center w-full h-full text-white text-xs">📷</span>
+        )}
+        {!isCamera && <span className="sr-only">{zone.label}</span>}
+      </button>
+      {/* Custom tooltip */}
+      <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-10">
+        <div className={`whitespace-nowrap text-xs px-2 py-1 rounded-md shadow-lg ${
+          status === 'active' && !isCamera
+            ? 'bg-red-700 text-white'
+            : 'bg-gray-800 text-gray-200 border border-gray-600'
+        }`}>
+          {tooltipText}
+        </div>
+        <div className="flex justify-center">
+          <div className={`w-1.5 h-1.5 rotate-45 -mt-1 ${
+            status === 'active' && !isCamera ? 'bg-red-700' : 'bg-gray-800 border-b border-r border-gray-600'
+          }`} />
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -195,7 +216,6 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
   const { pendingSessions, activeSessions, socketLiveData, waterLiveData, updateSession } = useStore()
   const { role } = useAuthStore()
   const isAdmin = role === 'admin'
-  const [showDenyDialog, setShowDenyDialog] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
 
   const isWater = zoneId === 'water-left' || zoneId === 'water-right'
@@ -216,29 +236,6 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
 
   const liveData = !isWater && socketId ? socketLiveData[socketId] : null
 
-  const handleAllow = async () => {
-    if (!pendingSession) return
-    setActionError(null)
-    try {
-      const updated = await allowSession(pendingSession.id)
-      updateSession({ id: updated.id, status: 'active' })
-    } catch {
-      setActionError('Allow failed — check connection and try again.')
-    }
-  }
-
-  const handleDenyConfirm = async (reason?: string) => {
-    if (!pendingSession) return
-    setActionError(null)
-    try {
-      const updated = await denySession(pendingSession.id, reason)
-      updateSession({ id: updated.id, status: 'denied', deny_reason: updated.deny_reason ?? null })
-      setShowDenyDialog(false)
-    } catch {
-      setActionError('Deny failed — check connection and try again.')
-    }
-  }
-
   const handleStop = async () => {
     if (!activeSession) return
     setActionError(null)
@@ -251,14 +248,6 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
   }
 
   return (
-    <>
-      {showDenyDialog && pendingSession && (
-        <DenyDialog
-          sessionId={pendingSession.id}
-          onConfirm={handleDenyConfirm}
-          onCancel={() => setShowDenyDialog(false)}
-        />
-      )}
     <div className="card space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -273,7 +262,7 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
             pendingSession ? 'badge-pending' :
             'badge bg-gray-800 text-gray-500'
           }>
-            {activeSession ? 'Active' : pendingSession ? 'Pending Approval' : 'Idle'}
+            {activeSession ? 'Active' : pendingSession ? 'Starting…' : 'Idle'}
           </span>
         </div>
         <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-xl leading-none">✕</button>
@@ -286,25 +275,12 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
         </div>
       )}
 
-      {/* Pending state */}
+      {/* Pending state (transient — session is activating) */}
       {pendingSession && !activeSession && (
-        <div className="bg-amber-900/20 border border-amber-700/40 rounded-lg p-4 space-y-3">
-          <p className="text-amber-300 font-medium">
-            {isWater ? 'Water flow detected' : 'Device plugged in'} — awaiting approval
-          </p>
+        <div className="bg-amber-900/20 border border-amber-700/40 rounded-lg p-4 space-y-2">
+          <p className="text-amber-300 font-medium">Session starting…</p>
           {pendingSession.customer_name && (
             <p className="text-sm text-blue-300 font-medium">Customer: {pendingSession.customer_name}</p>
-          )}
-          <p className="text-xs text-gray-400">
-            Started: {new Date(pendingSession.started_at).toLocaleTimeString()}
-          </p>
-          {isAdmin ? (
-            <div className="flex gap-3">
-              <button className="btn-success flex-1" onClick={handleAllow}>Allow</button>
-              <button className="btn-danger flex-1" onClick={() => setShowDenyDialog(true)}>Deny</button>
-            </div>
-          ) : (
-            <p className="text-xs text-gray-500 italic">Monitor role — contact an admin to approve</p>
           )}
         </div>
       )}
@@ -342,40 +318,32 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
         </div>
       )}
     </div>
-    </>
   )
 }
 
 // ─── Overview (no zone selected) ─────────────────────────────────────────────
 
 function AllSessionsOverview({ pedestalId }: { pedestalId: number }) {
-  const { pendingSessions, activeSessions } = useStore()
-  const pending = pendingSessions.filter((s) => s.pedestal_id === pedestalId)
-  const active  = activeSessions.filter((s) => s.pedestal_id === pedestalId)
-  const total   = pending.length + active.length
+  const { activeSessions } = useStore()
+  const active = activeSessions.filter((s) => s.pedestal_id === pedestalId)
 
   return (
     <div className="space-y-4">
       <div className="card">
         <h3 className="font-semibold text-gray-300 mb-3">Quick Status</h3>
-        {total === 0 ? (
+        {active.length === 0 ? (
           <p className="text-gray-500 text-sm">All sockets idle. Click a socket on the pedestal to manage it.</p>
         ) : (
           <div className="space-y-2">
-            {pending.map((s) => (
-              <div key={s.id} className="flex items-center gap-2 text-sm">
-                <span className="badge-pending">Pending</span>
-                <span className="text-gray-300">
-                  {s.type === 'water' ? 'Water' : `Socket ${s.socket_id}`}
-                </span>
-              </div>
-            ))}
             {active.map((s) => (
               <div key={s.id} className="flex items-center gap-2 text-sm">
                 <span className="badge-active">Active</span>
                 <span className="text-gray-300">
                   {s.type === 'water' ? 'Water' : `Socket ${s.socket_id}`}
                 </span>
+                {s.customer_name && (
+                  <span className="text-xs text-blue-300">· {s.customer_name}</span>
+                )}
               </div>
             ))}
           </div>
@@ -384,7 +352,6 @@ function AllSessionsOverview({ pedestalId }: { pedestalId: number }) {
       <div className="card text-sm text-gray-500 space-y-1">
         <p className="font-medium text-gray-400 mb-2">Legend</p>
         <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-green-400 inline-block" /> Active session</div>
-        <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-amber-400 animate-pulse inline-block" /> Pending approval</div>
         <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-600 inline-block" /> Idle</div>
       </div>
     </div>

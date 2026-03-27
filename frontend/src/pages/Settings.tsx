@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import ConfigPanel from '../components/config/ConfigPanel'
 import FieldHelp from '../components/config/FieldHelp'
-import PedestalConfigForm from '../components/config/PedestalConfigForm'
+import DevicesPanel from '../components/config/DevicesPanel'
 import { getPedestals, configurePedestals } from '../api'
 import { useStore, type Pedestal } from '../store'
 import { authListUsers, authCreateUser, authDeleteUser, authPatchUser, type UserResponse } from '../api/auth'
@@ -112,20 +112,8 @@ export default function Settings() {
           {/* Pedestal mode config */}
           <ConfigPanel />
 
-          {/* Per-pedestal extended configuration */}
-          {pedestals.length > 0 && (
-            <div className="card space-y-3">
-              <h3 className="font-semibold text-white">Pedestal Configuration</h3>
-              <p className="text-sm text-gray-400">
-                Configure site IDs, MQTT credentials, camera settings, and sensors for each pedestal.
-              </p>
-              <div className="space-y-2">
-                {pedestals.map((p) => (
-                  <PedestalConfigForm key={p.id} pedestal={p} />
-                ))}
-              </div>
-            </div>
-          )}
+          {/* Per-pedestal device configuration */}
+          <DevicesPanel />
 
           {/* SMTP / Communication */}
           <SmtpSettingsPanel />
@@ -140,10 +128,10 @@ export default function Settings() {
             <h3 className="font-semibold text-white mb-3">Quick Start</h3>
             <ol className="text-sm text-gray-400 space-y-2 list-decimal list-inside">
               <li>Set number of pedestals above and click Apply</li>
-              <li>Select a pedestal and choose <strong className="text-white">Simulator</strong> mode, then click <strong className="text-white">Start Simulator</strong></li>
+              <li>Select a pedestal and click <strong className="text-white">Edit Connection</strong> to set Arduino and camera IPs</li>
+              <li>Click <strong className="text-white">Run Diagnostics</strong> to verify all devices are reachable</li>
               <li>Enable <strong className="text-white">Mobile App Access</strong> for pedestals you want visible in the customer app</li>
               <li>Go to Dashboard — pedestal cards appear with live data</li>
-              <li>Click a pedestal card to open its detail view</li>
               <li>Click socket zones to Allow / Deny / Stop sessions</li>
             </ol>
           </div>

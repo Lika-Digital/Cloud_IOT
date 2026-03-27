@@ -160,8 +160,20 @@ async def stop_session(
             "energy_kwh": session.energy_kwh,
             "water_liters": session.water_liters,
             "customer_id": session.customer_id,
+            "stopped_by": "operator",
         },
     })
+
+    # Push notification — inform customer session was stopped by operator
+    if session.customer_id:
+        customer = user_db.get(Customer, session.customer_id)
+        if customer and getattr(customer, "push_token", None):
+            asyncio.create_task(_send_expo_push(
+                customer.push_token,
+                title="Session Stopped by Operator",
+                body=f"Your {session.type} session on Pedestal {session.pedestal_id} was manually stopped by the marina operator.",
+                data={"session_id": session.id, "stopped_by": "operator"},
+            ))
 
     # Invoice creation is best-effort — session is already completed; don't abort on failure
     try:

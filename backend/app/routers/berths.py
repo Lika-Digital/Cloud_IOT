@@ -2,21 +2,24 @@
 Berth occupancy and reservation endpoints.
 
 Public / customer routes:
-  GET  /api/berths                        → list all berths (status)
-  GET  /api/berths/availability           → check free berths for a date range
-  POST /api/customer/berths/reserve       → create a reservation
-  GET  /api/customer/berths/mine          → customer's own reservations
+  GET  /api/berths                               → list all berths (with camera status)
+  GET  /api/berths/availability                  → check free berths for a date range
+  POST /api/customer/berths/reserve              → create a reservation
+  GET  /api/customer/berths/mine                 → customer's own reservations
   DELETE /api/customer/berths/reservations/{id}  → cancel a reservation
 
 Admin routes:
-  GET  /api/admin/berths/calendar/{berth_id}  → calendar entries for a berth
-  POST /api/admin/berths/{id}/analyze         → trigger manual analysis
-  PUT  /api/admin/berths/{id}/status          → manually set berth status
+  GET  /api/admin/berths/calendar/{berth_id}            → calendar entries for a berth
+  POST /api/admin/berths/{id}/analyze                   → on-demand snapshot + ship detection
+  PUT  /api/admin/berths/{id}/status                    → manually set berth status
+  GET  /api/admin/berths/{id}/reference-images          → list reference images
+  POST /api/admin/berths/{id}/reference-images          → upload reference images
+  DELETE /api/admin/berths/{id}/reference-images/{fn}  → delete a reference image
 """
 from datetime import date, datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DBSession
 
@@ -25,6 +28,7 @@ from ..auth.berth_models import Berth, BerthReservation
 from ..auth.customer_models import Customer
 from ..auth.dependencies import require_admin
 from ..auth.customer_dependencies import require_customer
+from ..database import get_db
 
 router = APIRouter(tags=["berths"])
 
@@ -37,22 +41,19 @@ class BerthOut(BaseModel):
     pedestal_id: Optional[int]
     status: str
     detected_status: str
-    video_source: Optional[str]
-    background_image: Optional[str] = None
     last_analyzed: Optional[str]
     # ML pipeline outputs
     occupied_bit: int = 0
     match_ok_bit: int = 0
-    state_code: int = 0       # 0=FREE 1=OCCUPIED_CORRECT 2=OCCUPIED_WRONG
+    state_code: int = 0       # 0=FREE  1=OCCUPIED_CORRECT  2=OCCUPIED_WRONG
     alarm: int = 0
     match_score: Optional[float] = None
     analysis_error: Optional[str] = None
-    # Zone-based detection config
-    use_detection_zone: int = 1
-    zone_x1: float = 0.20
-    zone_y1: float = 0.20
-    zone_x2: float = 0.80
-    zone_y2: float = 0.80
+    # Camera info (from pedestal_config)
+    camera_stream_url: Optional[str] = None
+    camera_reachable: bool = False
+    # Reference images
+    reference_image_count: int = 0
 
     class Config:
         from_attributes = True
@@ -94,15 +95,13 @@ class BerthStatusUpdate(BaseModel):
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def _berth_to_out(b: Berth) -> BerthOut:
+def _berth_to_out(b: Berth, pedestal_cfg=None, ref_count: int = 0) -> BerthOut:
     return BerthOut(
         id=b.id,
         name=b.name,
         pedestal_id=b.pedestal_id,
         status=b.status,
         detected_status=b.detected_status,
-        video_source=b.video_source,
-        background_image=b.background_image,
         last_analyzed=b.last_analyzed.isoformat() if b.last_analyzed else None,
         occupied_bit=b.occupied_bit or 0,
         match_ok_bit=b.match_ok_bit or 0,
@@ -110,11 +109,9 @@ def _berth_to_out(b: Berth) -> BerthOut:
         alarm=b.alarm or 0,
         match_score=b.match_score,
         analysis_error=b.analysis_error,
-        use_detection_zone=b.use_detection_zone or 0,
-        zone_x1=b.zone_x1 if b.zone_x1 is not None else 0.20,
-        zone_y1=b.zone_y1 if b.zone_y1 is not None else 0.20,
-        zone_x2=b.zone_x2 if b.zone_x2 is not None else 0.80,
-        zone_y2=b.zone_y2 if b.zone_y2 is not None else 0.80,
+        camera_stream_url=pedestal_cfg.camera_stream_url if pedestal_cfg else None,
+        camera_reachable=bool(pedestal_cfg.camera_reachable) if pedestal_cfg else False,
+        reference_image_count=ref_count,
     )
 
 
@@ -139,17 +136,26 @@ def _parse_date(s: str) -> date:
         raise HTTPException(status_code=422, detail=f"Invalid date format: '{s}'. Use YYYY-MM-DD.")
 
 
-def _dates_overlap(ci1: date, co1: date, ci2: date, co2: date) -> bool:
-    """True if [ci1, co1) overlaps [ci2, co2)."""
-    return ci1 < co2 and ci2 < co1
+def _get_pedestal_cfg_map(db: DBSession) -> dict:
+    """Return {pedestal_id: PedestalConfig} map from pedestal.db."""
+    from ..models.pedestal_config import PedestalConfig
+    return {c.pedestal_id: c for c in db.query(PedestalConfig).all()}
 
 
 # ─── Public routes ────────────────────────────────────────────────────────────
 
 @router.get("/api/berths", response_model=List[BerthOut])
-def list_berths(user_db: DBSession = Depends(get_user_db)):
+def list_berths(
+    user_db: DBSession = Depends(get_user_db),
+    db: DBSession = Depends(get_db),
+):
+    from ..services.berth_analyzer import list_reference_images
     berths = user_db.query(Berth).order_by(Berth.id).all()
-    return [_berth_to_out(b) for b in berths]
+    cfg_map = _get_pedestal_cfg_map(db)
+    return [
+        _berth_to_out(b, cfg_map.get(b.pedestal_id), len(list_reference_images(b.id)))
+        for b in berths
+    ]
 
 
 @router.get("/api/berths/availability", response_model=List[BerthOut])
@@ -157,16 +163,18 @@ def get_availability(
     check_in: str,
     check_out: str,
     user_db: DBSession = Depends(get_user_db),
+    db: DBSession = Depends(get_db),
 ):
     ci = _parse_date(check_in)
     co = _parse_date(check_out)
     if co <= ci:
         raise HTTPException(status_code=422, detail="check_out must be after check_in")
 
+    from ..services.berth_analyzer import list_reference_images
     berths = user_db.query(Berth).order_by(Berth.id).all()
+    cfg_map = _get_pedestal_cfg_map(db)
     free_berths = []
     for b in berths:
-        # Check for any overlapping confirmed reservation
         conflicting = (
             user_db.query(BerthReservation)
             .filter(
@@ -178,7 +186,9 @@ def get_availability(
             .first()
         )
         if conflicting is None and b.detected_status != "occupied":
-            free_berths.append(_berth_to_out(b))
+            free_berths.append(
+                _berth_to_out(b, cfg_map.get(b.pedestal_id), len(list_reference_images(b.id)))
+            )
     return free_berths
 
 
@@ -203,7 +213,6 @@ def reserve_berth(
     if not berth:
         raise HTTPException(status_code=404, detail="Berth not found")
 
-    # Conflict check
     conflicting = (
         user_db.query(BerthReservation)
         .filter(
@@ -227,7 +236,6 @@ def reserve_berth(
     )
     user_db.add(reservation)
 
-    # Mark berth as reserved if check-in is today or earlier
     if ci <= date.today() <= co:
         berth_row = user_db.get(Berth, body.berth_id)
         if berth_row:
@@ -249,13 +257,11 @@ def get_my_reservations(
         .order_by(BerthReservation.check_in_date.desc())
         .all()
     )
-    # Batch-load all berths to avoid N+1 queries
     berth_map = {b.id: b for b in user_db.query(Berth).all()}
-    result = []
-    for r in rows:
-        b = berth_map.get(r.berth_id)
-        result.append(_reservation_to_out(r, b.name if b else "Unknown"))
-    return result
+    return [
+        _reservation_to_out(r, berth_map[r.berth_id].name if r.berth_id in berth_map else "Unknown")
+        for r in rows
+    ]
 
 
 @router.delete("/api/customer/berths/reservations/{reservation_id}")
@@ -304,40 +310,54 @@ def get_berth_calendar(
 async def trigger_analysis(
     berth_id: int,
     user_db: DBSession = Depends(get_user_db),
+    db: DBSession = Depends(get_db),
     _admin=Depends(require_admin),
 ):
-    """Trigger an immediate ML analysis for a single berth via the ML Worker."""
-    import httpx
-    from ..services.berth_analyzer import ML_WORKER_URL, ML_TIMEOUT_SECONDS
+    """
+    On-demand berth analysis:
+      1. Grab a live snapshot from the pedestal camera via ffmpeg.
+      2. Detect ship presence using edge-density (Laplacian variance).
+      3. Compare with uploaded reference images using histogram similarity.
+      4. Persist result and broadcast via WebSocket.
+    """
+    from ..models.pedestal_config import PedestalConfig
+    from ..services.berth_analyzer import (
+        analyze_berth_now, list_reference_images,
+    )
     from ..services.websocket_manager import ws_manager
 
     berth = user_db.get(Berth, berth_id)
     if not berth:
         raise HTTPException(status_code=404, detail="Berth not found")
+    if not berth.pedestal_id:
+        raise HTTPException(status_code=400, detail="Berth has no pedestal configured")
 
-    payload = {
-        "video_source":          berth.video_source,
-        "reference_image":       berth.reference_image,
-        "background_image":      berth.background_image,
-        "detect_conf_threshold": berth.detect_conf_threshold or 0.30,
-        "match_threshold":       berth.match_threshold or 0.50,
-        "use_detection_zone":    bool(berth.use_detection_zone),
-        "zone_x1":               berth.zone_x1 if berth.zone_x1 is not None else 0.20,
-        "zone_y1":               berth.zone_y1 if berth.zone_y1 is not None else 0.20,
-        "zone_x2":               berth.zone_x2 if berth.zone_x2 is not None else 0.80,
-        "zone_y2":               berth.zone_y2 if berth.zone_y2 is not None else 0.80,
-    }
+    cfg = db.query(PedestalConfig).filter(
+        PedestalConfig.pedestal_id == berth.pedestal_id
+    ).first()
+    if not cfg or not cfg.camera_stream_url:
+        raise HTTPException(
+            status_code=400,
+            detail="No camera stream URL configured for this pedestal. "
+                   "Set it in Settings → Device Configuration.",
+        )
+    if not cfg.camera_reachable:
+        raise HTTPException(
+            status_code=503,
+            detail="Camera is not reachable. Check network connection and camera settings.",
+        )
 
-    res: dict = {}
-    try:
-        async with httpx.AsyncClient(timeout=ML_TIMEOUT_SECONDS) as client:
-            r = await client.post(f"{ML_WORKER_URL}/analyze/berth", json=payload)
-            r.raise_for_status()
-            res = r.json()
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"ML Worker error: {exc}")
+    res = await analyze_berth_now(
+        berth_id=berth_id,
+        stream_url=cfg.camera_stream_url,
+        camera_username=cfg.camera_username or "",
+        camera_password=cfg.camera_password or "",
+        # detect_conf_threshold repurposed as Laplacian variance threshold (default 300)
+        detect_threshold=berth.detect_conf_threshold or 300.0,
+        match_threshold=berth.match_threshold or 0.75,
+    )
 
-    # Persist
+    # Persist ML outputs
     b = user_db.get(Berth, berth_id)
     b.occupied_bit   = res.get("occupied_bit", 0)
     b.match_ok_bit   = res.get("match_ok_bit", 0)
@@ -352,48 +372,25 @@ async def trigger_analysis(
     user_db.commit()
     user_db.refresh(b)
 
+    # Broadcast
+    ref_count = len(list_reference_images(berth_id))
+    cfg2 = db.query(PedestalConfig).filter(PedestalConfig.pedestal_id == b.pedestal_id).first()
     await ws_manager.broadcast({
         "event": "berth_occupancy_updated",
-        "data": {"berths": [_berth_to_out(b).model_dump()]},
+        "data": {"berths": [_berth_to_out(b, cfg2, ref_count).model_dump()]},
     })
-    return res
 
+    # Human-readable status for the UI toast
+    if b.occupied_bit == 0:
+        detected_label = "Berth is empty"
+    elif b.match_score is None:
+        detected_label = "Ship detected (no reference images to compare)"
+    elif b.match_ok_bit:
+        detected_label = f"Correct ship detected (score {b.match_score:.2f})"
+    else:
+        detected_label = f"⚠ Unknown ship detected (score {b.match_score:.2f})"
 
-@router.post("/api/admin/berths/{berth_id}/capture-background")
-async def capture_background(
-    berth_id: int,
-    user_db: DBSession = Depends(get_user_db),
-    _admin=Depends(require_admin),
-):
-    """
-    Extract a middle frame from the berth's video source and save it as the
-    background reference image used by the ML pre-screening step.
-    Sets berth.background_image in the DB automatically.
-    """
-    import httpx
-    from ..services.berth_analyzer import ML_WORKER_URL, ML_TIMEOUT_SECONDS
-
-    berth = user_db.get(Berth, berth_id)
-    if not berth:
-        raise HTTPException(status_code=404, detail="Berth not found")
-    if not berth.video_source:
-        raise HTTPException(status_code=400, detail="Berth has no video source configured")
-
-    output_name = f"bg_berth_{berth_id}.jpg"
-    try:
-        async with httpx.AsyncClient(timeout=ML_TIMEOUT_SECONDS) as client:
-            r = await client.post(
-                f"{ML_WORKER_URL}/capture/background",
-                json={"video_source": berth.video_source, "output_name": output_name},
-            )
-            r.raise_for_status()
-            data = r.json()
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"ML Worker error: {exc}")
-
-    berth.background_image = output_name
-    user_db.commit()
-    return {"background_image": output_name, "width": data.get("width"), "height": data.get("height")}
+    return {"ok": True, "detected_status": detected_label, **res}
 
 
 @router.put("/api/admin/berths/{berth_id}/status")
@@ -411,4 +408,61 @@ def set_berth_status(
         raise HTTPException(status_code=404, detail="Berth not found")
     berth.status = body.status
     user_db.commit()
+    return {"ok": True}
+
+
+# ─── Reference images (admin) ─────────────────────────────────────────────────
+
+@router.get("/api/admin/berths/{berth_id}/reference-images")
+def get_reference_images(
+    berth_id: int,
+    user_db: DBSession = Depends(get_user_db),
+    _admin=Depends(require_admin),
+):
+    from ..services.berth_analyzer import list_reference_images
+    berth = user_db.get(Berth, berth_id)
+    if not berth:
+        raise HTTPException(status_code=404, detail="Berth not found")
+    return {"images": list_reference_images(berth_id)}
+
+
+@router.post("/api/admin/berths/{berth_id}/reference-images")
+async def upload_reference_images(
+    berth_id: int,
+    files: List[UploadFile] = File(...),
+    user_db: DBSession = Depends(get_user_db),
+    _admin=Depends(require_admin),
+):
+    from ..services.berth_analyzer import save_reference_image
+    berth = user_db.get(Berth, berth_id)
+    if not berth:
+        raise HTTPException(status_code=404, detail="Berth not found")
+    if not files:
+        raise HTTPException(status_code=422, detail="No files provided")
+
+    saved = []
+    for f in files:
+        data = await f.read()
+        if not data:
+            continue
+        name = save_reference_image(berth_id, f.filename or "upload.jpg", data)
+        saved.append(name)
+
+    return {"saved": saved, "count": len(saved)}
+
+
+@router.delete("/api/admin/berths/{berth_id}/reference-images/{filename}")
+def delete_reference_image_endpoint(
+    berth_id: int,
+    filename: str,
+    user_db: DBSession = Depends(get_user_db),
+    _admin=Depends(require_admin),
+):
+    from ..services.berth_analyzer import delete_reference_image
+    berth = user_db.get(Berth, berth_id)
+    if not berth:
+        raise HTTPException(status_code=404, detail="Berth not found")
+    ok = delete_reference_image(berth_id, filename)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Image not found")
     return {"ok": True}

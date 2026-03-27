@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity,
   FlatList, StyleSheet, SafeAreaView, KeyboardAvoidingView, Platform,
@@ -6,7 +6,7 @@ import {
 } from 'react-native'
 import { getMyMessages, sendMessage, type ChatMessage } from '../../src/api/chat'
 import { ChatBubble } from '../../src/components/ChatBubble'
-import { useWebSocket } from '../../src/hooks/useWebSocket'
+import { useSessionStore } from '../../src/store/sessionStore'
 import { useAuthStore } from '../../src/store/authStore'
 
 export default function ChatScreen() {
@@ -18,24 +18,25 @@ export default function ChatScreen() {
   const flatRef = useRef<FlatList>(null)
   const inFlight = useRef(false)
   const { profile } = useAuthStore()
+  const latestChatMsg = useSessionStore((s) => s.latestChatMsg)
 
-  const handleIncoming = useCallback((msg: any) => {
-    if (msg.customer_id === profile?.id) {
+  // React to chat messages routed through the store by the layout's WS connection
+  useEffect(() => {
+    if (!latestChatMsg) return
+    if (latestChatMsg.customer_id === profile?.id) {
       setMessages((prev) => [
         ...prev,
         {
           id: Date.now(),
-          customer_id: msg.customer_id,
-          message: msg.message,
-          direction: msg.direction,
-          created_at: msg.created_at,
+          customer_id: latestChatMsg.customer_id,
+          message: latestChatMsg.message,
+          direction: latestChatMsg.direction,
+          created_at: latestChatMsg.created_at,
           read_at: null,
         },
       ])
     }
-  }, [profile?.id])
-
-  useWebSocket(handleIncoming)
+  }, [latestChatMsg, profile?.id])
 
   const loadMessages = () => {
     setLoadError(false)

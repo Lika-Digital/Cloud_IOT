@@ -74,6 +74,10 @@ export interface BerthStatus {
   alarm: number
   match_score: number | null
   analysis_error: string | null
+  // Camera info (enriched from pedestal config)
+  camera_stream_url?: string | null
+  camera_reachable?: boolean
+  reference_image_count?: number
 }
 
 export interface PedestalHealth {
@@ -163,6 +167,12 @@ export const useStore = create<AppStore>((set) => ({
 
   addSession: (session) =>
     set((s) => {
+      // Idempotency: ignore if already tracked in either list
+      const alreadyExists =
+        s.pendingSessions.some((sess) => sess.id === session.id) ||
+        s.activeSessions.some((sess) => sess.id === session.id)
+      if (alreadyExists) return {}
+
       if (session.status === 'pending') {
         return { pendingSessions: [...s.pendingSessions, session] }
       }

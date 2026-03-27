@@ -94,3 +94,84 @@ def test_admin_list_sessions_filter_status(client, auth_headers):
     assert r.status_code == 200
     for s in r.json():
         assert s["status"] == "completed"
+
+
+# ─── Auto-start: sessions must activate immediately ───────────────────────────
+
+def test_session_starts_as_active(client, cust_headers):
+    """
+    Key functional requirement: customer sessions auto-activate without
+    operator approval. The session returned from /start must have
+    status='active', never 'pending'.
+    """
+    r = client.get("/api/customer/sessions/pedestal-status", headers=cust_headers)
+    assert r.status_code == 200
+    pedestals = r.json()
+    assert len(pedestals) > 0, "No mobile-enabled pedestal for auto-start test"
+
+    pedestal_id = pedestals[0]["id"]
+    # Use socket 3 to avoid conflict with session fixture (which uses socket 1 & 2)
+    r2 = client.post("/api/customer/sessions/start", json={
+        "pedestal_id": pedestal_id,
+        "type": "electricity",
+        "socket_id": 3,
+    }, headers=cust_headers)
+    assert r2.status_code == 200
+    session = r2.json()
+    assert session["status"] == "active", (
+        f"Expected status='active' (auto-start), got '{session['status']}'"
+    )
+
+    # Clean up: stop the session
+    client.post(f"/api/customer/sessions/{session['id']}/stop", headers=cust_headers)
+
+
+def test_session_invalid_socket_id(client, cust_headers):
+    """socket_id must be 1–4 for electricity sessions."""
+    r = client.get("/api/customer/sessions/pedestal-status", headers=cust_headers)
+    pedestal_id = r.json()[0]["id"]
+    r2 = client.post("/api/customer/sessions/start", json={
+        "pedestal_id": pedestal_id,
+        "type": "electricity",
+        "socket_id": 99,
+    }, headers=cust_headers)
+    assert r2.status_code == 422
+
+
+def test_water_session_no_socket_id_required(client, cust_headers):
+    """Water sessions don't need a socket_id and also auto-start as active."""
+    r = client.get("/api/customer/sessions/pedestal-status", headers=cust_headers)
+    pedestal_id = r.json()[0]["id"]
+    r2 = client.post("/api/customer/sessions/start", json={
+        "pedestal_id": pedestal_id,
+        "type": "water",
+    }, headers=cust_headers)
+    assert r2.status_code == 200
+    session = r2.json()
+    assert session["status"] == "active"
+    assert session["socket_id"] is None
+
+    # Clean up
+    client.post(f"/api/customer/sessions/{session['id']}/stop", headers=cust_headers)
+
+
+def test_operator_stop_sends_completed(client, auth_headers, cust_headers):
+    """
+    Operator (admin) stopping an active session via /api/controls/{id}/stop
+    returns status='completed'.
+    """
+    # Start a session as customer
+    r = client.get("/api/customer/sessions/pedestal-status", headers=cust_headers)
+    pedestal_id = r.json()[0]["id"]
+    r2 = client.post("/api/customer/sessions/start", json={
+        "pedestal_id": pedestal_id,
+        "type": "electricity",
+        "socket_id": 4,
+    }, headers=cust_headers)
+    assert r2.status_code == 200
+    session_id = r2.json()["id"]
+
+    # Operator stops it
+    r3 = client.post(f"/api/controls/{session_id}/stop", headers=auth_headers)
+    assert r3.status_code == 200
+    assert r3.json()["status"] == "completed"

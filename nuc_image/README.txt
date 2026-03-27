@@ -1,34 +1,18 @@
 ================================================================================
   Cloud IoT Marina Pedestal Management System
-  NUC Bootable Image — Release v2.0  (Self-Contained, NO internet required)
+  NUC Installation Guide — Release v2.0
   Created by Lika Digital — info@lika.digital
 ================================================================================
 
+OVERVIEW
+─────────
+Two-phase installation:
 
-CONTENTS OF THIS IMAGE
-───────────────────────
-This is a SELF-CONTAINED bootable ISO. All software is bundled inside.
-No internet connection is required on the NUC during or after installation.
+  PHASE 1  Install Ubuntu Server 24.04 LTS (standard, from Ubuntu ISO)
+  PHASE 2  Run ubuntu-install.sh — installs and configures all Cloud IoT software
 
-  Operating System:
-    • Debian 12 "Bookworm" (minimal server install, LTS until 2028)
-    • OpenSSH server (remote management)
-    • nginx (reverse proxy + static frontend)
-
-  Cloud IoT Application (v2.0):
-    • FastAPI backend            — REST API, WebSocket, MQTT bridge, JWT auth
-    • React 18 frontend          — Admin dashboard (pre-built, served via nginx)
-    • Customer mobile API        — REST endpoints for the Expo mobile app
-    • SQLite databases           — IoT data + user/auth data (WAL mode enabled)
-    • Chat & support messaging   — Real-time via WebSocket
-    • Push notification dispatch — Expo push API integration
-    • External API gateway       — Webhook dispatch for third-party integration
-
-  Runtime Dependencies (all bundled in ISO — no download needed on NUC):
-    • Python 3.11+               — Backend runtime
-    • Docker CE                  — MQTT broker container
-    • Eclipse Mosquitto 2.0      — MQTT broker (Docker, persistence enabled)
-    • FastAPI, PyJWT, pydantic, SQLAlchemy, paho-mqtt, uvicorn, httpx ...
+Internet connection is required during Phase 2 (packages downloaded from internet).
+After install the NUC runs fully standalone on your LAN.
 
 
 MINIMUM SYSTEM REQUIREMENTS
@@ -36,188 +20,199 @@ MINIMUM SYSTEM REQUIREMENTS
   Hardware:   Intel NUC (8th generation or newer)
   CPU:        Intel Core i3 (64-bit, 2+ cores)
   RAM:        8 GB DDR4 (minimum)
-  Storage:    120 GB SSD — M.2 NVMe or 2.5" SATA (HDD not recommended)
-  Network:    1× Gigabit Ethernet (wired, required)
-  USB:        1× USB 3.0 port (for installation media — 8 GB minimum)
+  Storage:    64 GB eMMC, NVMe, or SSD
+  Network:    Ethernet (wired) connected to the internet during install
+  USB:        1x USB 3.0 port (for Ubuntu installer — 8 GB minimum)
   BIOS:       UEFI firmware — Secure Boot must be DISABLED
-  Internet:   NOT required. Installation is fully offline.
 
-RECOMMENDED HARDWARE
-─────────────────────
-  Intel NUC 11 (NUC11TNHi5) or Intel NUC 12 (NUC12WSHi5)
-  CPU:     Intel Core i5 / i7
-  RAM:     16 GB DDR4
-  Storage: 256 GB NVMe SSD
+TESTED HARDWARE
+────────────────
+  ASUS NUC 13 (BNUC13BRF) — eMMC storage (/dev/mmcblk0)
+  Ubuntu Server 24.04 LTS installer handles eMMC correctly with no extra config.
 
 
 ================================================================================
-  FIRST-TIME INSTALLATION GUIDE (NUC — bare metal, no OS)
+  PHASE 1 — INSTALL UBUNTU SERVER 24.04 LTS
 ================================================================================
 
-STEP 1 — BUILD THE ISO (on your development machine, not the NUC)
-  Requirements: Docker Desktop, xorriso, wget  (Linux, macOS, or WSL on Windows)
+STEP 1 — DOWNLOAD UBUNTU SERVER ISO
 
-    cd nuc_image/
-    chmod +x build_iso.sh
-    ./build_iso.sh
+  Go to:  https://ubuntu.com/download/server
+  Download: Ubuntu Server 24.04 LTS (ubuntu-24.04-live-server-amd64.iso)
 
-  This takes 10–30 minutes. Output: cloud-iot-nuc-v2.0.iso (~3–5 GB)
-
-  NOTE: You only need to build once. The ISO is fully self-contained.
-        xorriso install: sudo apt install xorriso   (or: brew install xorriso)
-
-──────────────────────────────────────────────────────────────────────────────
 
 STEP 2 — FLASH ISO TO USB DRIVE (minimum 8 GB)
 
   Windows (easiest):
-    1. Download Rufus from https://rufus.ie  (free, no install needed)
+    1. Download Rufus from https://rufus.ie (free, no install needed)
     2. Insert USB drive
     3. In Rufus:
          Device:          select your USB drive
-         Boot selection:  click SELECT → choose cloud-iot-nuc-v2.0.iso
+         Boot selection:  click SELECT -> choose ubuntu-24.04-live-server-amd64.iso
          Partition scheme: GPT
          Target system:    UEFI (non-CSM)
-    4. Click START → Yes to warnings
-    5. Wait for "READY" → close Rufus → safely eject USB
+    4. Click START -> if asked about ISO mode, choose "Write in ISO Image mode"
+    5. Wait for "READY" -> safely eject USB
 
-  Linux / macOS:
-    sudo dd if=cloud-iot-nuc-v2.0.iso of=/dev/sdX bs=4M status=progress
-    (replace /dev/sdX with your USB — use 'lsblk' or 'diskutil list' to find it)
-
-──────────────────────────────────────────────────────────────────────────────
 
 STEP 3 — BIOS SETUP ON THE NUC
 
     a. Insert the USB drive into the NUC
-    b. Power on the NUC → press F2 immediately to open BIOS setup
-    c. Go to:   Security → Secure Boot → set to DISABLED
-    d. Go to:   Boot → Boot Priority Order → move USB to first position
-    e. Press F10 → Save and Exit
+    b. Power on -> press F2 immediately to enter BIOS setup
+    c. Security -> Secure Boot -> set to DISABLED
+    d. Boot -> Boot Priority Order -> move USB to first position
+    e. Press F10 -> Save and Exit
 
-──────────────────────────────────────────────────────────────────────────────
 
-STEP 4 — AUTOMATIC DEBIAN INSTALLATION (hands-off, ~10 minutes)
+STEP 4 — UBUNTU SERVER INSTALLER (interactive)
 
-    • NUC boots from USB into the Debian installer
-    • The installation is fully automatic — do NOT touch the keyboard
-    • All partitioning, package install, and service setup happen automatically
-    • When the screen shows "Remove installation media and press Enter":
-        → Pull out the USB drive
-        → Press Enter
-    • NUC reboots automatically into Debian
+  The Ubuntu installer starts. Follow these screens:
 
-──────────────────────────────────────────────────────────────────────────────
+  Language:
+    -> English
 
-STEP 5 — FIRST-BOOT SETUP WIZARD (interactive, on NUC screen)
+  Keyboard:
+    -> English (US) or your layout
 
-  On the very first boot, a setup wizard appears directly on the NUC screen (TTY).
-  Connect a monitor + keyboard to the NUC for this step only.
+  Type of install:
+    -> Ubuntu Server  (NOT "minimized", NOT Desktop)
 
-  You will be asked for:
+  Network:
+    -> Leave as DHCP — the installer will auto-detect your ethernet
+    -> Press Done
 
-  ┌─ DATE & TIME ────────────────────────────────────────────┐
-  │  Current date/time  e.g. 2025-06-01 14:30               │
-  │  Timezone           e.g. Europe/Zagreb                  │
-  └──────────────────────────────────────────────────────────┘
-  ┌─ NETWORK ────────────────────────────────────────────────┐
-  │  Network interface  auto-detected (you select)          │
-  │  Static IP address  e.g. 192.168.1.100                  │
-  │  Subnet mask        e.g. 255.255.255.0 (or prefix /24)  │
-  │  Default gateway    e.g. 192.168.1.1                    │
-  │  DNS server(s)      e.g. 8.8.8.8                        │
-  │  Hostname           e.g. marina-iot-01                  │
-  └──────────────────────────────────────────────────────────┘
-  ┌─ ADMIN ACCOUNT ──────────────────────────────────────────┐
-  │  Admin email        e.g. admin@marina.local              │
-  │  Admin password     min. 8 characters                   │
-  └──────────────────────────────────────────────────────────┘
-  ┌─ MARINA INFORMATION ─────────────────────────────────────┐
-  │  Company / marina name                                  │
-  │  Address, phone, email                                  │
-  │  Portal name        e.g. Marina IoT Portal              │
-  └──────────────────────────────────────────────────────────┘
-  ┌─ SMTP EMAIL (optional) ──────────────────────────────────┐
-  │  If configured: OTP login codes are sent by email       │
-  │  If skipped:    OTP codes appear in system log          │
-  │    (view with: sudo journalctl -u cloud-iot-backend)    │
-  └──────────────────────────────────────────────────────────┘
+  Storage:
+    -> "Use an entire disk"
+    -> Select the disk shown (eMMC shows as /dev/mmcblk0, NVMe as /dev/nvme0n1)
+    -> Leave LVM option as default
+    -> Done -> Continue on the destructive action warning
 
-  After you finish the wizard, the installer runs automatically (~15 minutes).
-  The NUC reboots when complete. You can disconnect the monitor and keyboard.
+  Profile setup:
+    -> Your name:    anything (e.g. Cloud IoT)
+    -> Server name:  marina-iot
+    -> Username:     cloud-iot
+    -> Password:     choose a strong password (you will need this for SSH)
 
-──────────────────────────────────────────────────────────────────────────────
+  SSH Setup:
+    -> Check "Install OpenSSH server"   <- IMPORTANT
+    -> "Allow password authentication over SSH" -> leave ON
+    -> Done
 
-STEP 6 — ACCESS THE SYSTEM
+  Featured snaps:
+    -> Do NOT select anything
+    -> Done
 
-  From any browser on the same network:
+  Ubuntu Pro:
+    -> Skip -> Continue without Ubuntu Pro
 
-    Admin Dashboard:   http://<IP-you-configured-in-wizard>
-    Login:             the email and password you set in the wizard
+  Installing system:
+    -> Wait 5-10 minutes for installation to complete
 
-  SSH remote access (for management):
-    ssh cloud-iot@<NUC-IP>
+  Reboot:
+    -> "Reboot Now" appears -> press Enter
+    -> When prompted "Remove installation medium" -> pull out the USB -> press Enter
 
-  MQTT broker (for Arduino Opta):
-    Host: <NUC-IP>
-    Port: 1883
+  After reboot you will see a text login prompt.
+  Log in with the username and password you set above.
 
-  Mobile customer app (set in mobile/.env):
-    EXPO_PUBLIC_API_URL=http://<NUC-IP>
-    EXPO_PUBLIC_WS_URL=ws://<NUC-IP>
+  IMPORTANT: Ubuntu may store the username with an underscore internally.
+  If "cloud-iot" is rejected at SSH login, try "cloud_iot" (underscore).
 
 
 ================================================================================
-  TESTING THE ISO ON A PC (VirtualBox — no NUC needed)
+  PHASE 2 — INSTALL CLOUD IOT SOFTWARE
 ================================================================================
 
-You can test the full install flow on your Windows/Linux/macOS PC using
-VirtualBox (free) before flashing to a real NUC.
+STEP 5 — VERIFY INTERNET CONNECTION
 
-STEP 1 — Install VirtualBox
-  Download from https://www.virtualbox.org  → install with defaults.
+  Log in to the NUC and run:
+    ping -c 3 google.com
 
-STEP 2 — Create a new Virtual Machine
-  a. Open VirtualBox → click "New"
-  b. Name:        cloud-iot-test
-     Type:        Linux
-     Version:     Debian (64-bit)
-  c. Memory:      4096 MB (minimum)
-  d. Hard disk:   Create new → VDI → Dynamically allocated → 40 GB
-
-STEP 3 — Configure the VM for UEFI boot
-  a. Select the VM → Settings → System → Motherboard
-     ☑ Enable EFI (special OSes only)   ← IMPORTANT
-  b. Settings → System → Processor: set to 2 CPUs
-  c. Settings → Display: Video Memory 16 MB (enough for installer)
-
-STEP 4 — Attach the ISO
-  a. Settings → Storage → Controller: IDE → click the CD icon
-  b. Click "Choose a disk file..." → select cloud-iot-nuc-v2.0.iso
-  c. Click OK
-
-STEP 5 — Boot and install
-  a. Click Start to power on the VM
-  b. The Debian installer runs automatically (fully unattended)
-  c. After ~10 minutes it will show "Finish the installation" / reboot
-  d. VirtualBox may auto-remove the ISO — if it boots to GRUB prompt,
-     the ISO was removed correctly
-  e. Wait for the first-boot wizard to appear on the VM screen
-
-STEP 6 — Complete the wizard
-  - Enter any IP in the 10.0.x.x or 192.168.x.x range for testing
-  - After install (~15 min), the VM reboots to the running system
-
-STEP 7 — Access the VM
-  - In VirtualBox: Settings → Network → change to "Bridged Adapter"
-    (or use NAT with port forwarding: host 8080 → guest 80)
-  - Open http://localhost:8080 (NAT) or http://<VM-IP> (bridged)
+  You should see replies. If not, check your ethernet cable and router.
 
 
-NOTE — VMware alternative:
-  VMware Workstation Player (free) also works. Use similar steps.
-  When creating the VM, select: "I will install the OS later"
-  then manually attach the ISO before first boot.
+STEP 6 — CLONE THE REPOSITORY
+
+    git clone https://github.com/Lika-Digital/Cloud_IOT.git
+    cd Cloud_IOT
+    git checkout nuc-iot
+    git pull origin nuc-iot
+
+
+STEP 7 — RUN THE INSTALL SCRIPT
+
+    sudo bash nuc_image/ubuntu-install.sh
+
+  The script runs an interactive wizard. Answer each prompt:
+
+  STEP 1: NETWORK
+    Configure static IP? [y/N]
+      -> n  (DHCP is fine — check router for NUC IP after reboot)
+      -> y  if you want a fixed IP (you will be asked for IP/gateway/DNS)
+    Hostname:  marina-iot  (or press Enter for default)
+
+  STEP 2: ADMIN ACCOUNT
+    Admin email:     e.g. admin@marina.local
+    Admin password:  min 8 characters — type it, press Enter, confirm it
+
+  STEP 3: MARINA INFORMATION
+    Marina/company name, address, phone, email
+    Press Enter to skip any optional field
+
+  STEP 4: SMTP (optional)
+    Configure SMTP? [y/N]  -> n to skip
+    If skipped: 2FA OTP codes print to the system log (see LOGIN section)
+
+  STEP 5: CONFIRM
+    Review the summary -> y to proceed
+
+  The script then runs automatically (~10-15 minutes):
+    OK  Installs Docker CE, Python 3, Node.js, nginx
+    OK  Pulls Eclipse Mosquitto 2.0 Docker image
+    OK  Builds the React frontend
+    OK  Installs Python packages into virtual environment
+    OK  Writes .env configuration
+    OK  Configures nginx reverse proxy
+    OK  Creates and enables systemd services
+    OK  Configures network (static IP if selected)
+    OK  Installs cloud-iot management CLI
+
+  The NUC reboots automatically when done.
+
+
+================================================================================
+  FIRST LOGIN
+================================================================================
+
+FIND THE NUC IP ADDRESS
+  Option A — on the NUC screen after login:
+    ip a
+    Look for "inet" under the ethernet interface (e.g. enp3s0 or enp88s0)
+
+  Option B — check your router's DHCP client list
+
+ACCESS THE DASHBOARD
+  Open any browser on the same network:
+    http://<NUC-IP>
+
+LOGIN PROCESS (2-Factor Authentication)
+  1. Enter your admin email and password on the login page
+  2. The system sends a one-time OTP code
+
+  If SMTP is NOT configured, the OTP code appears in the backend log.
+  To retrieve it, SSH into the NUC and run:
+
+    sudo journalctl -u cloud-iot-backend -f
+
+  Then submit the login form in the browser — watch the log for the OTP code.
+  Enter that code in the browser to complete login.
+
+SSH REMOTE ACCESS
+  From Windows PowerShell or any terminal:
+    ssh cloud_iot@<NUC-IP>
+
+  Note: if you typed "cloud-iot" during Ubuntu install, SSH uses "cloud_iot"
+  (Ubuntu converts hyphens to underscores in usernames).
 
 
 ================================================================================
@@ -230,21 +225,22 @@ NOTE — VMware alternative:
     sudo cloud-iot start             Start all services
     sudo cloud-iot stop              Stop all services
     sudo cloud-iot restart           Restart all services
-    sudo cloud-iot logs backend      Live backend log
+    sudo cloud-iot logs backend      Live backend log (Ctrl+C to exit)
     sudo cloud-iot logs nginx        nginx error log
     sudo cloud-iot logs mqtt         MQTT broker log
-    sudo cloud-iot logs watchdog     Watchdog log
     sudo cloud-iot config            Edit .env (auto-restarts backend)
     sudo cloud-iot ip                Show current IP address
+
+  View configuration:
+    sudo cat /opt/cloud-iot/backend/.env
 
 
 NETWORK PORTS
 ──────────────
-    80    HTTP  — Web dashboard + API (nginx, expose to LAN)
-    22    TCP   — SSH management (restrict to admin IPs in production)
-    1883  MQTT  — Arduino Opta connection (restrict to device IP)
-    9001  WS    — MQTT over WebSocket (internal)
-    8000  HTTP  — FastAPI backend (internal only, do NOT expose)
+    80    HTTP  — Web dashboard + API (nginx)
+    22    TCP   — SSH management
+    1883  MQTT  — Arduino Opta connection
+    8000  HTTP  — FastAPI backend (internal only — do NOT expose externally)
 
 
 DIRECTORY STRUCTURE (on installed NUC)
@@ -252,67 +248,97 @@ DIRECTORY STRUCTURE (on installed NUC)
     /opt/cloud-iot/               Application root
     /opt/cloud-iot/backend/       FastAPI + Python venv + SQLite databases
     /opt/cloud-iot/frontend/dist/ Pre-built React app (served by nginx)
-    /opt/cloud-iot/backend/.env   Configuration (sensitive — root only)
-    /var/log/cloud-iot/           Application logs (logrotate managed)
-    /var/lib/cloud-iot/mosquitto/ MQTT persistence data
+    /opt/cloud-iot/backend/.env   Configuration (admin credentials, MQTT, SMTP)
+    /var/log/cloud-iot/           Application logs
+    /var/log/cloud-iot-install.log  Full install log
 
 
-SECURITY NOTES
-───────────────
-  • Change the admin password after first login via the web UI
-  • Enable SSH key auth and disable password login for production:
-      ssh-copy-id cloud-iot@<nuc-ip>
-      sudo nano /etc/ssh/sshd_config  → set PasswordAuthentication no
-  • Firewall (ufw) recommended for production:
-      sudo ufw allow from <arduino-ip> to any port 1883
-      sudo ufw allow 80/tcp
+ARDUINO OPTA CONNECTION
+─────────────────────────
+  MQTT broker runs on the NUC at port 1883.
+  Configure the Arduino Opta with:
+    Broker host: <NUC-IP>
+    Broker port: 1883
+    Authentication: none (anonymous allowed)
+
+
+MOBILE APP SETUP
+─────────────────
+  In mobile/.env set:
+    EXPO_PUBLIC_API_URL=http://<NUC-IP>
+    EXPO_PUBLIC_WS_URL=ws://<NUC-IP>
+
+
+SECURITY NOTES (production)
+─────────────────────────────
+  • Change admin password after first login via the web UI
+  • Enable SSH key auth and disable password SSH:
+      ssh-copy-id cloud_iot@<NUC-IP>
+      sudo nano /etc/ssh/sshd_config  -> PasswordAuthentication no
+      sudo systemctl restart ssh
+  • Firewall:
       sudo ufw allow 22/tcp
+      sudo ufw allow 80/tcp
+      sudo ufw allow from <arduino-ip> to any port 1883
       sudo ufw enable
-  • Port 8000 must NOT be exposed externally (nginx proxies it)
-  • The .env file contains JWT_SECRET — keep it confidential
 
 
 TROUBLESHOOTING
 ────────────────
-  First-boot wizard did not appear:
-    Login: cloud-iot / ChangeOnFirstLogin
-    Run:   sudo /opt/cloud-iot-setup/firstboot-setup.sh
+  Backend not starting:
+    sudo journalctl -u cloud-iot-backend -n 50 --no-pager
 
-  Services not running after install:
+  All services status:
     sudo cloud-iot status
-    sudo cloud-iot start
 
-  View full install log:
-    sudo cat /var/log/cloud-iot-setup.log
+  Full install log:
+    sudo cat /var/log/cloud-iot-install.log
 
-  NUC keeps rebooting (watchdog):
-    The MQTT broker is not responding. Check:
-    sudo cloud-iot logs mqtt
-    sudo cloud-iot restart
+  OTP not received by email:
+    sudo journalctl -u cloud-iot-backend -f
+    (submit login form — OTP code appears in the log)
+
+  SSH "Permission denied":
+    Try username with underscore: ssh cloud_iot@<NUC-IP>
+    Reset password on NUC screen:  sudo passwd cloud_iot
+
+  Backend fails with "No module named ...":
+    sudo journalctl -u cloud-iot-backend -n 30 --no-pager
+    (report the module name — likely a missing Python package)
+
+  .env has wrong admin password (split across two lines):
+    sudo nano /opt/cloud-iot/backend/.env
+    Fix DEFAULT_ADMIN_PASSWORD= to be on one line
+    sudo rm /opt/cloud-iot/backend/data/users.db
+    sudo systemctl restart cloud-iot-backend
 
 
-RELEASE NOTES — v2.0
-──────────────────────
-  New in v2.0 (NUC Self-Contained Image):
-    + Fully offline bootable ISO — no internet required on NUC
-    + Automated Debian 12 install via preseed
-    + Interactive first-boot wizard (datetime, network, admin, SMTP)
-    + Hardware watchdog — auto-reboot if MQTT broker crashes >60s
-    + MQTT persistence — broker state survives reboots
-    + SQLite WAL mode — safe concurrent reads during writes
-    + Log rotation — prevents disk fill from sensor/camera logs
-    + Pre-built frontend (no Node.js needed on NUC)
-    + Docker CE + Mosquitto 2.0 installed offline from bundled pool
-    + Customer mobile app API (Expo mobile app support)
+================================================================================
+  RELEASE NOTES — v2.0
+================================================================================
+
+  v2.0 (Ubuntu Server 24.04 LTS — internet-connected install):
+    + Ubuntu Server 24.04 LTS — reliable eMMC/NVMe/SSD support out of the box
+    + Interactive install wizard (network, admin, marina info, SMTP)
+    + Docker CE + Eclipse Mosquitto 2.0 MQTT broker
+    + FastAPI backend with JWT 2FA authentication
+    + React 18 admin dashboard (pre-built, served via nginx)
+    + Customer mobile app REST + WebSocket API
+    + SQLite WAL mode for safe concurrent access
+    + Systemd services with auto-restart on failure
+    + cloud-iot management CLI (start/stop/logs/config/ip)
     + External API gateway with webhook dispatch
+    + Real-time chat & support messaging (WebSocket)
+    + Push notifications via Expo push API
+    + Customer billing, contracts, service orders
 
-  Previous — v1.0 (.deb package):
+  v1.0 (.deb package — legacy):
     + FastAPI backend, React dashboard, MQTT, WebSocket
     + Session management, admin controls
     + Debian .deb package installer
 
 
 ================================================================================
-  Cloud IoT Marina Pedestal Management System — NUC Release v2.0
+  Cloud IoT Marina Pedestal Management System — v2.0
   Lika Digital — https://github.com/Lika-Digital/Cloud_IOT
 ================================================================================

@@ -128,17 +128,17 @@ async def scan_onvif(timeout: float = 3.0) -> list[dict]:
 async def check_tme_sensor(ip: str, port: int = 80) -> Optional[dict]:
     """
     Probe a single IP for a Papouch TME temperature sensor via HTTP /values.xml.
-    Returns {ip, port, temperature, unit} if found, None otherwise.
+    Returns a result dict if found, None otherwise.
     The TME returns XML: <root><sns><sn0><v>23.5</v><u>C</u>...
     """
     try:
         import httpx
         url = f"http://{ip}:{port}/values.xml"
-        async with httpx.AsyncClient(timeout=2.0) as client:
+        async with httpx.AsyncClient(timeout=1.5) as client:
             resp = await client.get(url)
-            if resp.status_code == 200 and "xml" in resp.headers.get("content-type", "").lower():
+            if resp.status_code == 200:
+                content_type = resp.headers.get("content-type", "")
                 xml = resp.text
-                # Papouch TME XML: <v>23.5</v><u>C</u>
                 temp_match = re.search(r"<v>([\-0-9.]+)</v>", xml)
                 unit_match = re.search(r"<u>([^<]+)</u>", xml)
                 if temp_match:
@@ -151,36 +151,37 @@ async def check_tme_sensor(ip: str, port: int = 80) -> Optional[dict]:
                         "temperature": float(temp_match.group(1)),
                         "unit": unit_match.group(1) if unit_match else "C",
                     }
-            # Fallback: check root page for "Papouch" or "TME" in response
-            url_root = f"http://{ip}:{port}/"
-            resp2 = await client.get(url_root)
-            if resp2.status_code == 200:
-                body = resp2.text.lower()
-                if "papouch" in body or "tme" in body or "thermometer" in body:
-                    return {
-                        "ip": ip,
-                        "port": port,
-                        "protocol": "http",
-                        "type": "temp_sensor_tme",
-                        "name": f"Papouch TME ({ip})",
-                        "temperature": None,
-                        "unit": "C",
-                    }
+                # Only check root page if /values.xml responded (device is alive)
+                # and the body looks like it could be a sensor
+                if "xml" in content_type or "papouch" in xml.lower() or "tme" in xml.lower():
+                    url_root = f"http://{ip}:{port}/"
+                    resp2 = await client.get(url_root)
+                    if resp2.status_code == 200:
+                        body = resp2.text.lower()
+                        if "papouch" in body or "tme" in body or "thermometer" in body:
+                            return {
+                                "ip": ip,
+                                "port": port,
+                                "protocol": "http",
+                                "type": "temp_sensor_tme",
+                                "name": f"Papouch TME ({ip})",
+                                "temperature": None,
+                                "unit": "C",
+                            }
     except Exception:
         pass
     return None
 
 
-async def scan_tme_sensors(subnet: str = "", timeout: float = 3.0) -> list[dict]:
+async def scan_tme_sensors(subnet: str = "", timeout: float = 5.0) -> list[dict]:
     """
     Scan the local /24 subnet for Papouch TME temperature sensors.
     Probes http://<ip>/values.xml on each host.
-    Returns [{ip, port, protocol, temperature, unit}].
+    The overall scan is bounded by `timeout` seconds.
     """
     if not subnet:
         subnet = get_local_subnet()
 
-    # Probe all 254 hosts concurrently with a semaphore to avoid flooding
     sem = asyncio.Semaphore(50)
 
     async def _probe(i: int):
@@ -189,11 +190,18 @@ async def scan_tme_sensors(subnet: str = "", timeout: float = 3.0) -> list[dict]
             return await check_tme_sensor(ip)
 
     tasks = [_probe(i) for i in range(1, 255)]
-    raw = await asyncio.gather(*tasks, return_exceptions=True)
-    results = [r for r in raw if isinstance(r, dict)]
+    try:
+        raw = await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("[TME] Subnet scan timed out after %.0fs", timeout)
+        raw = []
 
+    results = [r for r in raw if isinstance(r, dict)]
     for r in results:
-        logger.info(f"[TME] Found sensor at {r['ip']}: {r.get('temperature')}°{r.get('unit')}")
+        logger.info("[TME] Found sensor at %s: %s°%s", r["ip"], r.get("temperature"), r.get("unit"))
     return results
 
 
@@ -232,12 +240,22 @@ async def scan_all(subnet: str = "", timeout: float = 5.0) -> dict:
     if not subnet:
         subnet = get_local_subnet()
 
-    logger.info(f"[Discovery] Starting full scan on subnet {subnet}.0/24 (timeout={timeout}s)")
+    logger.info("[Discovery] Starting full scan on subnet %s.0/24 (timeout=%.0fs)", subnet, timeout)
 
     cameras_task      = asyncio.create_task(scan_onvif(timeout=min(timeout, 3.0)))
-    temp_sensors_task = asyncio.create_task(scan_tme_sensors(subnet=subnet, timeout=timeout))
+    temp_sensors_task = asyncio.create_task(scan_tme_sensors(subnet=subnet, timeout=timeout - 1))
 
-    cameras, temp_sensors = await asyncio.gather(cameras_task, temp_sensors_task)
+    try:
+        cameras, temp_sensors = await asyncio.wait_for(
+            asyncio.gather(cameras_task, temp_sensors_task),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("[Discovery] Overall scan timed out — returning partial results")
+        cameras      = cameras_task.result()      if cameras_task.done()      and not cameras_task.cancelled()      else []
+        temp_sensors = temp_sensors_task.result() if temp_sensors_task.done() and not temp_sensors_task.cancelled() else []
+        cameras_task.cancel()
+        temp_sensors_task.cancel()
 
     logger.info(f"[Discovery] Done — cameras: {len(cameras)}, temp sensors: {len(temp_sensors)}")
     return {

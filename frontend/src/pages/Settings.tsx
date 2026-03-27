@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import ConfigPanel from '../components/config/ConfigPanel'
 import FieldHelp from '../components/config/FieldHelp'
-import PedestalConfigForm from '../components/config/PedestalConfigForm'
+import DevicesPanel from '../components/config/DevicesPanel'
 import { getPedestals, configurePedestals } from '../api'
 import { useStore, type Pedestal } from '../store'
 import { authListUsers, authCreateUser, authDeleteUser, authPatchUser, type UserResponse } from '../api/auth'
@@ -112,20 +112,8 @@ export default function Settings() {
           {/* Pedestal mode config */}
           <ConfigPanel />
 
-          {/* Per-pedestal extended configuration */}
-          {pedestals.length > 0 && (
-            <div className="card space-y-3">
-              <h3 className="font-semibold text-white">Pedestal Configuration</h3>
-              <p className="text-sm text-gray-400">
-                Configure site IDs, MQTT credentials, camera settings, and sensors for each pedestal.
-              </p>
-              <div className="space-y-2">
-                {pedestals.map((p) => (
-                  <PedestalConfigForm key={p.id} pedestal={p} />
-                ))}
-              </div>
-            </div>
-          )}
+          {/* Per-pedestal device configuration */}
+          <DevicesPanel />
 
           {/* SMTP / Communication */}
           <SmtpSettingsPanel />

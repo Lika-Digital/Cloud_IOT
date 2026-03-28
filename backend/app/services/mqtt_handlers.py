@@ -39,6 +39,25 @@ def _hw_error(source: str, message: str, details: str | None = None):
         pass
 
 
+def _ensure_pedestal(db, pedestal_id: int):
+    """
+    Auto-create a Pedestal row the first time any MQTT message arrives for it.
+    Called inside an open DB session — caller must commit.
+    """
+    from ..models.pedestal import Pedestal
+    if not db.get(Pedestal, pedestal_id):
+        db.add(Pedestal(
+            id=pedestal_id,
+            name=f"Pedestal {pedestal_id}",
+            location="",
+            data_mode="real",
+            initialized=False,
+            mobile_enabled=False,
+        ))
+        db.commit()
+        logger.info("Auto-created Pedestal %d from first MQTT message", pedestal_id)
+
+
 async def handle_message(topic: str, payload: str):
     try:
         if m := SOCKET_STATUS_RE.match(topic):
@@ -190,6 +209,7 @@ async def _handle_heartbeat(pedestal_id: int, payload: str):
             from ..models.pedestal_config import PedestalConfig
             db = SessionLocal()
             try:
+                _ensure_pedestal(db, pedestal_id)
                 cfg = db.query(PedestalConfig).filter(
                     PedestalConfig.pedestal_id == pedestal_id
                 ).first()
@@ -248,6 +268,7 @@ async def _handle_auto_register(pedestal_id: int, payload: str):
         from ..models.pedestal_config import PedestalSensor
         db = SessionLocal()
         try:
+            _ensure_pedestal(db, pedestal_id)
             existing = db.query(PedestalSensor).filter(
                 PedestalSensor.pedestal_id == pedestal_id,
                 PedestalSensor.mqtt_topic == mqtt_topic,

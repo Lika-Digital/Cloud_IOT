@@ -5,7 +5,11 @@ import DevicesPanel from '../components/config/DevicesPanel'
 import { getPedestals, configurePedestals } from '../api'
 import { useStore, type Pedestal } from '../store'
 import { authListUsers, authCreateUser, authDeleteUser, authPatchUser, type UserResponse } from '../api/auth'
-import { getSmtpConfig, updateSmtpConfig, testSmtp, type SmtpConfig } from '../api/settings'
+import {
+  getSmtpConfig, updateSmtpConfig, testSmtp, type SmtpConfig,
+  getNetworkInfo, type NetworkInfo,
+  getSnmpConfig, updateSnmpConfig, type SnmpConfig,
+} from '../api/settings'
 
 export default function Settings() {
   const { setPedestals } = useStore()
@@ -124,6 +128,13 @@ export default function Settings() {
 
         {/* Right column — info */}
         <div className="space-y-4">
+
+          {/* Application IP */}
+          <NetworkInfoPanel />
+
+          {/* SNMP Trap Config */}
+          <SnmpConfigPanel />
+
           <div className="card">
             <h3 className="font-semibold text-white mb-3">Quick Start</h3>
             <ol className="text-sm text-gray-400 space-y-2 list-decimal list-inside">
@@ -163,6 +174,118 @@ export default function Settings() {
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Network Info Panel ─────────────────────────────────────────────────────────
+
+function NetworkInfoPanel() {
+  const [info, setInfo] = useState<NetworkInfo | null>(null)
+
+  useEffect(() => {
+    getNetworkInfo().then(setInfo).catch(() => {})
+  }, [])
+
+  return (
+    <div className="card">
+      <h3 className="font-semibold text-white mb-3">Application Network Address</h3>
+      <p className="text-xs text-gray-400 mb-3">
+        Auto-detected LAN IP of this machine. Use this address in the Pedestal Test Tool
+        and on the Arduino / MQTT broker configuration.
+      </p>
+      {info ? (
+        <div className="space-y-2 text-sm">
+          <div className="flex justify-between items-center bg-gray-800 rounded-lg px-3 py-2">
+            <span className="text-gray-400">Host IP</span>
+            <span className="font-mono text-blue-400 font-bold text-base">{info.lan_ip}</span>
+          </div>
+          <div className="flex justify-between items-center bg-gray-800 rounded-lg px-3 py-2">
+            <span className="text-gray-400">MQTT Broker port</span>
+            <span className="font-mono text-green-400">{info.mqtt_port}</span>
+          </div>
+          <div className="flex justify-between items-center bg-gray-800 rounded-lg px-3 py-2">
+            <span className="text-gray-400">SNMP Trap port</span>
+            <span className="font-mono text-yellow-400">{info.snmp_trap_port}</span>
+          </div>
+        </div>
+      ) : (
+        <p className="text-sm text-gray-500">Detecting…</p>
+      )}
+    </div>
+  )
+}
+
+// ── SNMP Trap Config Panel ─────────────────────────────────────────────────────
+
+function SnmpConfigPanel() {
+  const defaultCfg: SnmpConfig = {
+    enabled: true, port: 1620, community: 'public',
+    temp_oid: '1.3.6.1.4.1.18248.20.1.2.1.1.2.1', pedestal_id: 1,
+  }
+  const [cfg, setCfg] = useState<SnmpConfig>(defaultCfg)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg]       = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  useEffect(() => {
+    getSnmpConfig().then(setCfg).catch(() => {})
+  }, [])
+
+  const handleSave = async () => {
+    setSaving(true); setMsg(null)
+    try {
+      await updateSnmpConfig(cfg)
+      setMsg({ type: 'success', text: 'SNMP config saved.' })
+    } catch {
+      setMsg({ type: 'error', text: 'Failed to save SNMP config.' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const field = (label: string, value: string | number, key: keyof SnmpConfig, type = 'text') => (
+    <div>
+      <label className="block text-xs text-gray-400 mb-1">{label}</label>
+      <input
+        type={type}
+        value={value as string}
+        onChange={(e) => setCfg({ ...cfg, [key]: type === 'number' ? Number(e.target.value) : e.target.value })}
+        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm font-mono"
+      />
+    </div>
+  )
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="font-semibold text-white">SNMP Trap Receiver</h3>
+        <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+          <input
+            type="checkbox" checked={cfg.enabled}
+            onChange={(e) => setCfg({ ...cfg, enabled: e.target.checked })}
+            className="accent-blue-500"
+          />
+          Enabled
+        </label>
+      </div>
+      <p className="text-xs text-gray-400 mb-4">
+        Listens for UDP SNMP traps from IP temperature sensors (e.g. Papouch TME).
+        Default port 1620 (use 162 with root on NUC).
+      </p>
+      <div className="space-y-3">
+        {field('UDP Listen Port', cfg.port, 'port', 'number')}
+        {field('Community String', cfg.community, 'community')}
+        {field('Temperature OID', cfg.temp_oid, 'temp_oid')}
+        {field('Target Pedestal ID', cfg.pedestal_id, 'pedestal_id', 'number')}
+      </div>
+      {msg && (
+        <div className={`mt-3 text-sm px-3 py-2 rounded-lg ${msg.type === 'success' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'}`}>
+          {msg.text}
+        </div>
+      )}
+      <button className="btn-primary w-full mt-4" onClick={handleSave} disabled={saving}>
+        {saving ? 'Saving…' : 'Save SNMP Config'}
+      </button>
     </div>
   )
 }

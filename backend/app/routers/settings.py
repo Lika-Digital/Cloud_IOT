@@ -1,6 +1,7 @@
-"""Admin settings endpoints: SMTP configuration."""
+"""Admin settings endpoints: SMTP, SNMP trap, network info."""
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..auth.user_database import get_user_db
@@ -82,6 +83,51 @@ def update_smtp(
     cfg.updated_at = datetime.utcnow()
     db.commit()
     return {"message": "SMTP settings saved"}
+
+
+@router.get("/network-info")
+def get_network_info(_: User = Depends(require_admin)):
+    """Return auto-detected LAN IP of this machine (NUC or dev PC)."""
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        ip = "127.0.0.1"
+    return {
+        "lan_ip": ip,
+        "mqtt_port": 1883,
+        "snmp_trap_port": _get_snmp_config()["port"],
+    }
+
+
+class SnmpConfigUpdate(BaseModel):
+    enabled:     bool   = True
+    port:        int    = 1620
+    community:   str    = "public"
+    temp_oid:    str    = "1.3.6.1.4.1.18248.20.1.2.1.1.2.1"
+    pedestal_id: int    = 1
+
+
+def _get_snmp_config() -> dict:
+    from ..services.snmp_trap_service import get_config
+    return get_config()
+
+
+@router.get("/snmp")
+def get_snmp_config(_: User = Depends(require_admin)):
+    """Return current SNMP trap receiver configuration."""
+    return _get_snmp_config()
+
+
+@router.put("/snmp")
+def update_snmp_config(body: SnmpConfigUpdate, _: User = Depends(require_admin)):
+    """Update SNMP trap receiver configuration at runtime (no restart needed)."""
+    from ..services.snmp_trap_service import update_config
+    updated = update_config(body.model_dump())
+    return {"message": "SNMP config updated", "config": updated}
 
 
 @router.post("/smtp/test")

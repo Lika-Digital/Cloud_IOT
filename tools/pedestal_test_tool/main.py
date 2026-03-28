@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Pedestal Test Tool  v1.0
+Pedestal Test Tool  v1.1
 ─────────────────────────────────────────────────────────────────────────────
 Simulates two networked devices for Cloud IoT NUC testing:
 
   1. Arduino OPTA  — MQTT client that publishes sensor/status data and
                      receives control commands from the NUC backend.
-  2. IP Temp Sensor — separate MQTT connection that periodically publishes
-                      cabinet temperature readings.
+  2. IP Temp Sensor — sends SNMP v2c Traps via UDP to the NUC SNMP trap
+                     receiver (does NOT use MQTT — raw UDP on port 1620).
 
 Run:   python main.py
 Deps:  pip install paho-mqtt          (only external dependency)
@@ -15,6 +15,8 @@ Deps:  pip install paho-mqtt          (only external dependency)
 """
 import json
 import queue
+import socket
+import struct
 import time
 import tkinter as tk
 from tkinter import ttk, scrolledtext
@@ -27,6 +29,81 @@ except ImportError:
     print("paho-mqtt not found — installing …")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "paho-mqtt"])
     import paho.mqtt.client as mqtt
+
+
+# ── Minimal SNMP v2c Trap builder (raw UDP, no pysnmp needed) ─────────────────
+
+def _ber_len(n: int) -> bytes:
+    if n <= 127:
+        return bytes([n])
+    elif n <= 255:
+        return bytes([0x81, n])
+    else:
+        return bytes([0x82, n >> 8, n & 0xFF])
+
+
+def _tlv(tag: int, content: bytes) -> bytes:
+    return bytes([tag]) + _ber_len(len(content)) + content
+
+
+def _encode_int(v: int) -> bytes:
+    if v == 0:
+        return b'\x00'
+    parts = []
+    while v > 0:
+        parts.insert(0, v & 0xFF)
+        v >>= 8
+    if parts[0] & 0x80:
+        parts.insert(0, 0x00)
+    return bytes(parts)
+
+
+def _encode_oid(oid_str: str) -> bytes:
+    parts = list(map(int, oid_str.strip().split('.')))
+    data = bytes([40 * parts[0] + parts[1]])
+    for p in parts[2:]:
+        if p == 0:
+            data += b'\x00'
+        else:
+            enc: list[int] = []
+            while p:
+                enc.insert(0, p & 0x7F)
+                p >>= 7
+            for i, b in enumerate(enc):
+                data += bytes([b | (0x80 if i < len(enc) - 1 else 0)])
+    return data
+
+
+def build_snmp_v2c_trap(community: str, temp_oid: str, temperature: float) -> bytes:
+    """
+    Build a minimal SNMPv2c Trap PDU containing a single temperature OID/value.
+    The value is encoded as OctetString ASCII (e.g. "23.5") — most NUC parsers
+    accept this; Papouch TME sensors use the same encoding.
+    """
+    # Well-known OIDs
+    SYSUPTIME_OID  = "1.3.6.1.2.1.1.3.0"
+    SNMPTRAPOID    = "1.3.6.1.6.3.1.1.4.1.0"
+    COLDSTART_OID  = "1.3.6.1.6.3.1.1.5.1"
+
+    def varbind(oid_str: str, val_tag: int, val_bytes: bytes) -> bytes:
+        return _tlv(0x30, _tlv(0x06, _encode_oid(oid_str)) + _tlv(val_tag, val_bytes))
+
+    vb1 = varbind(SYSUPTIME_OID,  0x43, _encode_int(0))           # sysUpTime = 0
+    vb2 = varbind(SNMPTRAPOID,    0x06, _encode_oid(COLDSTART_OID))  # snmpTrapOID
+    vb3 = varbind(temp_oid,       0x04, str(round(temperature, 1)).encode('ascii'))
+
+    var_bind_list = _tlv(0x30, vb1 + vb2 + vb3)
+    pdu = _tlv(0xA7,
+               _tlv(0x02, _encode_int(1)) +   # request-id
+               _tlv(0x02, _encode_int(0)) +   # error-status
+               _tlv(0x02, _encode_int(0)) +   # error-index
+               var_bind_list)
+
+    message = _tlv(0x30,
+                   _tlv(0x02, _encode_int(1)) +           # version = 1 (v2c)
+                   _tlv(0x04, community.encode('ascii')) + # community
+                   pdu)
+    return message
 
 # ─── Colour palette (dark theme) ─────────────────────────────────────────────
 BG        = "#1e1e2e"
@@ -155,7 +232,7 @@ class PedestalTestTool(tk.Tk):
 
         self._q       = queue.Queue()
         self._arduino = MQTTDevice("Arduino", self._q)
-        self._tempsens = MQTTDevice("TempSensor", self._q)
+        # Temp sensor uses raw UDP SNMP — no MQTT connection
 
         self._hb_job   = None   # heartbeat scheduler
         self._temp_job = None   # temperature auto-send scheduler
@@ -547,10 +624,10 @@ class PedestalTestTool(tk.Tk):
     # ─────────────────────────────────────────────────────────────────────────
 
     def _build_tempsensor_section(self, parent):
-        tk.Label(parent, text="🌡  IP Temperature Sensor",
+        tk.Label(parent, text="🌡  IP Temperature Sensor  (SNMP)",
                  bg=BG, fg=FG, font=("Consolas", 13, "bold")
                  ).pack(anchor=tk.W, padx=10, pady=(8, 2))
-        tk.Label(parent, text="Separate networked device — independent MQTT connection",
+        tk.Label(parent, text="Sends SNMP v2c Traps via UDP — separate device, no MQTT",
                  bg=BG, fg=DIM, font=("Consolas", 8)
                  ).pack(anchor=tk.W, padx=10, pady=(0, 6))
 
@@ -559,40 +636,28 @@ class PedestalTestTool(tk.Tk):
 
         pad = dict(padx=12, pady=6)
 
-        # Status
+        # Status (ready/sending indicator — no persistent connection for UDP)
         sr = tk.Frame(frame, bg=PANEL_BG)
         sr.pack(fill=tk.X, **pad)
-        self._ts_dot = tk.Label(sr, text=" ●", bg=PANEL_BG, fg=RED,
+        self._ts_dot = tk.Label(sr, text=" ●", bg=PANEL_BG, fg=DIM,
                                  font=("Consolas", 15))
         self._ts_dot.pack(side=tk.LEFT)
-        self._ts_status = tk.Label(sr, text="Disconnected", bg=PANEL_BG,
-                                    fg=RED, font=("Consolas", 9))
+        self._ts_status = tk.Label(sr, text="Ready (UDP — no persistent connection)",
+                                    bg=PANEL_BG, fg=DIM, font=("Consolas", 9))
         self._ts_status.pack(side=tk.LEFT, padx=6)
 
         _sep(frame)
 
-        # Config
+        # SNMP Config
         cfg = tk.Frame(frame, bg=PANEL_BG)
         cfg.pack(fill=tk.X, **pad)
-        self._ts_host     = _cfg_row(cfg, "Broker Host:",       "192.168.1.100", 0)
-        self._ts_port     = _cfg_row(cfg, "Broker Port:",       "1883",          1)
-        self._ts_pid      = _cfg_row(cfg, "Pedestal ID:",       "1",             2)
-        self._ts_dev_ip   = _cfg_row(cfg, "Sensor Device IP:",  "192.168.1.50",  3)
-        self._ts_interval = _cfg_row(cfg, "Send interval (ms):", "10000",        4)
-
-        _sep(frame)
-
-        # Connect buttons
-        br = tk.Frame(frame, bg=PANEL_BG)
-        br.pack(fill=tk.X, **pad)
-        tk.Button(br, text="▶  Connect", bg=GREEN, fg="#1e1e2e",
-                  font=("Consolas", 10, "bold"), relief=tk.FLAT,
-                  padx=16, pady=7, command=self._ts_connect
-                  ).pack(side=tk.LEFT, padx=(0, 10))
-        tk.Button(br, text="■  Disconnect", bg=BTN_BG, fg=FG,
-                  font=("Consolas", 10), relief=tk.FLAT,
-                  padx=16, pady=7, command=self._ts_disconnect
-                  ).pack(side=tk.LEFT)
+        self._ts_host     = _cfg_row(cfg, "NUC / Target Host:", "localhost",      0)
+        self._ts_snmp_port = _cfg_row(cfg, "SNMP Trap Port:",   "1620",           1)
+        self._ts_pid      = _cfg_row(cfg, "Pedestal ID:",       "1",              2)
+        self._ts_community = _cfg_row(cfg, "Community:",        "public",         3)
+        self._ts_oid      = _cfg_row(cfg, "Temperature OID:",
+                                     "1.3.6.1.4.1.18248.20.1.2.1.1.2.1",         4)
+        self._ts_interval = _cfg_row(cfg, "Auto-send (ms):",    "10000",          5)
 
         _sep(frame)
 
@@ -779,32 +844,53 @@ class PedestalTestTool(tk.Tk):
     # ═════════════════════════════════════════════════════════════════════════
 
     def _ts_connect(self):
-        dev_ip = self._ts_dev_ip.get().strip()
-        self._tempsens.connect(
-            host=self._ts_host.get().strip(),
-            port=int(self._ts_port.get()),
-            topics=[],
-            client_id=f"ptt-tempsensor-{dev_ip.replace('.', '-')}",
-        )
+        # SNMP uses UDP — no persistent connection. Just validate config.
+        try:
+            int(self._ts_snmp_port.get())
+            int(self._ts_pid.get())
+            self._ts_dot.config(fg=GREEN)
+            self._ts_status.config(fg=GREEN, text="Config OK — ready to send traps")
+            self._append_log(f"[{datetime.now().strftime('%H:%M:%S')}] TempSensor    SNMP ready → "
+                             f"{self._ts_host.get()}:{self._ts_snmp_port.get()}", err=False)
+        except ValueError:
+            self._ts_dot.config(fg=RED)
+            self._ts_status.config(fg=RED, text="Invalid port or pedestal ID")
 
     def _ts_disconnect(self):
         self._stop_temp_auto()
-        self._tempsens.disconnect()
+        self._ts_dot.config(fg=DIM)
+        self._ts_status.config(fg=DIM, text="Ready (UDP — no persistent connection)")
 
     def _send_temperature(self):
-        pid = self._ts_pid.get()
         try:
-            val = float(self._temp_val.get())
+            val       = float(self._temp_val.get())
+            host      = self._ts_host.get().strip()
+            port      = int(self._ts_snmp_port.get())
+            community = self._ts_community.get().strip()
+            oid       = self._ts_oid.get().strip()
         except ValueError:
             return
+
         self._temp_alarm_lbl.config(text="⚠ ALARM!" if val > 50 else "")
-        self._tempsens.publish(
-            f"pedestal/{pid}/sensors/temperature",
-            json.dumps({"value": round(val, 1)}),
-        )
-        self._ts_last_lbl.config(
-            text=f"{val:.1f}°C  at  {datetime.now().strftime('%H:%M:%S')}"
-        )
+        try:
+            pdu = build_snmp_v2c_trap(community, oid, val)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.sendto(pdu, (host, port))
+            sock.close()
+            ts = datetime.now().strftime('%H:%M:%S')
+            self._ts_last_lbl.config(text=f"{val:.1f}°C  at  {ts}")
+            self._ts_dot.config(fg=GREEN)
+            self._ts_status.config(fg=GREEN, text=f"Sent {val:.1f}°C at {ts}")
+            self._append_log(
+                f"[{ts}] TempSensor    → SNMP Trap UDP {host}:{port}  OID={oid.split('.')[-1]}…  val={val:.1f}°C",
+                err=False,
+            )
+        except Exception as exc:
+            self._ts_dot.config(fg=RED)
+            self._ts_status.config(fg=RED, text=f"Send error: {exc}")
+            self._append_log(
+                f"[{datetime.now().strftime('%H:%M:%S')}] TempSensor    [ERROR] {exc}", err=True
+            )
 
     def _ts_auto_toggle(self):
         if self._ts_auto_var.get():
@@ -860,10 +946,6 @@ class PedestalTestTool(tk.Tk):
                             self._start_heartbeat()
                         else:
                             self._stop_heartbeat()
-                    else:
-                        self._set_conn_status(
-                            self._ts_dot, self._ts_status, ok
-                        )
 
                 elif kind == "msg" and name == "Arduino":
                     topic, payload = event[2], event[3]
@@ -908,7 +990,6 @@ class PedestalTestTool(tk.Tk):
         self._stop_heartbeat()
         self._stop_temp_auto()
         self._arduino.disconnect()
-        self._tempsens.disconnect()
         self.destroy()
 
 

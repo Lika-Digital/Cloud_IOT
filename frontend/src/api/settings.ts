@@ -36,3 +36,26 @@ export const updateSmtpConfig = (data: Omit<SmtpConfig, 'configured' | 'source'>
 
 export const testSmtp = (): Promise<{ message: string }> =>
   api.post<{ message: string }>('/admin/settings/smtp/test').then((r) => r.data)
+
+export interface NetworkInfo {
+  lan_ip: string
+  mqtt_port: number
+  snmp_trap_port: number
+}
+
+export const getNetworkInfo = (): Promise<NetworkInfo> =>
+  api.get<NetworkInfo>('/admin/settings/network-info').then((r) => r.data)
+
+export interface SnmpConfig {
+  enabled: boolean
+  port: number
+  community: string
+  temp_oid: string
+  pedestal_id: number
+}
+
+export const getSnmpConfig = (): Promise<SnmpConfig> =>
+  api.get<SnmpConfig>('/admin/settings/snmp').then((r) => r.data)
+
+export const updateSnmpConfig = (data: SnmpConfig): Promise<{ message: string; config: SnmpConfig }> =>
+  api.put('/admin/settings/snmp', data).then((r) => r.data)

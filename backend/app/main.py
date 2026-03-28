@@ -232,13 +232,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log_error("system", "startup", f"Database connectivity FAILED on startup: {e}", exc=e)
 
-    # Seed default pedestal
+    # Pedestals are created automatically on first MQTT heartbeat/register message.
     db = SessionLocal()
     try:
-        if not db.query(Pedestal).first():
-            db.add(Pedestal(name="Pedestal 1", location="Marina Berth A", data_mode="synthetic"))
-            db.commit()
-            logger.info("Created default pedestal")
         pedestal_count = db.query(Pedestal).count()
     finally:
         db.close()
@@ -366,6 +362,10 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_event_loop()
     mqtt_service.start(loop)
 
+    # Start SNMP trap receiver (IP temperature sensors)
+    from .services import snmp_trap_service
+    await snmp_trap_service.start(loop)
+
     # Register webhook broadcast hook for external API push
     from .services.webhook_service import dispatch_webhook
     ws_manager.add_broadcast_hook(dispatch_webhook)
@@ -393,6 +393,7 @@ async def lifespan(app: FastAPI):
     berth_task.cancel()
     camera_task.cancel()
     mqtt_service.stop()
+    snmp_trap_service.stop()
     simulator_manager.stop()
     try:
         log_info("system", "main", "Application stopped cleanly")

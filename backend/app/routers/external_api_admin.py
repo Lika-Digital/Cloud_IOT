@@ -60,7 +60,7 @@ def _get_or_create_config(db: DBSession) -> ExternalApiConfig:
 def _config_to_dict(cfg: ExternalApiConfig) -> dict:
     return {
         "id":                   cfg.id,
-        "api_key":              cfg.api_key,
+        "api_key":              ("***" if cfg.api_key else None),
         "allowed_endpoints":    json.loads(cfg.allowed_endpoints or "[]"),
         "webhook_url":          cfg.webhook_url,
         "allowed_events":       json.loads(cfg.allowed_events or "[]"),
@@ -166,7 +166,7 @@ def update_config(
 @router.post("/config/rotate-key")
 def rotate_key(
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_admin),
+    admin: User = Depends(require_admin),
 ):
     """Generate a new external API JWT and store it. Returns the new key."""
     cfg = _get_or_create_config(db)
@@ -175,7 +175,14 @@ def rotate_key(
     cfg.updated_at = datetime.utcnow()
     db.commit()
     from ..services.webhook_service import invalidate_cache
+    from ..services.error_log_service import log_warning
     invalidate_cache()
+    try:
+        log_warning("security", "ext_api/rotate-key",
+                    f"External API key rotated by {admin.email}",
+                    details="Previous key invalidated — update all integrations")
+    except Exception:
+        pass
     return {"api_key": new_key}
 
 

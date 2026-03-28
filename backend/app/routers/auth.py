@@ -1,4 +1,7 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Request
+
+logger = logging.getLogger(__name__)
 from sqlalchemy.orm import Session
 
 from ..auth.user_database import get_user_db
@@ -52,8 +55,8 @@ def login(request: Request, body: LoginRequest, db: Session = Depends(get_user_d
                     details=f"target={body.email}",
                     deduplicate=False,
                 )
-        except Exception:
-            pass
+        except Exception as _sec_exc:
+            logger.warning("Security monitor failed during login attempt from %s: %s", client_ip, _sec_exc)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",

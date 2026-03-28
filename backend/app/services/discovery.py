@@ -197,6 +197,13 @@ async def scan_tme_sensors(subnet: str = "", timeout: float = 5.0) -> list[dict]
         )
     except asyncio.TimeoutError:
         logger.warning("[TME] Subnet scan timed out after %.0fs", timeout)
+        try:
+            from .error_log_service import log_warning
+            log_warning("hw", "discovery/tme",
+                        f"TME subnet scan timed out after {timeout:.0f}s — no sensors found",
+                        details=f"subnet={subnet}")
+        except Exception:
+            pass
         raw = []
 
     results = [r for r in raw if isinstance(r, dict)]
@@ -256,6 +263,13 @@ async def scan_all(subnet: str = "", timeout: float = 5.0) -> dict:
         temp_sensors = temp_sensors_task.result() if temp_sensors_task.done() and not temp_sensors_task.cancelled() else []
         cameras_task.cancel()
         temp_sensors_task.cancel()
+        try:
+            from .error_log_service import log_warning
+            log_warning("hw", "discovery/scan",
+                        f"Full device scan timed out after {timeout:.0f}s — partial results returned",
+                        details=f"subnet={subnet} cameras={len(cameras)} sensors={len(temp_sensors)}")
+        except Exception:
+            pass
 
     logger.info(f"[Discovery] Done — cameras: {len(cameras)}, temp sensors: {len(temp_sensors)}")
     return {

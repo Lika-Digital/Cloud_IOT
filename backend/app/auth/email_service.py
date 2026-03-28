@@ -35,8 +35,13 @@ def _get_smtp_config() -> dict | None:
                 }
         finally:
             db.close()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.error("Failed to load SMTP config from DB: %s", exc)
+        try:
+            from ..services.error_log_service import log_error
+            log_error("system", "email_service", f"SMTP config DB read failed: {exc}")
+        except Exception:
+            pass
 
     # Fallback: .env settings
     if settings.smtp_host:
@@ -88,7 +93,14 @@ def send_otp_email(to_email: str, otp_code: str) -> None:
         logger.info("OTP email sent to %s", to_email)
     except Exception as exc:
         logger.error("Failed to send OTP email to %s: %s", to_email, exc)
-        # Still print to console so admin can proceed
+        try:
+            from ..services.error_log_service import log_error
+            log_error("system", "email_service",
+                      f"OTP email delivery failed for {to_email}: {exc}",
+                      details=f"smtp_host={cfg.get('host')}:{cfg.get('port')}")
+        except Exception:
+            pass
+        # Still print to console so admin can retrieve OTP
         print(f"\n  [EMAIL FAILED] OTP for {to_email}: {otp_code}\n")
 
 

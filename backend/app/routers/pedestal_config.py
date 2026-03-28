@@ -74,12 +74,12 @@ def _config_to_dict(cfg: PedestalConfig) -> dict:
         "pedestal_uid": cfg.pedestal_uid,
         "pedestal_model": cfg.pedestal_model,
         "mqtt_username": cfg.mqtt_username,
-        "mqtt_password": cfg.mqtt_password,
+        "mqtt_password": "***" if cfg.mqtt_password else None,
         "opta_client_id": cfg.opta_client_id,
         "camera_stream_url": cfg.camera_stream_url,
         "camera_fqdn": cfg.camera_fqdn,
         "camera_username": cfg.camera_username,
-        "camera_password": cfg.camera_password,
+        "camera_password": "***" if cfg.camera_password else None,
         "sensor_config_mode": cfg.sensor_config_mode,
         "mdns_discovered": json.loads(cfg.mdns_discovered) if cfg.mdns_discovered else [],
         "snmp_discovered": json.loads(cfg.snmp_discovered) if cfg.snmp_discovered else [],
@@ -142,12 +142,43 @@ def update_config(
         raise HTTPException(status_code=404, detail="Pedestal not found")
     cfg = _get_or_create_config(db, pedestal_id)
 
-    for field, value in body.model_dump(exclude_none=True).items():
+    updated_fields = body.model_dump(exclude_none=True)
+    # Never store the sentinel mask value — skip if UI echoed it back
+    for secret_field in ("mqtt_password", "camera_password"):
+        if updated_fields.get(secret_field) == "***":
+            updated_fields.pop(secret_field)
+
+    for field, value in updated_fields.items():
         setattr(cfg, field, value)
     cfg.updated_at = datetime.utcnow()
 
     db.commit()
     db.refresh(cfg)
+
+    # Audit log — list which config keys changed (no values for secrets)
+    try:
+        from ..services.error_log_service import log_warning
+        safe_fields = [
+            f for f in updated_fields
+            if f not in ("mqtt_password", "camera_password")
+        ]
+        secret_fields = [
+            f for f in updated_fields
+            if f in ("mqtt_password", "camera_password")
+        ]
+        detail_parts = []
+        if safe_fields:
+            detail_parts.append("fields=" + ",".join(safe_fields))
+        if secret_fields:
+            detail_parts.append("credentials_updated=" + ",".join(secret_fields))
+        log_warning(
+            "system", f"pedestal_config/pedestal_{pedestal_id}",
+            f"Pedestal {pedestal_id} configuration updated",
+            details="; ".join(detail_parts) if detail_parts else None,
+        )
+    except Exception:
+        pass
+
     return _config_to_dict(cfg)
 
 
@@ -261,8 +292,9 @@ async def discover_snmp(
 @router.get("/api/pedestals/health")
 def get_health(
     db: Session = Depends(get_db),
+    _user = Depends(require_admin),
 ):
-    """Public endpoint — returns health status for all pedestals."""
+    """Returns hardware health status for all pedestals (admin only)."""
     configs = db.query(PedestalConfig).all()
     result = {}
     for cfg in configs:

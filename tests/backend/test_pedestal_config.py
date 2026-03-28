@@ -57,11 +57,14 @@ def test_update_camera_settings(client, auth_headers):
     assert data["camera_stream_url"] == "rtsp://192.168.1.200:554/live"
     assert data["camera_username"] == "admin"
     assert data["camera_fqdn"] == "cam.marina.local"
+    # Password must be masked in response — never returned in plaintext
+    assert data["camera_password"] == "***"
 
     # Verify it persisted
     r2 = client.get("/api/admin/pedestal/1/config", headers=auth_headers)
     assert r2.status_code == 200
     assert r2.json()["camera_stream_url"] == "rtsp://192.168.1.200:554/live"
+    assert r2.json()["camera_password"] == "***"
 
 
 def test_update_camera_url_cleared(client, auth_headers):
@@ -93,6 +96,8 @@ def test_update_mqtt_settings(client, auth_headers):
     data = r.json()
     assert data["mqtt_username"] == "iotuser"
     assert data["opta_client_id"] == "opta-berth-3"
+    # MQTT password must be masked in response
+    assert data["mqtt_password"] == "***"
 
 
 def test_update_temp_sensor_settings(client, auth_headers):
@@ -254,20 +259,24 @@ def test_toggle_ai_enabled_off(client, auth_headers):
 
 # ─── Health endpoint ──────────────────────────────────────────────────────────
 
-def test_health_endpoint_public(client):
-    """/api/pedestals/health is publicly accessible without auth."""
+def test_health_requires_admin(client):
+    """/api/pedestals/health requires authentication (returns 401 or 403)."""
     r = client.get("/api/pedestals/health")
+    assert r.status_code in (401, 403)
+
+
+def test_health_endpoint_admin(client, auth_headers):
+    """/api/pedestals/health is accessible with admin auth."""
+    r = client.get("/api/pedestals/health", headers=auth_headers)
     assert r.status_code == 200
     data = r.json()
-    # Returns a dict keyed by pedestal_id (as string in JSON)
     assert isinstance(data, dict)
 
 
-def test_health_contains_expected_fields(client):
+def test_health_contains_expected_fields(client, auth_headers):
     """Health response has all required monitoring fields."""
-    r = client.get("/api/pedestals/health")
+    r = client.get("/api/pedestals/health", headers=auth_headers)
     assert r.status_code == 200
-    # After at least one config access there should be an entry
     for _pid, health in r.json().items():
         assert "opta_connected" in health
         assert "camera_reachable" in health

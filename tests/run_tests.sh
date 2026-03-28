@@ -7,7 +7,8 @@
 #    2. Bandit        — Python security scan (critical/high blocks commit)
 #    3. Semgrep       — Python + TS bug/security patterns (critical blocks)
 #    4. ESLint        — TypeScript/React lint (errors block commit)
-#    [5. CodeRabbit]  — reserved, runs via pre-push hook when configured
+#
+#  Pre-push gate also runs Playwright E2E (tests/playwright_e2e.sh).
 #
 #  Usage: bash tests/run_tests.sh [pytest extra args]
 #  Called automatically by the pre-commit hook.

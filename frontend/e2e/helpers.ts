@@ -14,7 +14,7 @@ export async function loginAs(page: Page, role: 'admin' | 'monitor' = 'admin') {
 
   await page.addInitScript((args) => {
     // Zustand persist key for authStore
-    localStorage.setItem('auth-storage', JSON.stringify({
+    localStorage.setItem('auth-store', JSON.stringify({
       state: {
         token: args.jwt,
         role: args.role,
@@ -76,7 +76,7 @@ export async function mockApi(page: Page) {
   await page.route('**/api/contracts/**', route => route.fulfill({ json: [] }))
 
   // Chat unread
-  await page.route('**/api/chat/unread-count', route => route.fulfill({ json: { count: 0 } }))
+  await page.route('**/api/chat/unread-count', route => route.fulfill({ json: { unread_customers: 0 } }))
 
   // Error logs
   await page.route('**/api/system/errors**', route => route.fulfill({ json: { items: [], total: 0 } }))

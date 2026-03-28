@@ -1,37 +1,99 @@
 import { test, expect } from '@playwright/test'
 import { loginAs, mockApi } from './helpers'
 
-test.describe('Sessions — active session display', () => {
+// Helper: navigate to the pedestal detail view
+async function goToPedestalView(page: Parameters<typeof loginAs>[0]) {
+  await loginAs(page)
+  await mockApi(page)
+  await page.goto('/dashboard')
+  await page.getByText('Berth A-01').click()
+  // Wait for PedestalView to render (pedestal image zone buttons appear)
+  await expect(page.getByText('Quick Status')).toBeVisible()
+}
+
+test.describe('Sessions — Quick Status overview (PedestalView)', () => {
   test.beforeEach(async ({ page }) => {
-    await loginAs(page)
-    await mockApi(page)
-    await page.goto('/dashboard')
-    // Enter pedestal detail view
-    await page.getByText('Berth A-01').click()
+    await goToPedestalView(page)
   })
 
-  test('shows active sessions section', async ({ page }) => {
-    // Active session from fixture: session #101, Socket 2
-    await expect(page.getByText(/Active Sessions/)).toBeVisible()
+  test('shows Quick Status section after entering pedestal view', async ({ page }) => {
+    await expect(page.getByText('Quick Status')).toBeVisible()
   })
 
-  test('shows active session card with socket info', async ({ page }) => {
-    await expect(page.getByText('Socket 2')).toBeVisible()
-  })
-
-  test('active session card shows customer name', async ({ page }) => {
+  test('active session shows socket and customer name in Quick Status', async ({ page }) => {
+    // Fixture: active session on Socket 2 for "Test Sailor"
+    // Use nth(1) to target the Quick Status span, not the sr-only label inside the zone button
+    await expect(page.getByText('Socket 2').nth(1)).toBeVisible()
     await expect(page.getByText('Test Sailor')).toBeVisible()
   })
 
-  test('shows Stop button on active session', async ({ page }) => {
-    await expect(page.getByRole('button', { name: /stop/i })).toBeVisible()
+  test('active session shows Active badge in Quick Status', async ({ page }) => {
+    // The AllSessionsOverview renders a badge-active span
+    await expect(page.locator('.badge-active').first()).toBeVisible()
+  })
+
+  test('shows Legend section', async ({ page }) => {
+    await expect(page.getByText('Legend')).toBeVisible()
   })
 })
 
-test.describe('Sessions — pending approvals', () => {
+test.describe('Sessions — Socket detail panel', () => {
+  test.beforeEach(async ({ page }) => {
+    await goToPedestalView(page)
+  })
+
+  test('clicking active socket zone opens detail panel with Stop Session', async ({ page }) => {
+    // Socket 2 is active (green ring) — click it via its sr-only label or the zone button
+    // Zone buttons are overlaid on the pedestal image; Socket 2 is at top:'52%', left:'3%'
+    // Use the tooltip text "Stop Session" visible on hover, or click the zone and check panel
+    // The ZoneButton for an active socket shows tooltip "Stop Session"
+    // We click it by its position relative to the pedestal image container
+    const pedestalContainer = page.locator('.relative.inline-block')
+    await expect(pedestalContainer).toBeVisible()
+
+    // Buttons inside the container — Socket 2 is the 2nd left-side button
+    const zoneButtons = pedestalContainer.locator('button')
+    // Click the button that wraps Socket 2 (2nd button on left, active=green)
+    // The active socket button has bg-green-500/30 styling
+    const activeBtn = pedestalContainer.locator('button').filter({
+      has: page.locator('.bg-green-500\\/30'),
+    }).first()
+    // Fall back: just click the button with the green ring class
+    const btn = pedestalContainer.locator('button.bg-green-500\\/30, button[class*="bg-green-500"]').first()
+    await btn.click()
+
+    // SocketDetailPanel opens — shows "Stop Session" for admin
+    await expect(page.getByRole('button', { name: 'Stop Session' })).toBeVisible()
+  })
+
+  test('Stop Session button calls stop endpoint and closes panel', async ({ page }) => {
+    let stopCalled = false
+    await page.route('**/api/controls/101/stop', route => {
+      stopCalled = true
+      return route.fulfill({
+        json: { id: 101, pedestal_id: 1, socket_id: 2, type: 'electricity',
+                status: 'completed', started_at: new Date().toISOString(),
+                ended_at: new Date().toISOString(), energy_kwh: 1.23, water_liters: null,
+                customer_id: 5, customer_name: 'Test Sailor', deny_reason: null },
+      })
+    })
+
+    const pedestalContainer = page.locator('.relative.inline-block')
+    const btn = pedestalContainer.locator('button[class*="bg-green-500"]').first()
+    await btn.click()
+
+    await page.getByRole('button', { name: 'Stop Session' }).click()
+    expect(stopCalled).toBe(true)
+
+    // After stop, session is completed — socket returns to idle
+    await expect(page.getByRole('button', { name: 'Stop Session' })).not.toBeVisible()
+  })
+})
+
+test.describe('Sessions — Pending session zone (socket panel)', () => {
   test.beforeEach(async ({ page }) => {
     await loginAs(page)
-    // Override the pending sessions mock to return a pending session
+    // Override mocks to have a pending session on socket 3 instead of active
     await page.route('**/api/pedestals', route => route.fulfill({
       json: [{ id: 1, name: 'Berth A-01', location: 'Dock A',
                ip_address: '192.168.1.10', camera_ip: null,
@@ -55,74 +117,35 @@ test.describe('Sessions — pending approvals', () => {
       json: [{ id: 1, email: 'admin@test.local', role: 'admin', is_active: true }],
     }))
     await page.route('**/api/contracts/**', route => route.fulfill({ json: [] }))
-    await page.route('**/api/chat/unread-count', route => route.fulfill({ json: { count: 0 } }))
+    await page.route('**/api/chat/unread-count', route => route.fulfill({ json: { unread_customers: 0 } }))
     await page.route('**/api/system/errors**', route => route.fulfill({ json: { items: [], total: 0 } }))
     await page.route('**/ws**', route => route.abort())
 
     await page.goto('/dashboard')
     await page.getByText('Berth A-01').click()
+    await expect(page.getByText('Quick Status')).toBeVisible()
   })
 
-  test('shows pending approvals section', async ({ page }) => {
-    await expect(page.getByText(/Pending Approvals/)).toBeVisible()
+  test('pending socket zone shows amber pulse styling', async ({ page }) => {
+    // The pending socket zone button has animate-pulse class
+    const pedestalContainer = page.locator('.relative.inline-block')
+    const pendingBtn = pedestalContainer.locator('button.animate-pulse').first()
+    await expect(pendingBtn).toBeVisible()
   })
 
-  test('shows pending session with customer name', async ({ page }) => {
+  test('clicking pending socket opens panel showing session starting', async ({ page }) => {
+    const pedestalContainer = page.locator('.relative.inline-block')
+    const pendingBtn = pedestalContainer.locator('button.animate-pulse').first()
+    await pendingBtn.click()
+
+    await expect(page.getByText('Session starting…')).toBeVisible()
+  })
+
+  test('pending panel shows customer name', async ({ page }) => {
+    const pedestalContainer = page.locator('.relative.inline-block')
+    const pendingBtn = pedestalContainer.locator('button.animate-pulse').first()
+    await pendingBtn.click()
+
     await expect(page.getByText('Pending Sailor')).toBeVisible()
-  })
-
-  test('Allow and Deny buttons are visible', async ({ page }) => {
-    await expect(page.getByRole('button', { name: 'Allow' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Deny' })).toBeVisible()
-  })
-
-  test('clicking Allow calls allow endpoint and removes pending card', async ({ page }) => {
-    let allowCalled = false
-    await page.route('**/api/sessions/201/allow', route => {
-      allowCalled = true
-      return route.fulfill({
-        json: { id: 201, pedestal_id: 1, socket_id: 3, type: 'electricity',
-                status: 'active', started_at: new Date().toISOString(),
-                ended_at: null, energy_kwh: 0, water_liters: null,
-                customer_id: 7, customer_name: 'Pending Sailor', deny_reason: null },
-      })
-    })
-
-    await page.getByRole('button', { name: 'Allow' }).click()
-    expect(allowCalled).toBe(true)
-    // Pending section disappears when no pending sessions remain
-    await expect(page.getByText(/Pending Approvals/)).not.toBeVisible()
-  })
-
-  test('clicking Deny opens deny dialog', async ({ page }) => {
-    await page.getByRole('button', { name: 'Deny' }).click()
-    // DenyDialog renders with a reason textarea or input
-    await expect(page.getByText(/deny/i)).toBeVisible()
-  })
-})
-
-test.describe('Sessions — stop active session', () => {
-  test.beforeEach(async ({ page }) => {
-    await loginAs(page)
-    await mockApi(page)
-    await page.goto('/dashboard')
-    await page.getByText('Berth A-01').click()
-  })
-
-  test('clicking Stop calls stop endpoint and removes session', async ({ page }) => {
-    let stopCalled = false
-    await page.route('**/api/sessions/101/stop', route => {
-      stopCalled = true
-      return route.fulfill({
-        json: { id: 101, pedestal_id: 1, socket_id: 2, type: 'electricity',
-                status: 'completed', started_at: new Date().toISOString(),
-                ended_at: new Date().toISOString(), energy_kwh: 1.23, water_liters: null,
-                customer_id: 5, customer_name: 'Test Sailor', deny_reason: null },
-      })
-    })
-
-    await page.getByRole('button', { name: /stop/i }).click()
-    expect(stopCalled).toBe(true)
-    await expect(page.getByText(/Active Sessions/)).not.toBeVisible()
   })
 })

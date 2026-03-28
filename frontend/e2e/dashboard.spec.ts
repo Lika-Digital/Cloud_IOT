@@ -9,7 +9,8 @@ test.describe('Dashboard', () => {
   })
 
   test('shows dashboard heading', async ({ page }) => {
-    await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
+    await expect(page).toHaveURL(/\/dashboard/)
+    await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
   })
 
   test('renders pedestal card with correct name', async ({ page }) => {

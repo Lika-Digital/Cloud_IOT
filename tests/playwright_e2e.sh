@@ -14,8 +14,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$ROOT_DIR"
 
-YELLOW='\\033[1;33m'; RED='\\033[0;31m'; GREEN='\\033[0;32m'
-CYAN='\\033[0;36m'; BOLD='\\033[1m'; NC='\\033[0m'
+YELLOW='\033[1;33m'; RED='\033[0;31m'; GREEN='\033[0;32m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 LOG_DIR="${SCRIPT_DIR}/logs"
 mkdir -p "$LOG_DIR"
@@ -39,10 +39,8 @@ fi
 
 # ── Run Playwright ─────────────────────────────────────────────────────────────
 cd frontend
-npx playwright test \
-    --reporter=list \
-    --reporter=json:"../tests/logs/playwright_last.json" \
-    2>&1 | tee "../tests/logs/playwright_stdout.log"
+# playwright.config.ts already configures both list + json reporters
+npx playwright test 2>&1 | tee "../tests/logs/playwright_stdout.log"
 PW_EXIT=${PIPESTATUS[0]}
 cd "$ROOT_DIR"
 

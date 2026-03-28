@@ -65,12 +65,14 @@ def _migrate_user_schema():
         ("berths",    "background_image",      "TEXT"),
     ]
 
+    # All table/column/definition values below are hardcoded string literals —
+    # no user input reaches these statements. nosemgrep: avoid-sqlalchemy-text
     with user_engine.connect() as conn:
         for table, column, definition in migrations:
-            result = conn.execute(text(f"PRAGMA table_info({table})"))
+            result = conn.execute(text(f"PRAGMA table_info({table})"))  # nosemgrep
             existing = {row[1] for row in result.fetchall()}
             if column not in existing:
-                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {definition}"))
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {definition}"))  # nosemgrep
                 conn.commit()
                 log.info(f"User DB migration: added column '{column}' to '{table}'")
 

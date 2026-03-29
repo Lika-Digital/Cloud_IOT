@@ -16,6 +16,7 @@ interface Props {
   selectedSocketId: number | null
   onSelectSocket: (id: number) => void
   onSelectWater: () => void
+  assignedSocketId?: number | null  // pilot mode: only this socket is selectable
 }
 
 interface Zone { leftPct?: number; rightPct?: number; topPct: number }
@@ -49,6 +50,7 @@ export function PedestalDiagram({
   selectedSocketId,
   onSelectSocket,
   onSelectWater,
+  assignedSocketId,
 }: Props) {
   const t = useTheme()
   const [imgW, setImgW] = useState(0)
@@ -104,12 +106,14 @@ export function PedestalDiagram({
             {ELECTRICITY_ZONES.map((zone) => {
               const occupied = occupiedSockets.includes(zone.id)
               const selected = selectedType === 'electricity' && selectedSocketId === zone.id
+              // In pilot mode, non-assigned sockets are locked (not just occupied)
+              const locked = assignedSocketId != null && zone.id !== assignedSocketId
               const x = getX(zone, SOCK_R)
               const y = getY(zone.topPct, SOCK_R)
 
-              const bg = occupied ? '#1c1917' : selected ? '#1e3a5f' : '#14532d'
-              const border = occupied ? '#57534e' : selected ? '#3b82f6' : '#22c55e'
-              const color = occupied ? '#78716c' : selected ? '#60a5fa' : '#4ade80'
+              const bg = occupied || locked ? '#1c1917' : selected ? '#1e3a5f' : '#14532d'
+              const border = occupied || locked ? '#57534e' : selected ? '#3b82f6' : '#22c55e'
+              const color = occupied || locked ? '#78716c' : selected ? '#60a5fa' : '#4ade80'
 
               return (
                 <TouchableOpacity
@@ -124,11 +128,11 @@ export function PedestalDiagram({
                       borderRadius: SOCK_R,
                       backgroundColor: bg,
                       borderColor: border,
-                      opacity: occupied ? 0.65 : 1,
+                      opacity: occupied || locked ? 0.5 : 1,
                     },
                   ]}
-                  onPress={() => !occupied && onSelectSocket(zone.id)}
-                  disabled={occupied}
+                  onPress={() => !occupied && !locked && onSelectSocket(zone.id)}
+                  disabled={occupied || locked}
                   activeOpacity={0.7}
                 >
                   <Text style={[styles.circleNum, { color }]}>{zone.id}</Text>

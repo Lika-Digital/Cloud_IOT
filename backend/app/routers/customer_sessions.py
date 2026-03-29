@@ -1,4 +1,5 @@
 """Customer session management: start, list, stop."""
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session as DBSession
 from ..database import get_db
@@ -15,15 +16,36 @@ from ..models.session import Session
 
 router = APIRouter(prefix="/api/customer/sessions", tags=["customer-sessions"])
 
+PILOT_PLUGIN_WINDOW_SECONDS = 180  # 3-minute window for plug-in event
+
+
+def _get_pilot_assignment(db: DBSession, customer: Customer):
+    """Return active pilot assignment for this customer, or None."""
+    if not customer.name:
+        return None
+    from ..models.pilot_assignment import PilotAssignment
+    return db.query(PilotAssignment).filter(
+        PilotAssignment.username == customer.name,
+        PilotAssignment.active == True,  # noqa: E712
+    ).first()
+
 
 @router.get("/pedestal-status", response_model=list[PedestalStatusResponse])
 def pedestal_status(
     db: DBSession = Depends(get_db),
     customer: Customer = Depends(require_customer),
 ):
-    """Return all pedestals with their currently occupied sockets."""
+    """Return pedestals with occupied sockets. Pilot-mode customers see only their assigned pedestal."""
     from ..models.pedestal import Pedestal
+
+    assignment = _get_pilot_assignment(db, customer)
+
     pedestals = db.query(Pedestal).filter(Pedestal.mobile_enabled == True).order_by(Pedestal.id).all()  # noqa: E712
+
+    # Pilot mode: restrict to the assigned pedestal only
+    if assignment:
+        pedestals = [p for p in pedestals if p.id == assignment.pedestal_id]
+
     result = []
     for p in pedestals:
         active = (
@@ -39,6 +61,7 @@ def pedestal_status(
             location=p.location,
             occupied_sockets=occupied_sockets,
             water_occupied=water_occupied,
+            assigned_socket_id=assignment.socket_id if assignment and p.id == assignment.pedestal_id else None,
         ))
     return result
 
@@ -58,6 +81,34 @@ async def start_session(
         if body.socket_id not in (1, 2, 3, 4):
             raise HTTPException(status_code=422, detail="socket_id must be 1, 2, 3, or 4")
 
+    # Validate pedestal exists and is mobile-enabled
+    from ..models.pedestal import Pedestal
+    pedestal = db.query(Pedestal).filter(
+        Pedestal.id == body.pedestal_id, Pedestal.mobile_enabled == True  # noqa: E712
+    ).first()
+    if not pedestal:
+        raise HTTPException(status_code=404, detail="Pedestal not found or not available")
+
+    # Pilot mode: enforce assignment + recent plug-in event
+    assignment = _get_pilot_assignment(db, customer)
+    if assignment:
+        if body.pedestal_id != assignment.pedestal_id:
+            raise HTTPException(status_code=403, detail="Pilot assignment: use pedestal %d" % assignment.pedestal_id)
+        if body.type == "electricity" and body.socket_id != assignment.socket_id:
+            raise HTTPException(status_code=403, detail="Pilot assignment: use socket %d" % assignment.socket_id)
+        # Require physical plug-in within the last 3 minutes
+        from ..models.pedestal_config import SocketState
+        state = db.query(SocketState).filter(
+            SocketState.pedestal_id == body.pedestal_id,
+            SocketState.socket_id == assignment.socket_id,
+            SocketState.connected == True,  # noqa: E712
+        ).first()
+        if state is None or (datetime.utcnow() - state.updated_at).total_seconds() > PILOT_PLUGIN_WINDOW_SECONDS:
+            raise HTTPException(
+                status_code=409,
+                detail="Pilot mode: please plug in within 3 minutes before starting a session",
+            )
+
     # One active/pending session per customer at a time
     customer_busy = (
         db.query(Session)
@@ -69,6 +120,19 @@ async def start_session(
             status_code=409,
             detail="You already have an active or pending session. Stop it before starting a new one.",
         )
+
+    # Validate socket is physically connected (only blocks if Arduino explicitly reported disconnected)
+    if body.type == "electricity":
+        from ..models.pedestal_config import SocketState
+        state = db.query(SocketState).filter(
+            SocketState.pedestal_id == body.pedestal_id,
+            SocketState.socket_id == body.socket_id,
+        ).first()
+        if state is not None and not state.connected:
+            raise HTTPException(
+                status_code=409,
+                detail="Socket is not physically connected",
+            )
 
     # Check socket not already in use
     socket_id = body.socket_id if body.type == "electricity" else None

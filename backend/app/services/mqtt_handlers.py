@@ -85,6 +85,25 @@ async def _handle_socket_status(pedestal_id: int, socket_id: int, payload: str):
     status = payload.strip().strip('"')
     db = SessionLocal()
     try:
+        # Persist physical connection state so the session API can validate it
+        if status in ("connected", "disconnected"):
+            from ..models.pedestal_config import SocketState
+            _ensure_pedestal(db, pedestal_id)
+            state = db.query(SocketState).filter(
+                SocketState.pedestal_id == pedestal_id,
+                SocketState.socket_id == socket_id,
+            ).first()
+            if state:
+                state.connected = (status == "connected")
+                state.updated_at = datetime.utcnow()
+            else:
+                db.add(SocketState(
+                    pedestal_id=pedestal_id,
+                    socket_id=socket_id,
+                    connected=(status == "connected"),
+                ))
+            db.commit()
+
         if status == "disconnected":
             session = session_service.get_active_for_socket(db, pedestal_id, socket_id)
             if session and session.status == "active":

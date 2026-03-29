@@ -59,3 +59,43 @@ export const getSnmpConfig = (): Promise<SnmpConfig> =>
 
 export const updateSnmpConfig = (data: SnmpConfig): Promise<{ message: string; config: SnmpConfig }> =>
   api.put('/admin/settings/snmp', data).then((r) => r.data)
+
+export interface ActivePedestalItem {
+  id: number
+  name: string
+  connected: boolean
+  last_heartbeat: string | null
+}
+
+export interface ActivePedestalsInfo {
+  total: number
+  connected: number
+  pedestals: ActivePedestalItem[]
+}
+
+export const getActivePedestals = (): Promise<ActivePedestalsInfo> =>
+  api.get<ActivePedestalsInfo>('/admin/settings/active-pedestals').then((r) => r.data)
+
+export interface PilotAssignment {
+  id: number
+  username: string
+  pedestal_id: number
+  socket_id: number
+  active: boolean
+  created_at: string
+}
+
+export interface PilotAssignmentCreate {
+  username: string
+  pedestal_id: number
+  socket_id: number
+}
+
+export const getPilotAssignments = (): Promise<PilotAssignment[]> =>
+  api.get<PilotAssignment[]>('/admin/settings/pilot-assignments').then((r) => r.data)
+
+export const createPilotAssignment = (data: PilotAssignmentCreate): Promise<PilotAssignment> =>
+  api.post<PilotAssignment>('/admin/settings/pilot-assignments', data).then((r) => r.data)
+
+export const deletePilotAssignment = (id: number): Promise<void> =>
+  api.delete(`/admin/settings/pilot-assignments/${id}`).then(() => undefined)

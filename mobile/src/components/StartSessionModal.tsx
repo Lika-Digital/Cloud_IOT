@@ -37,7 +37,14 @@ export function StartSessionModal({ visible, onClose }: Props) {
     getPedestalStatus()
       .then((data) => {
         setPedestals(data)
-        if (data.length === 1) setSelectedPedestal(data[0])
+        if (data.length === 1) {
+          setSelectedPedestal(data[0])
+          // Pilot mode: auto-select the assigned socket
+          if (data[0].assigned_socket_id != null) {
+            setSelType('electricity')
+            setSelSocketId(data[0].assigned_socket_id)
+          }
+        }
       })
       .catch(() => setError('Could not load pedestal status'))
       .finally(() => setLoadingPedestals(false))
@@ -154,6 +161,7 @@ export function StartSessionModal({ visible, onClose }: Props) {
                   selectedSocketId={selSocketId}
                   onSelectSocket={handleSelectSocket}
                   onSelectWater={handleSelectWater}
+                  assignedSocketId={selectedPedestal.assigned_socket_id}
                 />
               ) : pedestals.length === 0 ? (
                 <Text style={styles.empty}>No pedestals available.</Text>

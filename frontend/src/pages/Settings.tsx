@@ -2,47 +2,16 @@ import { useState, useEffect } from 'react'
 import ConfigPanel from '../components/config/ConfigPanel'
 import FieldHelp from '../components/config/FieldHelp'
 import DevicesPanel from '../components/config/DevicesPanel'
-import { getPedestals, configurePedestals } from '../api'
-import { useStore, type Pedestal } from '../store'
 import { authListUsers, authCreateUser, authDeleteUser, authPatchUser, type UserResponse } from '../api/auth'
 import {
   getSmtpConfig, updateSmtpConfig, testSmtp, type SmtpConfig,
   getNetworkInfo, type NetworkInfo,
   getSnmpConfig, updateSnmpConfig, type SnmpConfig,
+  getActivePedestals, type ActivePedestalsInfo,
+  getPilotAssignments, createPilotAssignment, deletePilotAssignment, type PilotAssignment,
 } from '../api/settings'
 
 export default function Settings() {
-  const { setPedestals } = useStore()
-  const [pedestalCount, setPedestalCount] = useState(1)
-  const [currentCount, setCurrentCount]   = useState(1)
-  const [pedestals, setPedestalsList]     = useState<Pedestal[]>([])
-  const [loading, setLoading]             = useState(false)
-  const [message, setMessage]             = useState<{ type: 'success' | 'error'; text: string } | null>(null)
-
-  useEffect(() => {
-    getPedestals().then((data) => {
-      setCurrentCount(data.length)
-      setPedestalCount(data.length)
-      setPedestalsList(data)
-    })
-  }, [])
-
-  const handleApplyCount = async () => {
-    setLoading(true)
-    setMessage(null)
-    try {
-      const updated = await configurePedestals(pedestalCount)
-      setPedestals(updated)
-      setCurrentCount(updated.length)
-      setPedestalsList(updated)
-      setMessage({ type: 'success', text: `Fleet updated to ${updated.length} pedestal(s).` })
-    } catch {
-      setMessage({ type: 'error', text: 'Failed to update pedestal count.' })
-    } finally {
-      setLoading(false)
-    }
-  }
-
   return (
     <div>
       <h1 className="text-2xl font-bold text-white mb-6">Settings</h1>
@@ -50,68 +19,6 @@ export default function Settings() {
 
         {/* Left column */}
         <div className="space-y-6">
-
-          {/* Fleet size */}
-          <div className="card space-y-4">
-            <h3 className="font-semibold text-white">Fleet Configuration</h3>
-            <p className="text-sm text-gray-400">
-              Set how many pedestals are monitored. New pedestals are created automatically.
-            </p>
-
-            <div className="flex items-center gap-4">
-              <div className="flex-1">
-                <label className="block text-sm text-gray-400 mb-1">Number of pedestals</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={20}
-                  value={pedestalCount}
-                  onChange={(e) => setPedestalCount(Math.max(1, Math.min(20, Number(e.target.value))))}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm"
-                />
-                <FieldHelp example="1 – 20" hint="Whole number · new pedestals are auto-created" />
-              </div>
-              <div className="text-center">
-                <p className="text-xs text-gray-500 mb-1">Currently</p>
-                <p className="text-2xl font-bold text-blue-400">{currentCount}</p>
-              </div>
-            </div>
-
-            {/* Visual count selector */}
-            <div className="flex gap-2 flex-wrap">
-              {[1, 2, 3, 4, 5, 6].map((n) => (
-                <button
-                  key={n}
-                  onClick={() => setPedestalCount(n)}
-                  className={`w-10 h-10 rounded-lg text-sm font-bold transition-colors ${
-                    pedestalCount === n
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
-                  }`}
-                >
-                  {n}
-                </button>
-              ))}
-            </div>
-
-            {message && (
-              <div className={`text-sm px-3 py-2 rounded-lg ${
-                message.type === 'success'
-                  ? 'bg-green-900/30 text-green-400'
-                  : 'bg-red-900/30 text-red-400'
-              }`}>
-                {message.text}
-              </div>
-            )}
-
-            <button
-              className="btn-primary w-full"
-              onClick={handleApplyCount}
-              disabled={loading || pedestalCount === currentCount}
-            >
-              {loading ? 'Applying…' : `Apply (${pedestalCount} pedestal${pedestalCount !== 1 ? 's' : ''})`}
-            </button>
-          </div>
 
           {/* Pedestal mode config */}
           <ConfigPanel />
@@ -135,15 +42,21 @@ export default function Settings() {
           {/* SNMP Trap Config */}
           <SnmpConfigPanel />
 
+          {/* Active MQTT Clients */}
+          <ActivePedestalsPanel />
+
+          {/* Pilot Mode Assignments */}
+          <PilotModePanel />
+
           <div className="card">
             <h3 className="font-semibold text-white mb-3">Quick Start</h3>
             <ol className="text-sm text-gray-400 space-y-2 list-decimal list-inside">
-              <li>Set number of pedestals above and click Apply</li>
-              <li>Select a pedestal and click <strong className="text-white">Edit Connection</strong> to set Arduino and camera IPs</li>
+              <li>Connect the Arduino to the MQTT broker — it sends a <strong className="text-white">register</strong> message automatically</li>
+              <li>The pedestal appears on the Dashboard once the first MQTT message is received</li>
+              <li>Select the pedestal in <strong className="text-white">Pedestal Settings</strong> (left) to configure camera and connection details</li>
               <li>Click <strong className="text-white">Run Diagnostics</strong> to verify all devices are reachable</li>
-              <li>Enable <strong className="text-white">Mobile App Access</strong> for pedestals you want visible in the customer app</li>
-              <li>Go to Dashboard — pedestal cards appear with live data</li>
-              <li>Click socket zones to Allow / Deny / Stop sessions</li>
+              <li>Enable <strong className="text-white">Mobile App Access</strong> to make the pedestal visible in the customer app</li>
+              <li>Click socket zones on the Dashboard to Allow / Deny / Stop sessions</li>
             </ol>
           </div>
           <div className="card">
@@ -174,6 +87,208 @@ export default function Settings() {
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Pilot Mode Panel ──────────────────────────────────────────────────────────
+
+function PilotModePanel() {
+  const [assignments, setAssignments] = useState<PilotAssignment[]>([])
+  const [showAdd, setShowAdd] = useState(false)
+  const [newUsername, setNewUsername] = useState('')
+  const [newPedestalId, setNewPedestalId] = useState('')
+  const [newSocketId, setNewSocketId] = useState('1')
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  const load = () => getPilotAssignments().then(setAssignments).catch(() => {})
+
+  useEffect(() => { load() }, [])
+
+  const handleAdd = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSaving(true); setMsg(null)
+    try {
+      const a = await createPilotAssignment({
+        username: newUsername.trim(),
+        pedestal_id: parseInt(newPedestalId),
+        socket_id: parseInt(newSocketId),
+      })
+      setAssignments((prev) => [...prev, a])
+      setNewUsername(''); setNewPedestalId(''); setNewSocketId('1')
+      setShowAdd(false)
+      setMsg({ type: 'success', text: 'Assignment created.' })
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setMsg({ type: 'error', text: detail ?? 'Failed to create assignment.' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleDelete = async (id: number) => {
+    if (!confirm('Remove this pilot assignment?')) return
+    try {
+      await deletePilotAssignment(id)
+      setAssignments((prev) => prev.filter((a) => a.id !== id))
+    } catch {
+      setMsg({ type: 'error', text: 'Failed to remove assignment.' })
+    }
+  }
+
+  return (
+    <div className="card space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-white">Pilot Mode Assignments</h3>
+        <button
+          onClick={() => setShowAdd((v) => !v)}
+          className="text-xs px-3 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-600 text-white transition-colors"
+        >
+          {showAdd ? 'Cancel' : '+ Add'}
+        </button>
+      </div>
+      <p className="text-xs text-gray-400">
+        Assign a customer username to a specific pedestal and socket. The customer's mobile app
+        will show only that pedestal and require a physical plug-in within 3 minutes before starting.
+      </p>
+
+      {msg && (
+        <div className={`text-sm px-3 py-2 rounded-lg ${msg.type === 'success' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'}`}>
+          {msg.text}
+        </div>
+      )}
+
+      {showAdd && (
+        <form onSubmit={handleAdd} className="space-y-3 p-3 bg-gray-800/50 rounded-lg border border-gray-700">
+          <h4 className="text-sm font-medium text-gray-300">New Assignment</h4>
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Customer Username (name)</label>
+            <input
+              required
+              maxLength={120}
+              value={newUsername}
+              onChange={(e) => setNewUsername(e.target.value)}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm"
+              placeholder="e.g. John Smith"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Pedestal ID</label>
+              <input
+                required
+                type="number"
+                min={1}
+                value={newPedestalId}
+                onChange={(e) => setNewPedestalId(e.target.value)}
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm font-mono"
+                placeholder="1"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Socket (1–4)</label>
+              <select
+                value={newSocketId}
+                onChange={(e) => setNewSocketId(e.target.value)}
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm"
+              >
+                {[1, 2, 3, 4].map((n) => <option key={n} value={n}>Socket {n}</option>)}
+              </select>
+            </div>
+          </div>
+          <button type="submit" disabled={saving} className="btn-primary w-full">
+            {saving ? 'Saving…' : 'Create Assignment'}
+          </button>
+        </form>
+      )}
+
+      <div className="space-y-2">
+        {assignments.length === 0 && (
+          <p className="text-sm text-gray-600 text-center py-2">No pilot assignments configured.</p>
+        )}
+        {assignments.map((a) => (
+          <div key={a.id} className="flex items-center justify-between px-3 py-2 rounded-lg bg-gray-800/50 border border-gray-700/50">
+            <div>
+              <p className="text-sm text-gray-200 font-medium">{a.username}</p>
+              <p className="text-xs text-gray-500 font-mono mt-0.5">
+                Pedestal #{a.pedestal_id} · Socket {a.socket_id}
+              </p>
+            </div>
+            <button
+              onClick={() => handleDelete(a.id)}
+              className="text-xs text-gray-600 hover:text-red-400 transition-colors px-1"
+              title="Remove assignment"
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Active Pedestals Panel ─────────────────────────────────────────────────────
+
+function ActivePedestalsPanel() {
+  const [info, setInfo] = useState<ActivePedestalsInfo | null>(null)
+
+  useEffect(() => {
+    const load = () => getActivePedestals().then(setInfo).catch(() => {})
+    load()
+    const t = setInterval(load, 5000)
+    return () => clearInterval(t)
+  }, [])
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="font-semibold text-white">Active MQTT Clients</h3>
+        {info && (
+          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+            info.connected > 0
+              ? 'bg-green-900/50 text-green-400'
+              : 'bg-gray-700 text-gray-400'
+          }`}>
+            {info.connected} / {info.total} online
+          </span>
+        )}
+      </div>
+      <p className="text-xs text-gray-400 mb-3">
+        Pedestals are registered automatically when the Arduino sends its first MQTT message.
+        The list resets to zero on every application restart.
+      </p>
+      {!info && <p className="text-sm text-gray-500">Loading…</p>}
+      {info && info.total === 0 && (
+        <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-gray-800 text-gray-400 text-sm">
+          <span className="w-2 h-2 rounded-full bg-gray-600 flex-shrink-0" />
+          Waiting for Arduino MQTT connection…
+        </div>
+      )}
+      {info && info.total > 0 && (
+        <div className="space-y-1.5">
+          {info.pedestals.map((p) => (
+            <div key={p.id} className="flex items-center justify-between px-3 py-2 rounded-lg bg-gray-800">
+              <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${p.connected ? 'bg-green-400' : 'bg-gray-500'}`} />
+                <span className="text-sm text-gray-200">{p.name}</span>
+                <span className="text-xs text-gray-500">#{p.id}</span>
+              </div>
+              <div className="text-right">
+                <span className={`text-xs font-medium ${p.connected ? 'text-green-400' : 'text-gray-500'}`}>
+                  {p.connected ? 'Online' : 'Offline'}
+                </span>
+                {p.last_heartbeat && (
+                  <p className="text-xs text-gray-600 mt-0.5">
+                    {new Date(p.last_heartbeat).toLocaleTimeString()}
+                  </p>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

@@ -6,6 +6,7 @@ export interface PedestalStatus {
   location: string | null
   occupied_sockets: number[]
   water_occupied: boolean
+  assigned_socket_id: number | null  // non-null when customer has a pilot assignment
 }
 
 export const getPedestalStatus = () =>

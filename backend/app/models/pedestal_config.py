@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, ForeignKey, UniqueConstraint
 from ..database import Base
 
 
@@ -48,6 +48,19 @@ class PedestalConfig(Base):
     last_temp_sensor_check = Column(DateTime, nullable=True)
 
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class SocketState(Base):
+    """Tracks the physical plug-in state of each socket reported by Arduino via MQTT."""
+    __tablename__ = "socket_states"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    pedestal_id = Column(Integer, ForeignKey("pedestals.id"), nullable=False)
+    socket_id   = Column(Integer, nullable=False)   # 1–4
+    connected   = Column(Boolean, default=False)
+    updated_at  = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint("pedestal_id", "socket_id", name="uq_socket_state"),)
 
 
 class PedestalSensor(Base):

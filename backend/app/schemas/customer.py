@@ -110,6 +110,7 @@ class PedestalStatusResponse(BaseModel):
     location: Optional[str] = None
     occupied_sockets: list[int]
     water_occupied: bool
+    assigned_socket_id: Optional[int] = None  # set when customer has a pilot assignment
 
 
 class SendMessageRequest(BaseModel):

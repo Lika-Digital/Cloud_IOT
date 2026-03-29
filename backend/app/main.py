@@ -14,6 +14,7 @@ from .config import settings
 from .database import init_db, SessionLocal, engine
 from .models.pedestal import Pedestal
 from .models.session import Session as SessionModel
+from .models.pilot_assignment import PilotAssignment  # noqa — registers table with Base.metadata
 from .services.mqtt_client import mqtt_service
 from .services.simulator_manager import simulator_manager
 from .services.session_service import session_service
@@ -232,10 +233,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log_error("system", "startup", f"Database connectivity FAILED on startup: {e}", exc=e)
 
-    # Pedestals are created automatically on first MQTT heartbeat/register message.
+    # Clear all pedestals on every startup — they are re-created from MQTT messages.
+    # This guarantees the dashboard starts at zero pedestals and shows only devices
+    # that are physically present and actively sending MQTT data.
     db = SessionLocal()
     try:
-        pedestal_count = db.query(Pedestal).count()
+        db.execute(text("DELETE FROM socket_states"))
+        db.execute(text("DELETE FROM pedestal_configs"))
+        db.execute(text("DELETE FROM pedestals"))
+        db.commit()
+        logger.info("Startup: pedestal table cleared — waiting for MQTT registration")
+    except Exception as e:
+        logger.warning("Startup: failed to clear pedestals: %s", e)
     finally:
         db.close()
 
@@ -372,7 +381,7 @@ async def lifespan(app: FastAPI):
 
     log_info(
         "system", "startup",
-        f"Application started — {pedestal_count} pedestal(s), {user_count} operator user(s), "
+        f"Application started — 0 pedestals (awaiting MQTT), {user_count} operator user(s), "
         f"MQTT → {settings.mqtt_broker_host}:{settings.mqtt_broker_port}, "
         f"pending timeout {PENDING_TIMEOUT_SECONDS}s, comm-loss timeout {COMM_LOSS_TIMEOUT_SECONDS}s",
     )

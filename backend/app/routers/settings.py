@@ -1,7 +1,7 @@
-"""Admin settings endpoints: SMTP, SNMP trap, network info."""
+"""Admin settings endpoints: SMTP, SNMP trap, network info, active pedestals, pilot assignments."""
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..auth.user_database import get_user_db
@@ -9,6 +9,7 @@ from ..auth.dependencies import require_admin
 from ..auth.models import User, SmtpConfig
 from ..auth.schemas import SmtpConfigUpdate
 from ..config import settings
+from ..database import get_db
 
 router = APIRouter(prefix="/api/admin/settings", tags=["admin-settings"])
 
@@ -128,6 +129,91 @@ def update_snmp_config(body: SnmpConfigUpdate, _: User = Depends(require_admin))
     from ..services.snmp_trap_service import update_config
     updated = update_config(body.model_dump())
     return {"message": "SNMP config updated", "config": updated}
+
+
+@router.get("/active-pedestals")
+def get_active_pedestals(
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Return count and per-pedestal MQTT connection status."""
+    from ..models.pedestal import Pedestal
+    from ..models.pedestal_config import PedestalConfig
+
+    pedestals = db.query(Pedestal).order_by(Pedestal.id).all()
+    configs = {c.pedestal_id: c for c in db.query(PedestalConfig).all()}
+
+    items = []
+    for p in pedestals:
+        cfg = configs.get(p.id)
+        items.append({
+            "id": p.id,
+            "name": p.name,
+            "connected": bool(cfg and cfg.opta_connected),
+            "last_heartbeat": cfg.last_heartbeat.isoformat() if cfg and cfg.last_heartbeat else None,
+        })
+
+    return {
+        "total": len(items),
+        "connected": sum(1 for r in items if r["connected"]),
+        "pedestals": items,
+    }
+
+
+class PilotAssignmentCreate(BaseModel):
+    username: str = Field(..., min_length=1, max_length=120)
+    pedestal_id: int
+    socket_id: int = Field(..., ge=1, le=4)
+
+
+@router.get("/pilot-assignments")
+def list_pilot_assignments(
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Return all active pilot assignments."""
+    from ..models.pilot_assignment import PilotAssignment
+    return db.query(PilotAssignment).order_by(PilotAssignment.pedestal_id, PilotAssignment.socket_id).all()
+
+
+@router.post("/pilot-assignments", status_code=201)
+def create_pilot_assignment(
+    body: PilotAssignmentCreate,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Create a pilot assignment (one per pedestal/socket)."""
+    from ..models.pilot_assignment import PilotAssignment
+    existing = db.query(PilotAssignment).filter(
+        PilotAssignment.pedestal_id == body.pedestal_id,
+        PilotAssignment.socket_id == body.socket_id,
+    ).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="That pedestal/socket already has a pilot assignment")
+    a = PilotAssignment(
+        username=body.username.strip(),
+        pedestal_id=body.pedestal_id,
+        socket_id=body.socket_id,
+    )
+    db.add(a)
+    db.commit()
+    db.refresh(a)
+    return a
+
+
+@router.delete("/pilot-assignments/{assignment_id}", status_code=204)
+def delete_pilot_assignment(
+    assignment_id: int,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Delete a pilot assignment."""
+    from ..models.pilot_assignment import PilotAssignment
+    a = db.get(PilotAssignment, assignment_id)
+    if not a:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    db.delete(a)
+    db.commit()
 
 
 @router.post("/smtp/test")

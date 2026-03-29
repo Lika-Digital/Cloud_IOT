@@ -16,7 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO="Lika-Digital/Cloud_IOT"
 TAG="v3.0"
-RELEASE_TITLE="NUC 3.0 Light"
+RELEASE_TITLE="Cloud IoT — v3.0 Release"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'; BOLD='\033[1m'
 info()  { echo -e "${GREEN}[✔]${NC} $*"; }
@@ -56,81 +56,80 @@ fi
 
 # Release notes
 RELEASE_NOTES=$(cat << 'EOF'
-## NUC 3.0 Light
+## Cloud IoT — v3.0 Release
 
 Script-based NUC installer — no bootable ISO required.
 Install Ubuntu Server 24.04 LTS first, then run `sudo bash nuc_image/ubuntu-install.sh`.
-
-This release brings full **real-hardware** support for marina pedestal deployments on Intel NUC.
 
 ---
 
 ### What's new in v3.0
 
+#### Pilot Mode
+- Admin assigns a customer username to a specific pedestal and socket from the Settings page
+- Customer mobile app shows **only the assigned pedestal** with the assigned socket pre-selected
+- Non-assigned sockets are grayed out and unclickable
+- Backend enforces: correct pedestal, correct socket, and **physical plug-in within 3 minutes** before session start
+
+#### MQTT-Driven Pedestal Registration
+- Pedestals start at **zero on every application restart** — no pre-configuration needed
+- Pedestal appears on the dashboard only after the Arduino sends its first MQTT register or heartbeat message
+- Fleet Configuration removed from Settings — replaced with a live **Active MQTT Clients** panel
+
+#### Socket State Tracking
+- Physical plug-in / unplug events tracked via MQTT `socket/{id}/status` messages
+- Session start is blocked if the Arduino has explicitly reported a socket as disconnected
+
+#### SNMP Trap Receiver
+- Built-in UDP listener for SNMP traps from IP temperature sensors (e.g. Papouch TME)
+- Configurable OID, port, community string, and target pedestal — no restart required
+
 #### Session Management
 - **Auto-start sessions** — customers get electricity/water immediately, no operator approval step
-- Operator can still stop any active session from the dashboard at any time
-- Removed Allow/Deny workflow (NUC real-hardware mode)
-
-#### Dashboard UI
-- **Live IP camera stream** in Camera modal — shows authenticated MJPEG snapshot polling from configured IP camera; falls back to YOLO/synthetic with "No live stream available" badge when camera not configured
-- **"Stop Session" hover tooltip** on active socket circles (red badge on hover)
-- Removed "Pending Approval" state from dashboard legend and session overview
-- Contextual help bubbles on Not Initialized, Run Diagnostics, Scan Network states
+- Operator can stop any active session from the dashboard at any time
 
 #### Device Discovery & Configuration
 - **ONVIF WS-Discovery** subnet scan — auto-discovers IP cameras on the LAN
-- **Papouch TME** HTTP subnet scan — auto-discovers temperature/humidity sensors
-- DevicesPanel UI in dashboard: scan + manual config for Arduino Opta, IP camera, TME sensor
-- Papouch TME temp sensor added to pedestal config model and API
-
-#### Berth Occupancy
-- Lightweight on-demand occupancy check via live snapshot + histogram matching (no ML model required)
-- Subnet scan timeout fix — prevents hang on large/slow networks
+- **Papouch TME** HTTP scan — auto-discovers temperature/humidity sensors
+- DevicesPanel in Settings: scan + manual config for Arduino Opta, IP camera, TME sensor
 
 #### Mobile App
-- WebSocket connection moved to app layout — stays connected across all tabs
-- Operator stop session now reliably notifies the mobile customer in real time
-- Chat screen receives live messages without duplicate WebSocket connection
-- Duplicate session on dashboard fixed (idempotent store)
+- Pilot mode: assigned socket auto-selected; others locked
+- WebSocket stays connected across all tabs
+- Real-time session stop notifications from operator
 
 #### NUC Installer & Management CLI
-- **`sudo cloud-iot upgrade`** — pulls latest code from git, rebuilds frontend, updates Python packages, restarts services
-- **`sudo cloud-iot version`** — shows installed version and last commit
-- Simulator completely removed from NUC deployment (real hardware only)
-- Fixed AttributeError in simulator stub on `configure_pedestals`
-- Fixed `email-validator` missing from install (required for Pydantic EmailStr)
-- Fixed admin password newline issue in generated `.env`
+- **`sudo cloud-iot upgrade`** — pull latest code, rebuild frontend, restart services
+- **`sudo cloud-iot version`** — show installed version
+- **`sudo cloud-iot logs [backend|nginx|mqtt]`** — tail service logs
+- Simulator and reportlab removed from NUC deployment
 
-#### Testing
-- 81 automated backend tests (full regression suite, runs before every commit)
-- 20 new pedestal config tests: camera URL/auth, MQTT credentials, TME sensor, site IDs, feature toggles
-- 4 new session tests: auto-start verification, water session, operator stop flow
+#### Automated Test Suite
+- **105 backend tests** — billing, chat, contracts, sessions, workflow lifecycle
+- Full MQTT lifecycle tests: register → heartbeat → socket connect → session → stop
+- SNMP BER decoder unit tests
 
 ---
 
-### Installation
+### NUC Installation
 
-**Fresh install** (new NUC):
-1. Install Ubuntu Server 24.04 LTS (download from ubuntu.com/download/server)
-2. Clone this repo on the NUC and run the installer:
-   ```bash
-   git clone https://github.com/Lika-Digital/Cloud_IOT.git
-   cd Cloud_IOT
-   sudo bash nuc_image/ubuntu-install.sh
-   ```
-3. Follow the 5-step wizard (network, admin, marina info, SMTP, confirm)
-4. Dashboard available at `http://<NUC-IP>` after reboot
-
-**Upgrade** (existing v2.0 NUC):
+**Fresh install** (uninstall previous version first):
 ```bash
-# On the NUC, SSH in and run:
-cd ~/Cloud_IOT
-git pull origin main
+# 1. Uninstall old version
+sudo bash ~/Cloud_IOT/nuc_image/nuc_uninstall.sh
+
+# 2. Clone fresh and install
+git clone https://github.com/Lika-Digital/Cloud_IOT.git
+cd Cloud_IOT
+sudo bash nuc_image/ubuntu-install.sh
+```
+Follow the 5-step wizard (network, admin account, marina info, SMTP, confirm).
+Dashboard available at `http://<NUC-IP>` after automatic reboot.
+
+**Upgrade existing v3 install:**
+```bash
 sudo cloud-iot upgrade
 ```
-
-See **`nuc_image/README.txt`** for full documentation including hardware requirements, step-by-step guide, and troubleshooting.
 
 ---
 
@@ -149,8 +148,13 @@ See **`nuc_image/README.txt`** for full documentation including hardware require
 EOF
 )
 
-# Create the GitHub release (no asset file — script-only release)
+# Delete existing release if present, then recreate
 echo ""
+if gh release view "$TAG" --repo "$REPO" &>/dev/null; then
+  warn "Release ${TAG} already exists — deleting and recreating..."
+  gh release delete "$TAG" --repo "$REPO" --yes
+fi
+
 info "Creating GitHub release ${TAG}..."
 gh release create "$TAG" \
   --repo "$REPO" \

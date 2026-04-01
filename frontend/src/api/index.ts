@@ -59,6 +59,10 @@ export const denySession = (id: number, reason?: string) =>
   api.post<Session>(`/controls/${id}/deny`, { reason: reason ?? null }).then((r) => r.data)
 export const stopSession = (id: number) =>
   api.post<Session>(`/controls/${id}/stop`).then((r) => r.data)
+export const approveSocket = (pedestalId: number, socketId: number) =>
+  api.post<Session>(`/controls/sockets/${pedestalId}/${socketId}/approve`).then((r) => r.data)
+export const rejectSocket = (pedestalId: number, socketId: number, reason?: string) =>
+  api.post(`/controls/sockets/${pedestalId}/${socketId}/reject`, { reason: reason ?? null }).then((r) => r.data)
 
 // Analytics
 export const getDailyConsumption = (params?: { pedestal_id?: number; days?: number }) =>

@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = ""
 
+    # Pending session / socket approval timeout (seconds)
+    pending_timeout_seconds: int = 15
+
     # Default admin credentials for first-run seeding — override via env vars
     default_admin_email: str = "admin@iot-dashboard.local"
     default_admin_password: Optional[str] = None

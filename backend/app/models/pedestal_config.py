@@ -54,11 +54,14 @@ class SocketState(Base):
     """Tracks the physical plug-in state of each socket reported by Arduino via MQTT."""
     __tablename__ = "socket_states"
 
-    id          = Column(Integer, primary_key=True, index=True)
-    pedestal_id = Column(Integer, ForeignKey("pedestals.id"), nullable=False)
-    socket_id   = Column(Integer, nullable=False)   # 1–4
-    connected   = Column(Boolean, default=False)
-    updated_at  = Column(DateTime, default=datetime.utcnow)
+    id                 = Column(Integer, primary_key=True, index=True)
+    pedestal_id        = Column(Integer, ForeignKey("pedestals.id"), nullable=False)
+    socket_id          = Column(Integer, nullable=False)   # 1–4
+    connected          = Column(Boolean, default=False)
+    updated_at         = Column(DateTime, default=datetime.utcnow)
+    # Operator approval flow: "pending" when MQTT connected, "rejected" after operator rejects, null otherwise
+    operator_status    = Column(String, nullable=True)
+    operator_status_at = Column(DateTime, nullable=True)
 
     __table_args__ = (UniqueConstraint("pedestal_id", "socket_id", name="uq_socket_state"),)
 

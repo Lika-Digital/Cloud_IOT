@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useStore } from '../../store'
 import { useAuthStore } from '../../store/authStore'
-import { stopSession } from '../../api'
+import { stopSession, approveSocket, rejectSocket } from '../../api'
 import pedestalImg from '../../assets/pedestal.jpg'
 import CameraModal from './CameraModal'
 
@@ -122,7 +122,7 @@ function ZoneButton({
   isSelected: boolean
   onClick: () => void
 }) {
-  const { pendingSessions, activeSessions } = useStore()
+  const { pendingSessions, activeSessions, pendingSockets } = useStore()
 
   const socketId = typeof zone.id === 'number' ? zone.id : null
   const isWater = zone.type === 'water'
@@ -136,7 +136,12 @@ function ZoneButton({
     ? (!isCamera ? activeSessions.find((s) => s.pedestal_id === pedestalId && s.type === 'water') : undefined)
     : activeSessions.find((s) => s.pedestal_id === pedestalId && s.socket_id === socketId && s.type === 'electricity')
 
-  const status = active ? 'active' : pending ? 'pending' : 'idle'
+  // Socket-level pending: MQTT connected, no session yet, waiting for operator/mobile
+  const socketPending = !isCamera && !isWater && socketId !== null
+    ? !!pendingSockets[`${pedestalId}-${socketId}`]
+    : false
+
+  const status = active ? 'active' : (pending || socketPending) ? 'pending' : 'idle'
 
   const ringColor = isCamera
     ? 'ring-gray-500 shadow-transparent'
@@ -213,14 +218,19 @@ function ZoneButton({
 // ─── Socket Detail Panel ─────────────────────────────────────────────────────
 
 function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pedestalId: number; onClose: () => void }) {
-  const { pendingSessions, activeSessions, socketLiveData, waterLiveData, updateSession } = useStore()
+  const { pendingSessions, activeSessions, socketLiveData, waterLiveData, updateSession, pendingSockets, addSession, removePendingSocket } = useStore()
   const { role } = useAuthStore()
   const isAdmin = role === 'admin'
   const [actionError, setActionError] = useState<string | null>(null)
+  const [denyReason, setDenyReason] = useState('')
+  const [approvalLoading, setApprovalLoading] = useState<'approve' | 'reject' | null>(null)
 
   const isWater = zoneId === 'water-left' || zoneId === 'water-right'
   const isCamera = zoneId === 'camera'
   const socketId = typeof zoneId === 'number' ? zoneId : null
+  const socketPending = !isWater && !isCamera && socketId !== null
+    ? !!pendingSockets[`${pedestalId}-${socketId}`]
+    : false
 
   // Camera zone is handled by modal; this panel shouldn't appear for it
   if (isCamera) return null
@@ -244,6 +254,36 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
       updateSession({ id: updated.id, status: 'completed' })
     } catch {
       setActionError('Stop failed — check connection and try again.')
+    }
+  }
+
+  const handleApprove = async () => {
+    if (!socketId) return
+    setApprovalLoading('approve')
+    setActionError(null)
+    try {
+      const session = await approveSocket(pedestalId, socketId)
+      addSession({ ...session, status: 'active' })
+      removePendingSocket(pedestalId, socketId)
+    } catch {
+      setActionError('Approve failed — check connection and try again.')
+    } finally {
+      setApprovalLoading(null)
+    }
+  }
+
+  const handleReject = async () => {
+    if (!socketId) return
+    setApprovalLoading('reject')
+    setActionError(null)
+    try {
+      await rejectSocket(pedestalId, socketId, denyReason || undefined)
+      removePendingSocket(pedestalId, socketId)
+      setDenyReason('')
+    } catch {
+      setActionError('Reject failed — check connection and try again.')
+    } finally {
+      setApprovalLoading(null)
     }
   }
 
@@ -275,7 +315,42 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
         </div>
       )}
 
-      {/* Pending state (transient — session is activating) */}
+      {/* Socket-level pending: MQTT connected, waiting for operator/mobile approval */}
+      {socketPending && !pendingSession && !activeSession && (
+        <div className="bg-amber-900/20 border border-amber-700/40 rounded-lg p-4 space-y-3">
+          <p className="text-amber-300 font-medium">Device Connected — Awaiting Approval</p>
+          <p className="text-xs text-gray-400">A device was plugged in. Approve to start the session or reject to deny.</p>
+          {isAdmin && (
+            <>
+              <input
+                type="text"
+                placeholder="Rejection reason (optional)"
+                value={denyReason}
+                onChange={(e) => setDenyReason(e.target.value)}
+                className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200 placeholder-gray-500"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={handleApprove}
+                  disabled={approvalLoading !== null}
+                  className="flex-1 py-2 px-4 rounded-lg text-sm font-medium bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white transition-colors"
+                >
+                  {approvalLoading === 'approve' ? 'Approving…' : 'Approve'}
+                </button>
+                <button
+                  onClick={handleReject}
+                  disabled={approvalLoading !== null}
+                  className="flex-1 py-2 px-4 rounded-lg text-sm font-medium bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white transition-colors"
+                >
+                  {approvalLoading === 'reject' ? 'Rejecting…' : 'Reject'}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Pending state (transient — session is activating via DB pending) */}
       {pendingSession && !activeSession && (
         <div className="bg-amber-900/20 border border-amber-700/40 rounded-lg p-4 space-y-2">
           <p className="text-amber-300 font-medium">Session starting…</p>
@@ -310,7 +385,7 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
       )}
 
       {/* Idle state */}
-      {!pendingSession && !activeSession && (
+      {!socketPending && !pendingSession && !activeSession && (
         <div className="text-center py-8 text-gray-500">
           <p className="text-4xl mb-3">{isWater ? '💧' : '🔌'}</p>
           <p>{isWater ? 'No water flow detected' : 'No device connected'}</p>

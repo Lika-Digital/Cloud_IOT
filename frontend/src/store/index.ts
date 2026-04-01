@@ -127,6 +127,11 @@ interface AppStore {
   selectedPedestalId: number | null
   setSelectedPedestalId: (id: number | null) => void
 
+  // Socket-level pending events from MQTT (before any DB session exists)
+  pendingSockets: Record<string, { pedestal_id: number; socket_id: number }>
+  addPendingSocket: (pedestal_id: number, socket_id: number) => void
+  removePendingSocket: (pedestal_id: number, socket_id: number) => void
+
   // Chat unread count
   unreadChatCount: number
   setUnreadChatCount: (count: number) => void
@@ -237,6 +242,21 @@ export const useStore = create<AppStore>((set) => ({
 
   selectedPedestalId: null,
   setSelectedPedestalId: (selectedPedestalId) => set({ selectedPedestalId }),
+
+  pendingSockets: {},
+  addPendingSocket: (pedestal_id, socket_id) =>
+    set((s) => ({
+      pendingSockets: {
+        ...s.pendingSockets,
+        [`${pedestal_id}-${socket_id}`]: { pedestal_id, socket_id },
+      },
+    })),
+  removePendingSocket: (pedestal_id, socket_id) =>
+    set((s) => {
+      const next = { ...s.pendingSockets }
+      delete next[`${pedestal_id}-${socket_id}`]
+      return { pendingSockets: next }
+    }),
 
   unreadChatCount: 0,
   setUnreadChatCount: (count) => set({ unreadChatCount: count }),

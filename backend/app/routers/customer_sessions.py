@@ -134,10 +134,48 @@ async def start_session(
                 detail="Socket is not physically connected",
             )
 
-    # Check socket not already in use
     socket_id = body.socket_id if body.type == "electricity" else None
+
+    # Check operator rejection: if operator has explicitly rejected this socket, block the customer
+    if body.type == "electricity":
+        from ..models.pedestal_config import SocketState as _SocketState
+        _state = db.query(_SocketState).filter(
+            _SocketState.pedestal_id == body.pedestal_id,
+            _SocketState.socket_id == body.socket_id,
+        ).first()
+        if _state is not None and _state.operator_status == "rejected":
+            raise HTTPException(
+                status_code=409,
+                detail="Operator has rejected this socket session. Please reconnect the device.",
+            )
+
+    # Check if session already active (operator pre-approved before mobile acted)
     existing = session_service.get_active_for_socket(db, body.pedestal_id, socket_id)
     if existing:
+        if existing.status == "active":
+            # Operator approved first — assign customer and return active session
+            if existing.customer_id is None:
+                existing.customer_id = customer.id
+                db.commit()
+                db.refresh(existing)
+            from ..services.audit_service import log_transition
+            log_transition(
+                db, existing.id, body.pedestal_id, socket_id,
+                "customer_claimed_active", "customer", actor_id=customer.id,
+            )
+            await ws_manager.broadcast({
+                "event": "session_updated",
+                "data": {
+                    "session_id": existing.id,
+                    "pedestal_id": existing.pedestal_id,
+                    "socket_id": existing.socket_id,
+                    "type": existing.type,
+                    "status": "active",
+                    "customer_id": customer.id,
+                    "deny_reason": None,
+                },
+            })
+            return existing
         raise HTTPException(status_code=409, detail="Socket already has an active or pending session")
 
     session = session_service.create_pending(
@@ -146,6 +184,22 @@ async def start_session(
 
     # Auto-activate immediately — no operator approval required
     session_service.activate(db, session)
+
+    # Clear socket pending flag now that a session is starting
+    if body.type == "electricity":
+        from ..models.pedestal_config import SocketState as _SocketState2
+        _st = db.query(_SocketState2).filter(
+            _SocketState2.pedestal_id == body.pedestal_id,
+            _SocketState2.socket_id == body.socket_id,
+        ).first()
+        if _st:
+            _st.operator_status = None
+            _st.operator_status_at = None
+            db.commit()
+
+    from ..services.audit_service import log_transition as _log
+    _log(db, session.id, body.pedestal_id, socket_id, "customer_approved", "customer", actor_id=customer.id)
+
     control_topic = (
         f"pedestal/{session.pedestal_id}/socket/{session.socket_id}/control"
         if session.type == "electricity"

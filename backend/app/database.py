@@ -27,6 +27,7 @@ def init_db():
     from .models import pedestal, session, sensor_reading, error_log, active_alarm  # noqa: F401
     from .models import pedestal_config  # noqa: F401
     from .models import external_api  # noqa: F401
+    from .models import session_audit  # noqa: F401
     Base.metadata.create_all(bind=engine)
     _migrate_schema()
 
@@ -85,6 +86,9 @@ def _migrate_schema():
         ("external_api_config", "verification_results", "TEXT"),
         ("external_api_config", "created_at",           "DATETIME"),
         ("external_api_config", "updated_at",           "DATETIME"),
+        # Operator approval flow columns on socket_states
+        ("socket_states", "operator_status",    "TEXT"),
+        ("socket_states", "operator_status_at", "DATETIME"),
     ]
 
     with engine.connect() as conn:

@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from ..database import SessionLocal
 from ..services.session_service import session_service
@@ -93,16 +93,33 @@ async def _handle_socket_status(pedestal_id: int, socket_id: int, payload: str):
                 SocketState.pedestal_id == pedestal_id,
                 SocketState.socket_id == socket_id,
             ).first()
+            now = datetime.utcnow()
             if state:
                 state.connected = (status == "connected")
-                state.updated_at = datetime.utcnow()
+                state.updated_at = now
             else:
-                db.add(SocketState(
+                state = SocketState(
                     pedestal_id=pedestal_id,
                     socket_id=socket_id,
                     connected=(status == "connected"),
-                ))
+                )
+                db.add(state)
+            # Update operator_status alongside physical state
+            if status == "connected":
+                state.operator_status = "pending"
+                state.operator_status_at = now
+            elif status == "disconnected":
+                state.operator_status = None
+                state.operator_status_at = None
             db.commit()
+
+        if status == "connected":
+            from .audit_service import log_transition
+            log_transition(db, None, pedestal_id, socket_id, "socket_connected", "system")
+            await ws_manager.broadcast({
+                "event": "socket_pending",
+                "data": {"pedestal_id": pedestal_id, "socket_id": socket_id},
+            })
 
         if status == "disconnected":
             session = session_service.get_active_for_socket(db, pedestal_id, socket_id)
@@ -435,3 +452,52 @@ async def _handle_diagnostics(pedestal_id: int, payload: str):
     except (json.JSONDecodeError, Exception) as e:
         logger.warning(f"Invalid diagnostics response: {payload} — {e}")
         _hw_error(f"pedestal_{pedestal_id}", f"Diagnostics response parse error: {e}", details=payload[:200])
+
+
+async def auto_reject_stale_socket_pending(
+    db,
+    cutoff: datetime,
+    mqtt_publish,
+    ws_broadcast,
+    timeout_seconds: int,
+) -> list:
+    """
+    Find SocketStates with operator_status='pending' older than cutoff and auto-reject them.
+    Called by the background watchdog in main.py; also directly callable from tests.
+    Returns list of rejected SocketState rows.
+    """
+    from ..models.pedestal_config import SocketState
+    from .audit_service import log_transition
+
+    stale = (
+        db.query(SocketState)
+        .filter(
+            SocketState.operator_status == "pending",
+            SocketState.operator_status_at < cutoff,
+        )
+        .all()
+    )
+    rejected = []
+    for s in stale:
+        try:
+            s.operator_status = "rejected"
+            s.operator_status_at = datetime.utcnow()
+            db.commit()
+
+            reason = f"Auto-rejected: no response within {timeout_seconds}s"
+            mqtt_publish(
+                f"pedestal/{s.pedestal_id}/socket/{s.socket_id}/command",
+                json.dumps({"cmd": "rejected", "reason": reason}),
+            )
+            log_transition(db, None, s.pedestal_id, s.socket_id, "auto_rejected", "system", reason=reason)
+            await ws_broadcast({
+                "event": "socket_rejected",
+                "data": {"pedestal_id": s.pedestal_id, "socket_id": s.socket_id},
+            })
+            rejected.append(s)
+        except Exception as exc:
+            logger.warning(
+                "Auto-reject failed for pedestal %s socket %s: %s",
+                s.pedestal_id, s.socket_id, exc,
+            )
+    return rejected

@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_ADMIN_EMAIL = settings.default_admin_email
 DEFAULT_ADMIN_PASSWORD = settings.default_admin_password
 
-PENDING_TIMEOUT_SECONDS = 15
+PENDING_TIMEOUT_SECONDS = settings.pending_timeout_seconds
 COMM_LOSS_TIMEOUT_SECONDS = 60
 
 
@@ -103,6 +103,26 @@ async def _pending_session_watchdog():
                     logger.warning(f"Watchdog: failed to deny session {s.id}: {e}")
         except Exception as e:
             logger.warning(f"Pending session watchdog error: {e}")
+        finally:
+            db.close()
+
+
+async def _socket_pending_watchdog():
+    """
+    Every 10s: find SocketStates with operator_status='pending' older than
+    PENDING_TIMEOUT_SECONDS and auto-reject them via the shared helper.
+    """
+    from .services.mqtt_handlers import auto_reject_stale_socket_pending
+    while True:
+        await asyncio.sleep(10)
+        cutoff = datetime.utcnow() - timedelta(seconds=PENDING_TIMEOUT_SECONDS)
+        db = SessionLocal()
+        try:
+            await auto_reject_stale_socket_pending(
+                db, cutoff, mqtt_service.publish, ws_manager.broadcast, PENDING_TIMEOUT_SECONDS,
+            )
+        except Exception as e:
+            logger.warning(f"Socket pending watchdog error: {e}")
         finally:
             db.close()
 
@@ -387,17 +407,19 @@ async def lifespan(app: FastAPI):
     )
 
     from .services.berth_analyzer import run_berth_analysis
-    cleanup_task    = asyncio.create_task(_hourly_log_purge())
-    watchdog_task   = asyncio.create_task(_pending_session_watchdog())
-    comm_loss_task  = asyncio.create_task(_comm_loss_watchdog())
-    berth_task      = asyncio.create_task(run_berth_analysis())
-    camera_task     = asyncio.create_task(_camera_health_check())
+    cleanup_task         = asyncio.create_task(_hourly_log_purge())
+    watchdog_task        = asyncio.create_task(_pending_session_watchdog())
+    socket_pending_task  = asyncio.create_task(_socket_pending_watchdog())
+    comm_loss_task       = asyncio.create_task(_comm_loss_watchdog())
+    berth_task           = asyncio.create_task(run_berth_analysis())
+    camera_task          = asyncio.create_task(_camera_health_check())
 
     yield
 
     logger.info("Shutting down...")
     cleanup_task.cancel()
     watchdog_task.cancel()
+    socket_pending_task.cancel()
     comm_loss_task.cancel()
     berth_task.cancel()
     camera_task.cancel()

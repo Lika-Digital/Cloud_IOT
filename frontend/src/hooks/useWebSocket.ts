@@ -22,6 +22,8 @@ export function useWebSocket() {
     incrementNewErrors,
     updateBerthOccupancy,
     updatePedestalHealthEntry,
+    addPendingSocket,
+    removePendingSocket,
   } = useStore()
   const { role } = useAuthStore()
 
@@ -71,7 +73,19 @@ export function useWebSocket() {
 
     function handleMessage(msg: { event: string; data: Record<string, unknown> }) {
       switch (msg.event) {
+        case 'socket_pending': {
+          addPendingSocket(msg.data.pedestal_id as number, msg.data.socket_id as number)
+          break
+        }
+        case 'socket_rejected': {
+          removePendingSocket(msg.data.pedestal_id as number, msg.data.socket_id as number)
+          break
+        }
         case 'session_created': {
+          // When a session becomes active, clear the socket-level pending flag
+          if (msg.data.status === 'active') {
+            removePendingSocket(msg.data.pedestal_id as number, msg.data.socket_id as number)
+          }
           addSession({
             id: msg.data.session_id as number,
             pedestal_id: msg.data.pedestal_id as number,

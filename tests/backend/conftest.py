@@ -59,7 +59,7 @@ def setup_test_databases():
         from app.database import Base
         from app.auth.user_database import UserBase
         from app.models import pedestal, session as session_model, sensor_reading  # noqa
-        from app.models import pedestal_config, active_alarm, error_log, external_api, pilot_assignment  # noqa
+        from app.models import pedestal_config, active_alarm, error_log, external_api, pilot_assignment, session_audit  # noqa
         from app.auth import models, customer_models, contract_models, berth_models  # noqa
 
         Base.metadata.create_all(bind=test_engine)

@@ -62,7 +62,9 @@ def setup_test_databases():
         from app.models import pedestal_config, active_alarm, error_log, external_api, pilot_assignment, session_audit  # noqa
         from app.auth import models, customer_models, contract_models, berth_models  # noqa
 
+        Base.metadata.drop_all(bind=test_engine)
         Base.metadata.create_all(bind=test_engine)
+        UserBase.metadata.drop_all(bind=test_user_engine)
         UserBase.metadata.create_all(bind=test_user_engine)
 
         # Seed pedestal (mobile_enabled=True so pedestal-status endpoint returns it)

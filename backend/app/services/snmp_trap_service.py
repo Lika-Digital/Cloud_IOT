@@ -128,10 +128,15 @@ def _extract_varbinds(buf: bytes) -> list[tuple[str, object]]:
                             val_tag = val[inner_pos]; inner_pos += 1
                             val_len, inner_pos = _read_length(val, inner_pos)
                             val_bytes = val[inner_pos: inner_pos + val_len]
-                            oid_str   = _decode_oid(oid_bytes)
-                            pval      = _decode_value(val_tag, val_bytes)
-                            results.append((oid_str, pval))
-                            continue
+                            end_pos   = inner_pos + val_len
+                            # Only treat as a VarBind if there are no leftover bytes —
+                            # SNMPv1 Trap-PDU starts with enterprise OID + more fields
+                            # which would leave trailing bytes and must be walked instead
+                            if end_pos >= len(val):
+                                oid_str = _decode_oid(oid_bytes)
+                                pval    = _decode_value(val_tag, val_bytes)
+                                results.append((oid_str, pval))
+                                continue
                     except Exception:
                         pass
                 _walk(val, depth + 1)

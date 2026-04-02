@@ -2,21 +2,23 @@
 # ============================================================================
 # Cloud IoT NUC — In-place Upgrade Script
 #
-# Pulls the latest main branch from GitHub, detects what changed, rebuilds
-# the frontend if needed, and restarts only the affected services.
+# Pulls the latest main branch from GitHub into ~/Cloud_IOT (the git repo),
+# copies changed files to /opt/cloud-iot (the running app), rebuilds the
+# frontend if needed, and restarts only the affected services.
 # The .env file and databases are never touched.
 #
 # Usage (on the NUC):
-#   sudo bash /opt/cloud-iot/nuc_image/upgrade.sh
+#   sudo bash ~/Cloud_IOT/nuc_image/upgrade.sh
 #
 # Requirements:
 #   - NUC must have internet access (GitHub reachable)
-#   - Application installed at /opt/cloud-iot
+#   - Git repo at /home/cloud_iot/Cloud_IOT
+#   - Application running at /opt/cloud-iot
 # ============================================================================
 set -euo pipefail
 
+REPO_DIR="/home/cloud_iot/Cloud_IOT"
 APP_DIR="/opt/cloud-iot"
-VENV_BIN="${APP_DIR}/backend/.venv/bin"
 LOG_FILE="/var/log/cloud-iot/upgrade.log"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -29,7 +31,9 @@ phase() { echo -e "\n${CYAN}${BOLD}  ▶ $*${NC}" | tee -a "$LOG_FILE"; }
 
 # ── Guards ────────────────────────────────────────────────────────────────────
 [ "$(id -u)" -eq 0 ] || error "Run as root: sudo bash $0"
-[ -d "$APP_DIR/.git" ] || error "App not found at ${APP_DIR} — is Cloud IoT installed?"
+[ -d "${REPO_DIR}/.git" ] || error "Git repo not found at ${REPO_DIR} — run: git clone https://github.com/Lika-Digital/Cloud_IOT.git ${REPO_DIR}"
+[ -d "$APP_DIR" ]         || error "App not found at ${APP_DIR} — is Cloud IoT installed?"
+
 mkdir -p /var/log/cloud-iot
 echo "" >> "$LOG_FILE"
 echo "════════════════════════════════════════════════" >> "$LOG_FILE"
@@ -44,7 +48,7 @@ echo ""
 
 # ── Show current version ──────────────────────────────────────────────────────
 phase "Current version"
-cd "$APP_DIR"
+cd "$REPO_DIR"
 CURRENT_COMMIT=$(git rev-parse --short HEAD)
 CURRENT_DESCR=$(git log -1 --pretty="%s" 2>/dev/null || echo "unknown")
 info "Running: ${CURRENT_COMMIT} — ${CURRENT_DESCR}"
@@ -67,7 +71,7 @@ echo -e "  ${BOLD}Commits to apply:${NC}"
 git log HEAD..origin/main --oneline | sed 's/^/    /' | tee -a "$LOG_FILE"
 echo ""
 
-# Detect changed files
+# Detect changed files before pull
 CHANGED_FILES=$(git diff HEAD..origin/main --name-only)
 BACKEND_CHANGED=false
 FRONTEND_CHANGED=false
@@ -86,13 +90,10 @@ read -r -p "  Apply upgrade? [y/N]: " CONFIRM
 echo ""
 
 # ── Pull ──────────────────────────────────────────────────────────────────────
-phase "Applying update"
+phase "Pulling latest code"
 git pull origin main 2>&1 | tee -a "$LOG_FILE" || error "git pull failed"
 NEW_COMMIT=$(git rev-parse --short HEAD)
 info "Updated to: ${NEW_COMMIT}"
-
-# ── Fix ownership ─────────────────────────────────────────────────────────────
-chown -R cloud-iot:cloud-iot "$APP_DIR" 2>/dev/null || true
 
 # ── Frontend rebuild ──────────────────────────────────────────────────────────
 if $FRONTEND_CHANGED; then
@@ -103,36 +104,43 @@ if $FRONTEND_CHANGED; then
   for n in node nodejs; do
     command -v "$n" &>/dev/null && NODE_BIN="$n" && break
   done
-  [ -n "$NODE_BIN" ] || error "node not found — cannot rebuild frontend"
+  [ -n "$NODE_BIN" ] || error "node not found — install Node.js first"
   info "Node: $($NODE_BIN --version)"
 
-  cd "${APP_DIR}/frontend"
+  cd "${REPO_DIR}/frontend"
 
-  # Install deps only if package.json changed
-  if echo "$CHANGED_FILES" | grep -q "^frontend/package"; then
-    info "package.json changed — running npm install"
+  # Install/update deps if needed
+  if [ ! -d node_modules ] || echo "$CHANGED_FILES" | grep -q "^frontend/package"; then
+    info "Installing frontend dependencies..."
     npm install --silent 2>&1 | tail -3 | tee -a "$LOG_FILE"
   fi
 
   npm run build 2>&1 | tee -a "$LOG_FILE" || error "Frontend build failed"
-  chown -R cloud-iot:cloud-iot "${APP_DIR}/frontend/dist" 2>/dev/null || true
-  info "Frontend built"
+  info "Frontend built — copying to ${APP_DIR}/frontend/dist/"
+  cp -r dist/* "${APP_DIR}/frontend/dist/"
+  chown -R cloud_iot:cloud_iot "${APP_DIR}/frontend/dist" 2>/dev/null || true
+  info "Frontend deployed"
 
-  systemctl reload nginx 2>/dev/null && info "nginx reloaded" || warn "nginx reload failed — try: sudo systemctl restart nginx"
-  cd "$APP_DIR"
+  cd "$REPO_DIR"
 fi
 
-# ── Backend restart ───────────────────────────────────────────────────────────
+# ── Backend copy + restart ────────────────────────────────────────────────────
 if $BACKEND_CHANGED; then
-  phase "Restarting backend"
+  phase "Deploying backend"
 
   # Check for new Python dependencies
   if echo "$CHANGED_FILES" | grep -q "^backend/requirements.txt"; then
     info "requirements.txt changed — installing new packages"
-    "${VENV_BIN}/pip" install -r "${APP_DIR}/backend/requirements.txt" -q \
+    VENV_PIP="${APP_DIR}/backend/.venv/bin/pip"
+    [ -f "$VENV_PIP" ] && "$VENV_PIP" install -r "${REPO_DIR}/backend/requirements.txt" -q \
       2>&1 | tee -a "$LOG_FILE" || warn "pip install had errors — check logs"
   fi
 
+  info "Copying backend/app to ${APP_DIR}/backend/"
+  cp -r "${REPO_DIR}/backend/app" "${APP_DIR}/backend/"
+  chown -R cloud_iot:cloud_iot "${APP_DIR}/backend/app" 2>/dev/null || true
+
+  phase "Restarting backend service"
   systemctl restart cloud-iot-backend.service
   info "Backend restarting..."
 
@@ -143,7 +151,7 @@ if $BACKEND_CHANGED; then
       info "Backend is up (${i}s)"
       break
     fi
-    [ "$i" -eq 15 ] && warn "Backend taking longer than expected — check: sudo cloud-iot logs"
+    [ "$i" -eq 15 ] && warn "Backend taking longer than expected — check: sudo journalctl -u cloud-iot-backend.service -n 30"
   done
 fi
 
@@ -156,12 +164,12 @@ info "Previous: ${CURRENT_COMMIT} — ${CURRENT_DESCR}"
 info "Now:      ${NEW_COMMIT} — $(git log -1 --pretty='%s')"
 echo ""
 echo -e "  ${BOLD}Service status:${NC}"
-for svc in cloud-iot-backend cloud-iot-compose nginx; do
-  STATE=$(systemctl is-active "$svc" 2>/dev/null || echo "unknown")
+for svc in cloud-iot-backend mosquitto nginx; do
+  STATE=$(systemctl is-active "$svc" 2>/dev/null || echo "not installed")
   if [ "$STATE" = "active" ]; then
     echo -e "    ${GREEN}●${NC} ${svc}: ${STATE}"
   else
-    echo -e "    ${RED}●${NC} ${svc}: ${STATE}"
+    echo -e "    ${YELLOW}●${NC} ${svc}: ${STATE}"
   fi
 done
 echo ""

@@ -8,7 +8,6 @@ import {
   scanAllDevices,
   type PedestalConfigData,
   type DiscoveredCamera,
-  type DiscoveredTempSensor,
 } from '../../api/pedestalConfig'
 
 // ─── Status dot ───────────────────────────────────────────────────────────────
@@ -118,13 +117,10 @@ export default function DevicesPanel() {
   const [cameraUrl, setCameraUrl]         = useState('')
   const [cameraUser, setCameraUser]       = useState('')
   const [cameraPass, setCameraPass]       = useState('')
-  const [tempIp, setTempIp]               = useState('')
-  const [tempPort, setTempPort]           = useState('80')
-  const [tempProto, setTempProto]         = useState<'http' | 'modbus_tcp'>('http')
 
   // Scan state
   const [scanning, setScanning]           = useState(false)
-  const [scanResult, setScanResult]       = useState<{ cameras: DiscoveredCamera[]; temp_sensors: DiscoveredTempSensor[] } | null>(null)
+  const [scanResult, setScanResult]       = useState<{ cameras: DiscoveredCamera[] } | null>(null)
   const [scanMsg, setScanMsg]             = useState('')
 
   const [saving, setSaving]               = useState(false)
@@ -150,9 +146,6 @@ export default function DevicesPanel() {
       setCameraUrl(c.camera_stream_url ?? '')
       setCameraUser(c.camera_username ?? '')
       setCameraPass(c.camera_password ?? '')
-      setTempIp(c.temp_sensor_ip ?? '')
-      setTempPort(String(c.temp_sensor_port ?? 80))
-      setTempProto((c.temp_sensor_protocol as 'http' | 'modbus_tcp') ?? 'http')
       setScanResult(null)
       setScanMsg('')
       setSaveMsg(null)
@@ -166,11 +159,10 @@ export default function DevicesPanel() {
     try {
       const result = await scanAllDevices()
       setScanResult(result)
-      const total = result.cameras.length + result.temp_sensors.length
       setScanMsg(
-        total === 0
-          ? `No devices found on ${result.subnet}.0/24. Use manual entry below.`
-          : `Found ${result.cameras.length} camera(s), ${result.temp_sensors.length} temp sensor(s) on ${result.subnet}.0/24`
+        result.cameras.length === 0
+          ? `No cameras found on ${result.subnet}.0/24. Use manual entry below.`
+          : `Found ${result.cameras.length} camera(s) on ${result.subnet}.0/24`
       )
     } catch {
       setScanMsg('Scan failed. Check network connection.')
@@ -183,13 +175,6 @@ export default function DevicesPanel() {
     setCameraIp(cam.ip)
     setCameraUrl(`rtsp://user:password@${cam.ip}:554/profile1`)
     setScanMsg('Camera assigned. Update the RTSP URL with correct credentials and stream path, then save.')
-  }
-
-  const assignTempSensor = (sensor: DiscoveredTempSensor) => {
-    setTempIp(sensor.ip)
-    setTempPort(String(sensor.port))
-    setTempProto(sensor.protocol)
-    setScanMsg('Temperature sensor assigned. Click Save.')
   }
 
   const handleSave = async () => {
@@ -205,9 +190,6 @@ export default function DevicesPanel() {
         camera_stream_url:    cameraUrl       || undefined,
         camera_username:      cameraUser      || undefined,
         camera_password:      cameraPass      || undefined,
-        temp_sensor_ip:       tempIp          || undefined,
-        temp_sensor_port:     tempPort ? parseInt(tempPort) : undefined,
-        temp_sensor_protocol: tempProto,
       })
       // Refresh cfg to get updated health/status
       const fresh = await getPedestalConfig(selectedId)
@@ -247,15 +229,14 @@ export default function DevicesPanel() {
             <div>
               <p className="text-sm font-medium text-white">Auto-Discovery</p>
               <p className="text-xs text-gray-500 mt-0.5">
-                Scans LAN for ONVIF cameras and Papouch TME sensors
+                Scans LAN for ONVIF cameras
               </p>
             </div>
             <HelpBubble text={
-              'Scans your local network (LAN) to automatically find hardware devices.\n\n' +
+              'Scans your local network (LAN) to automatically find IP cameras.\n\n' +
               '📷 Cameras — sends an ONVIF WS-Discovery UDP multicast to detect any ONVIF-compatible IP camera (e.g. D-Link DCS-TF2283AI-DL).\n\n' +
-              '🌡 Temperature sensors — probes every IP on your /24 subnet looking for a Papouch TME HTTP response.\n\n' +
-              'Scan takes up to 5 seconds. Found devices appear below with an Assign button to fill in the fields automatically.\n\n' +
-              'Use manual entry below if auto-discovery does not find your device.'
+              'Scan takes up to 5 seconds. Found cameras appear below with an Assign button to fill in the RTSP URL automatically.\n\n' +
+              'Use manual entry below if auto-discovery does not find your camera.'
             } />
           </div>
           <button
@@ -288,15 +269,6 @@ export default function DevicesPanel() {
           </div>
         )}
 
-        {/* Discovered temp sensors */}
-        {scanResult && scanResult.temp_sensors.length > 0 && (
-          <div className="space-y-2">
-            <p className="text-xs text-gray-500 uppercase tracking-wider">Temperature sensors found</p>
-            {scanResult.temp_sensors.map((s, i) => (
-              <DiscoveredBadge key={i} item={s} onAssign={() => assignTempSensor(s)} />
-            ))}
-          </div>
-        )}
       </div>
 
       {/* ── Arduino OPTA ─────────────────────────────────────────────────────── */}
@@ -337,7 +309,7 @@ export default function DevicesPanel() {
           <TextInput value={cameraIp} onChange={setCameraIp} placeholder="e.g. 192.168.1.50" />
         </Field>
         <Field label="RTSP Stream URL">
-          <TextInput value={cameraUrl} onChange={setCameraUrl} placeholder="rtsp://192.168.1.50/stream1" />
+          <TextInput value={cameraUrl} onChange={setCameraUrl} placeholder="rtsp://user:password@192.168.1.50:554/profile1" />
         </Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Username">
@@ -350,39 +322,6 @@ export default function DevicesPanel() {
         {cfg?.last_camera_check && (
           <p className="text-xs text-gray-600">
             Last check: {new Date(cfg.last_camera_check).toLocaleString()}
-          </p>
-        )}
-      </DeviceCard>
-
-      {/* ── Papouch TME ──────────────────────────────────────────────────────── */}
-      <DeviceCard
-        icon="🌡️"
-        title="Temperature Sensor — Papouch TME"
-        status={<StatusDot ok={cfg?.temp_sensor_reachable ?? false} label={cfg?.temp_sensor_reachable ? 'Reachable' : 'Unreachable'} />}
-      >
-        <div className="grid grid-cols-3 gap-3">
-          <div className="col-span-2">
-            <Field label="Sensor IP">
-              <TextInput value={tempIp} onChange={setTempIp} placeholder="e.g. 192.168.1.51" />
-            </Field>
-          </div>
-          <Field label="Port">
-            <TextInput value={tempPort} onChange={setTempPort} placeholder="80" />
-          </Field>
-        </div>
-        <Field label="Protocol">
-          <select
-            value={tempProto}
-            onChange={(e) => setTempProto(e.target.value as 'http' | 'modbus_tcp')}
-            className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-200 text-sm focus:outline-none focus:border-blue-500"
-          >
-            <option value="http">HTTP (web server, port 80)</option>
-            <option value="modbus_tcp">Modbus TCP (port 502)</option>
-          </select>
-        </Field>
-        {cfg?.last_temp_sensor_check && (
-          <p className="text-xs text-gray-600">
-            Last check: {new Date(cfg.last_temp_sensor_check).toLocaleString()}
           </p>
         )}
       </DeviceCard>

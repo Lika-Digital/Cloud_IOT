@@ -27,8 +27,9 @@ export default function PedestalView({ pedestalId }: PedestalViewProps) {
   const [selectedZone, setSelectedZone] = useState<ZoneId | null>(null)
   const [cameraOpen, setCameraOpen] = useState(false)
 
-  const { pedestals, temperatureData, moistureData } = useStore()
+  const { pedestals, temperatureData, moistureData, marinaDoorState } = useStore()
   const pedestal = pedestals.find((p) => p.id === pedestalId)
+  const doorState = marinaDoorState[pedestalId]
 
   const temp = temperatureData[pedestalId]
   const moist = moistureData[pedestalId]
@@ -76,6 +77,18 @@ export default function PedestalView({ pedestalId }: PedestalViewProps) {
           <p className="text-xs text-gray-500 text-center mt-2">
             Click sockets, water pipes, or camera to manage
           </p>
+
+          {/* Marina door status */}
+          {doorState && (
+            <div className={`flex items-center justify-center gap-2 mt-2 px-3 py-1.5 rounded-lg text-xs border ${
+              doorState === 'open'
+                ? 'bg-red-900/30 border-red-700/50 text-red-300 animate-pulse'
+                : 'bg-gray-800 border-gray-700 text-gray-400'
+            }`}>
+              <span>{doorState === 'open' ? '🔓' : '🔒'}</span>
+              <span>Cabinet door: <strong>{doorState === 'open' ? 'OPEN' : 'Closed'}</strong></span>
+            </div>
+          )}
 
           {/* Sensor readings bar */}
           <div className="flex gap-3 mt-3 justify-center">

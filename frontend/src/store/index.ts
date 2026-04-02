@@ -155,6 +155,10 @@ interface AppStore {
   pedestalHealth: Record<number, PedestalHealth>
   setPedestalHealth: (health: Record<number, PedestalHealth>) => void
   updatePedestalHealthEntry: (pedestalId: number, update: Partial<PedestalHealth>) => void
+
+  // Marina cabinet door state per pedestal
+  marinaDoorState: Record<number, 'open' | 'closed'>
+  setMarinaDoorState: (pedestalId: number, state: 'open' | 'closed') => void
 }
 
 export const useStore = create<AppStore>((set) => ({
@@ -287,4 +291,8 @@ export const useStore = create<AppStore>((set) => ({
         [pedestalId]: { ...(s.pedestalHealth[pedestalId] ?? {}), ...update } as PedestalHealth,
       },
     })),
+
+  marinaDoorState: {},
+  setMarinaDoorState: (pedestalId, state) =>
+    set((s) => ({ marinaDoorState: { ...s.marinaDoorState, [pedestalId]: state } })),
 }))

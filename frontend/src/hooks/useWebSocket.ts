@@ -24,6 +24,7 @@ export function useWebSocket() {
     updatePedestalHealthEntry,
     addPendingSocket,
     removePendingSocket,
+    setMarinaDoorState,
   } = useStore()
   const { role } = useAuthStore()
 
@@ -206,6 +207,27 @@ export function useWebSocket() {
             camera_reachable: msg.data.camera_reachable as boolean | undefined,
             last_camera_check: msg.data.last_camera_check as string | null | undefined,
           } as Partial<import('../store').PedestalHealth>)
+          break
+        }
+        case 'marina_door': {
+          const pedestalId = msg.data.pedestal_id as number
+          const door = msg.data.door as 'open' | 'closed'
+          setMarinaDoorState(pedestalId, door)
+          if (role === 'admin' && door === 'open') {
+            const cabinetId = msg.data.cabinet_id as string
+            if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+              new Notification('Cabinet Door Open', {
+                body: `Cabinet ${cabinetId} door opened`,
+                icon: '/vite.svg',
+              })
+            }
+          }
+          break
+        }
+        case 'marina_event': {
+          // Future: show in event log; for now just update health to keep pedestal visible
+          const pedestalId = msg.data.pedestal_id as number
+          if (pedestalId) updatePedestalHealthEntry(pedestalId, {})
           break
         }
       }

@@ -78,6 +78,7 @@ export interface BerthStatus {
   camera_stream_url?: string | null
   camera_reachable?: boolean
   reference_image_count?: number
+  berth_type?: 'transit' | 'yearly'
 }
 
 export interface PedestalHealth {

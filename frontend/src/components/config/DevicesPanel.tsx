@@ -76,21 +76,14 @@ function TextInput({ value, onChange, placeholder, type = 'text' }: {
 // ─── Discovered badge ──────────────────────────────────────────────────────────
 
 function DiscoveredBadge({ item, onAssign }: {
-  item: DiscoveredCamera | DiscoveredTempSensor
+  item: DiscoveredCamera
   onAssign: () => void
 }) {
-  const isCamera = item.type === 'camera_onvif'
-  const temp = !isCamera ? (item as DiscoveredTempSensor).temperature : null
   return (
     <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-blue-900/20 border border-blue-700/40">
       <div>
         <p className="text-sm text-blue-300 font-medium">{item.name}</p>
-        <p className="text-xs text-blue-400/70">
-          {isCamera
-            ? (item as DiscoveredCamera).onvif_url
-            : `${item.ip}:${(item as DiscoveredTempSensor).port} — ${temp !== null ? `${temp}°C` : 'HTTP'}`
-          }
-        </p>
+        <p className="text-xs text-blue-400/70">{item.onvif_url}</p>
       </div>
       <button
         onClick={onAssign}

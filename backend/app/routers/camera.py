@@ -80,6 +80,12 @@ def camera_stream(
         m = re.search(r"://(?:[^:@]+:[^@]+@)?([^/:]+)", cfg.camera_stream_url)
         camera_ip = m.group(1) if m else ""
 
+    # Final fallback: use camera_ip stored directly on the Pedestal record
+    if not camera_ip:
+        from ..models.pedestal import Pedestal
+        pedestal = db.get(Pedestal, pedestal_id)
+        camera_ip = (pedestal.camera_ip or "") if pedestal else ""
+
     if not camera_ip:
         raise HTTPException(status_code=400, detail="No camera IP configured for this pedestal")
 

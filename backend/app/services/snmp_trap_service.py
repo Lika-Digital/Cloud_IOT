@@ -193,8 +193,8 @@ async def _process_varbinds(varbinds: list[tuple[str, object]], sender_ip: str):
             return
 
     if varbinds:
-        logger.debug("[SNMP] Trap from %s — no matching temp OID. VarBinds: %s",
-                     sender_ip, [(o, v) for o, v in varbinds[:5]])
+        logger.info("[SNMP] Trap from %s — no matching temp OID (watching: %s). VarBinds: %s",
+                    sender_ip, temp_oid, [(o, v) for o, v in varbinds[:5]])
 
 
 # ── Service start / stop ──────────────────────────────────────────────────────

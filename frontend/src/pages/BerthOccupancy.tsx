@@ -200,7 +200,7 @@ export default function BerthOccupancy() {
                       <td className="px-4 py-3 font-medium text-white">
                         {b.alarm ? '🚨 ' : ''}{b.name}
                       </td>
-                      <td className="px-4 py-3"><BerthTypeBadge type={b.berth_type} /></td>
+                      <td className="px-4 py-3"><BerthTypeBadge type={b.berth_type ?? 'transit'} /></td>
                       <td className="px-4 py-3"><StatusBadge status={b.status} /></td>
                       <td className="px-4 py-3"><StateCodeBadge stateCode={b.state_code} /></td>
                       <td className="px-4 py-3 text-xs font-mono">

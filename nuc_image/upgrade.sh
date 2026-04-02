@@ -121,6 +121,8 @@ if $FRONTEND_CHANGED; then
   chown -R cloud_iot:cloud_iot "${APP_DIR}/frontend/dist" 2>/dev/null || true
   info "Frontend deployed"
 
+  nginx -s reload 2>/dev/null && info "nginx reloaded" || warn "nginx reload failed — try: sudo systemctl restart nginx"
+
   cd "$REPO_DIR"
 fi
 

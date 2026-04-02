@@ -144,6 +144,7 @@ test.describe('Sessions — Pending session zone (socket panel)', () => {
   test('pending panel shows customer name', async ({ page }) => {
     const pedestalContainer = page.locator('.relative.inline-block')
     const pendingBtn = pedestalContainer.locator('button.animate-pulse').first()
+    await expect(pendingBtn).toBeVisible()
     await pendingBtn.click()
 
     await expect(page.getByText('Pending Sailor')).toBeVisible()

@@ -110,6 +110,7 @@ export default function DevicesPanel() {
   const [cameraUrl, setCameraUrl]         = useState('')
   const [cameraUser, setCameraUser]       = useState('')
   const [cameraPass, setCameraPass]       = useState('')
+  const [showCameraPass, setShowCameraPass] = useState(false)
 
   // Scan state
   const [scanning, setScanning]           = useState(false)
@@ -309,7 +310,17 @@ export default function DevicesPanel() {
             <TextInput value={cameraUser} onChange={setCameraUser} placeholder="admin" />
           </Field>
           <Field label="Password">
-            <TextInput value={cameraPass} onChange={setCameraPass} placeholder="camera password" type="password" />
+            <div className="relative">
+              <TextInput value={cameraPass} onChange={setCameraPass} placeholder="camera password" type={showCameraPass ? 'text' : 'password'} />
+              <button
+                type="button"
+                onClick={() => setShowCameraPass((v) => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 text-sm px-1"
+                tabIndex={-1}
+              >
+                {showCameraPass ? '🙈' : '👁'}
+              </button>
+            </div>
           </Field>
         </div>
         {cfg?.last_camera_check && (

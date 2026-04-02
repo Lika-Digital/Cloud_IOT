@@ -424,6 +424,42 @@ def update_berth_config(
     return {"ok": True}
 
 
+@router.post("/api/admin/berths")
+def create_berth(
+    body: BerthConfigUpdate,
+    user_db: DBSession = Depends(get_user_db),
+    _admin=Depends(require_admin),
+):
+    """Create a new berth."""
+    berth = Berth(
+        name=(body.name or "New Berth").strip(),
+        pedestal_id=body.pedestal_id if body.pedestal_id and body.pedestal_id > 0 else None,
+        berth_type=body.berth_type or "transit",
+        status="free",
+        detected_status="free",
+    )
+    user_db.add(berth)
+    user_db.commit()
+    user_db.refresh(berth)
+    return {"ok": True, "id": berth.id}
+
+
+@router.delete("/api/admin/berths/{berth_id}")
+def delete_berth(
+    berth_id: int,
+    user_db: DBSession = Depends(get_user_db),
+    _admin=Depends(require_admin),
+):
+    """Delete a berth and its reservations."""
+    berth = user_db.get(Berth, berth_id)
+    if not berth:
+        raise HTTPException(status_code=404, detail="Berth not found")
+    user_db.query(BerthReservation).filter(BerthReservation.berth_id == berth_id).delete()
+    user_db.delete(berth)
+    user_db.commit()
+    return {"ok": True}
+
+
 @router.put("/api/admin/berths/{berth_id}/status")
 def set_berth_status(
     berth_id: int,

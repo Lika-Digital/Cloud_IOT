@@ -82,3 +82,9 @@ export const deleteReferenceImage = (berthId: number, filename: string) =>
 
 export const updateBerthConfig = (berthId: number, body: { name?: string; pedestal_id?: number; berth_type?: 'transit' | 'yearly' }) =>
   api.put(`/admin/berths/${berthId}/config`, body).then((r) => r.data)
+
+export const createBerth = (body: { name?: string; pedestal_id?: number; berth_type?: 'transit' | 'yearly' }) =>
+  api.post('/admin/berths', body).then((r) => r.data)
+
+export const deleteBerth = (berthId: number) =>
+  api.delete(`/admin/berths/${berthId}`).then((r) => r.data)

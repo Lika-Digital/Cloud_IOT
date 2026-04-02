@@ -3,6 +3,7 @@ import { useStore } from '../store'
 import {
   getBerths, getBerthCalendar, triggerAnalysis,
   getReferenceImages, uploadReferenceImages, deleteReferenceImage, updateBerthConfig,
+  createBerth, deleteBerth,
   type BerthOut, type CalendarEntry,
 } from '../api/berths'
 import { useAuthStore } from '../store/authStore'
@@ -169,11 +170,19 @@ export default function BerthOccupancy() {
           <div className="bg-gray-900 rounded-xl border border-gray-800">
             <div className="px-6 py-4 border-b border-gray-800 flex items-center justify-between">
               <h2 className="text-lg font-semibold text-white">Berth Status Summary</h2>
-              {berthOccupancy.some((b) => b.alarm) && (
-                <span className="flex items-center gap-2 text-sm font-bold text-red-400 animate-pulse">
-                  🚨 {berthOccupancy.filter((b) => b.alarm).length} alarm(s) active
-                </span>
-              )}
+              <div className="flex items-center gap-3">
+                {berthOccupancy.some((b) => b.alarm) && (
+                  <span className="flex items-center gap-2 text-sm font-bold text-red-400 animate-pulse">
+                    🚨 {berthOccupancy.filter((b) => b.alarm).length} alarm(s) active
+                  </span>
+                )}
+                <button
+                  onClick={async () => { await createBerth({ name: 'New Berth', berth_type: 'transit' }); refresh() }}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-600 text-white font-medium"
+                >
+                  + Add Berth
+                </button>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -427,6 +436,13 @@ function BerthConfigModal({ berth, onClose }: { berth: BerthOut; onClose: () => 
           )}
 
           <div className="flex gap-2 pt-1">
+            <button
+              onClick={async () => { if (confirm(`Delete berth "${berth.name}"?`)) { await deleteBerth(berth.id); onClose() } }}
+              className="py-2 px-3 rounded-lg border border-red-700/50 text-red-400 text-sm hover:bg-red-900/20"
+              title="Delete this berth"
+            >
+              🗑
+            </button>
             <button onClick={onClose} className="flex-1 py-2 rounded-lg border border-gray-700 text-gray-400 text-sm hover:text-gray-200">
               {msg?.ok ? 'Close' : 'Cancel'}
             </button>

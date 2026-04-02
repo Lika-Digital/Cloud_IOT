@@ -1,7 +1,7 @@
 """Admin settings endpoints: SMTP, SNMP trap, network info, active pedestals, pilot assignments."""
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from sqlalchemy.orm import Session
 
 from ..auth.user_database import get_user_db
@@ -111,6 +111,16 @@ class SnmpConfigUpdate(BaseModel):
     community:   str    = "public"
     temp_oid:    str    = "1.3.6.1.4.1.18248.20.1.2.1.1.2.1"
     pedestal_id: int    = 1
+
+    @validator("temp_oid")
+    def strip_oid(cls, v: str) -> str:
+        return v.strip()
+
+    @validator("pedestal_id")
+    def pedestal_id_must_be_positive(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("pedestal_id must be ≥ 1")
+        return v
 
 
 def _get_snmp_config() -> dict:

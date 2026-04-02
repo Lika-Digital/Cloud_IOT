@@ -217,7 +217,7 @@ class _SnmpTrapProtocol(asyncio.DatagramProtocol):
 
 
 async def _process_varbinds(varbinds: list[tuple[str, object]], sender_ip: str):
-    temp_oid    = _config["temp_oid"]
+    temp_oid    = _config["temp_oid"].strip()
     pedestal_id = _config["pedestal_id"]
 
     for oid, value in varbinds:

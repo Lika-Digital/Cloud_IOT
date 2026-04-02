@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 # Tracks most-recent heartbeat per pedestal — read by _comm_loss_watchdog in main.py
 last_heartbeat: dict[int, datetime] = {}
 
-# Topic patterns
+# Topic patterns — legacy pedestal/... schema
 SOCKET_STATUS_RE  = re.compile(r"pedestal/(\d+)/socket/(\d+)/status")
 SOCKET_POWER_RE   = re.compile(r"pedestal/(\d+)/socket/(\d+)/power")
 WATER_FLOW_RE     = re.compile(r"pedestal/(\d+)/water/flow")
@@ -21,6 +21,12 @@ SENSOR_TEMP_RE    = re.compile(r"pedestal/(\d+)/sensors/temperature")
 SENSOR_MOIST_RE   = re.compile(r"pedestal/(\d+)/sensors/moisture")
 DIAGNOSTICS_RE    = re.compile(r"pedestal/(\d+)/diagnostics/response")
 SENSOR_REGISTER_RE = re.compile(r"pedestal/(\d+)/register")
+
+# Topic patterns — marina cabinet firmware schema (real hardware)
+MARINA_SOCKET_RE  = re.compile(r"marina/cabinet/([^/]+)/sockets/([^/]+)/state")
+MARINA_WATER_RE   = re.compile(r"marina/cabinet/([^/]+)/water/([^/]+)/state")
+MARINA_DOOR_RE    = re.compile(r"marina/cabinet/([^/]+)/door/state")
+MARINA_STATUS_RE  = re.compile(r"marina/cabinet/([^/]+)/status")
 
 
 def _hw_warn(source: str, message: str, details: str | None = None):
@@ -58,9 +64,77 @@ def _ensure_pedestal(db, pedestal_id: int):
         logger.info("Auto-created Pedestal %d from first MQTT message", pedestal_id)
 
 
+def _cabinet_to_pedestal_id(db, cabinet_id: str) -> int | None:
+    """
+    Resolve a marina cabinet string ID (e.g. 'MAR_KRK_ORM_01') to a numeric pedestal_id.
+    Looks up PedestalConfig.opta_client_id; auto-creates the Pedestal + PedestalConfig
+    on first contact so a new cabinet becomes visible in the dashboard immediately.
+    """
+    from ..models.pedestal_config import PedestalConfig
+    from ..models.pedestal import Pedestal
+
+    cfg = db.query(PedestalConfig).filter(
+        PedestalConfig.opta_client_id == cabinet_id
+    ).first()
+    if cfg:
+        return cfg.pedestal_id
+
+    # Auto-create: find the next free pedestal id
+    existing_ids = [p.id for p in db.query(Pedestal).all()]
+    new_id = max(existing_ids, default=0) + 1
+
+    db.add(Pedestal(
+        id=new_id,
+        name=cabinet_id,
+        location="",
+        data_mode="real",
+        initialized=False,
+        mobile_enabled=False,
+    ))
+    db.flush()
+
+    new_cfg = PedestalConfig(
+        pedestal_id=new_id,
+        opta_client_id=cabinet_id,
+        opta_connected=0,
+    )
+    db.add(new_cfg)
+    db.commit()
+    logger.info("Auto-created Pedestal %d for marina cabinet '%s'", new_id, cabinet_id)
+    return new_id
+
+
+def _socket_name_to_id(name: str) -> int:
+    """E1→1, E2→2, E3→3, E4→4; fallback: strip non-digits."""
+    mapping = {"E1": 1, "E2": 2, "E3": 3, "E4": 4}
+    if name in mapping:
+        return mapping[name]
+    digits = re.sub(r"\D", "", name)
+    return int(digits) if digits else 1
+
+
+def _water_name_to_id(name: str) -> int:
+    """V1→1, V2→2; fallback: strip non-digits."""
+    mapping = {"V1": 1, "V2": 2}
+    if name in mapping:
+        return mapping[name]
+    digits = re.sub(r"\D", "", name)
+    return int(digits) if digits else 1
+
+
 async def handle_message(topic: str, payload: str):
     try:
-        if m := SOCKET_STATUS_RE.match(topic):
+        # ── Marina cabinet firmware (real hardware) ──────────────────────────
+        if m := MARINA_SOCKET_RE.match(topic):
+            await _handle_marina_socket(m.group(1), m.group(2), payload)
+        elif m := MARINA_WATER_RE.match(topic):
+            await _handle_marina_water(m.group(1), m.group(2), payload)
+        elif m := MARINA_DOOR_RE.match(topic):
+            await _handle_marina_door(m.group(1), payload)
+        elif m := MARINA_STATUS_RE.match(topic):
+            await _handle_marina_status(m.group(1), payload)
+        # ── Legacy pedestal/... schema ───────────────────────────────────────
+        elif m := SOCKET_STATUS_RE.match(topic):
             await _handle_socket_status(int(m.group(1)), int(m.group(2)), payload)
         elif m := SOCKET_POWER_RE.match(topic):
             await _handle_socket_power(int(m.group(1)), int(m.group(2)), payload)
@@ -79,6 +153,135 @@ async def handle_message(topic: str, payload: str):
     except Exception as e:
         logger.error(f"Error handling MQTT message on {topic}: {e}")
         _hw_error("mqtt_handlers", f"Unhandled error on topic {topic}: {e}")
+
+
+async def _handle_marina_socket(cabinet_id: str, socket_name: str, payload: str):
+    """
+    marina/cabinet/{cabinetId}/sockets/{socketName}/state
+    Payload: {"id":"PWR-1","state":"idle"|"active","ts":...,"session":...}
+    """
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError as e:
+        logger.warning("[Marina] Bad socket payload from cabinet %s socket %s: %s", cabinet_id, socket_name, e)
+        return
+
+    raw_state = data.get("state", "")
+    # Map firmware states → legacy schema expected by _handle_socket_status
+    status = "connected" if raw_state == "active" else "disconnected"
+    socket_id = _socket_name_to_id(socket_name)
+
+    db = SessionLocal()
+    try:
+        pedestal_id = _cabinet_to_pedestal_id(db, cabinet_id)
+    finally:
+        db.close()
+
+    if pedestal_id is None:
+        logger.warning("[Marina] Could not resolve cabinet '%s' to pedestal_id", cabinet_id)
+        return
+
+    logger.debug("[Marina] cabinet=%s socket=%s(%d) state=%s→%s", cabinet_id, socket_name, socket_id, raw_state, status)
+    await _handle_socket_status(pedestal_id, socket_id, status)
+
+
+async def _handle_marina_water(cabinet_id: str, water_name: str, payload: str):
+    """
+    marina/cabinet/{cabinetId}/water/{waterName}/state
+    Payload: {"id":"WTR-1","state":"idle","ts":...,"total_l":1.0,"session_l":0,"session":null}
+    """
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError as e:
+        logger.warning("[Marina] Bad water payload from cabinet %s: %s", cabinet_id, e)
+        return
+
+    total_l = float(data.get("total_l", 0))
+    session_l = float(data.get("session_l", 0))
+    # Convert to legacy water format: lpm=session flow rate (session_l as proxy), total_liters
+    lpm = session_l  # firmware doesn't send L/min, use session_l as-is
+    legacy_payload = json.dumps({"lpm": lpm, "total_liters": total_l})
+
+    db = SessionLocal()
+    try:
+        pedestal_id = _cabinet_to_pedestal_id(db, cabinet_id)
+    finally:
+        db.close()
+
+    if pedestal_id is None:
+        logger.warning("[Marina] Could not resolve cabinet '%s' to pedestal_id", cabinet_id)
+        return
+
+    logger.debug("[Marina] cabinet=%s water=%s total_l=%.3f session_l=%.3f", cabinet_id, water_name, total_l, session_l)
+    await _handle_water_flow(pedestal_id, legacy_payload)
+
+
+async def _handle_marina_door(cabinet_id: str, payload: str):
+    """
+    marina/cabinet/{cabinetId}/door/state
+    Payload: {"cabinetId":"...","door":"open"|"closed","ts":"..."}
+    Broadcast door state for dashboard; no legacy mapping.
+    """
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError as e:
+        logger.warning("[Marina] Bad door payload from cabinet %s: %s", cabinet_id, e)
+        return
+
+    db = SessionLocal()
+    try:
+        pedestal_id = _cabinet_to_pedestal_id(db, cabinet_id)
+    finally:
+        db.close()
+
+    door_state = data.get("door", "unknown")
+    logger.info("[Marina] cabinet=%s door=%s", cabinet_id, door_state)
+
+    await ws_manager.broadcast({
+        "event": "marina_door",
+        "data": {
+            "pedestal_id": pedestal_id,
+            "cabinet_id": cabinet_id,
+            "door": door_state,
+            "timestamp": data.get("ts", datetime.utcnow().isoformat()),
+        },
+    })
+
+    if door_state == "open":
+        _hw_warn(f"cabinet_{cabinet_id}", f"Cabinet door OPEN on {cabinet_id}")
+
+
+async def _handle_marina_status(cabinet_id: str, payload: str):
+    """
+    marina/cabinet/{cabinetId}/status
+    Payload: {"cabinetId":"...","seq":34,"uptime_ms":512397,"door":"closed"}
+    Maps to heartbeat handler so the pedestal shows as connected.
+    """
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError as e:
+        logger.warning("[Marina] Bad status payload from cabinet %s: %s", cabinet_id, e)
+        return
+
+    db = SessionLocal()
+    try:
+        pedestal_id = _cabinet_to_pedestal_id(db, cabinet_id)
+    finally:
+        db.close()
+
+    if pedestal_id is None:
+        logger.warning("[Marina] Could not resolve cabinet '%s' to pedestal_id", cabinet_id)
+        return
+
+    # Build a legacy heartbeat payload
+    legacy_payload = json.dumps({
+        "online": True,
+        "timestamp": datetime.utcnow().isoformat(),
+        "uptime_ms": data.get("uptime_ms", 0),
+        "seq": data.get("seq", 0),
+    })
+    logger.debug("[Marina] cabinet=%s status seq=%s → heartbeat pedestal=%d", cabinet_id, data.get("seq"), pedestal_id)
+    await _handle_heartbeat(pedestal_id, legacy_payload)
 
 
 async def _handle_socket_status(pedestal_id: int, socket_id: int, payload: str):

@@ -8,6 +8,7 @@ from .mqtt_handlers import handle_message
 logger = logging.getLogger(__name__)
 
 TOPICS = [
+    # Legacy pedestal/... schema (test tool, simulator)
     "pedestal/+/socket/+/status",
     "pedestal/+/socket/+/power",
     "pedestal/+/water/flow",
@@ -16,6 +17,12 @@ TOPICS = [
     "pedestal/+/sensors/moisture",
     "pedestal/+/diagnostics/response",
     "pedestal/+/register",
+    # Marina cabinet firmware schema (real hardware)
+    "marina/cabinet/+/sockets/+/state",
+    "marina/cabinet/+/water/+/state",
+    "marina/cabinet/+/door/state",
+    "marina/cabinet/+/status",
+    "marina hello",
 ]
 
 

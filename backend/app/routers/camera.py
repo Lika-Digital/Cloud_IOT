@@ -73,23 +73,27 @@ def camera_stream(
     if not cfg:
         raise HTTPException(status_code=404, detail="Pedestal not found")
 
-    camera_ip = cfg.camera_fqdn or ""
-    if not camera_ip and cfg.camera_stream_url:
-        # Extract host from stream URL for MJPEG fallback
+    stream_url = cfg.camera_stream_url or ""
+    camera_ip  = cfg.camera_fqdn or ""
+    username   = cfg.camera_username or ""
+    password   = cfg.camera_password or ""
+
+    if not camera_ip and stream_url:
+        # Extract host from stream URL for IP-probe fallback
         import re
-        m = re.search(r"://(?:[^:@]+:[^@]+@)?([^/:]+)", cfg.camera_stream_url)
+        m = re.search(r"://(?:[^:@]+:[^@]+@)?([^/:]+)", stream_url)
         camera_ip = m.group(1) if m else ""
 
     # Final fallback: use camera_ip stored directly on the Pedestal record
-    if not camera_ip:
+    if not camera_ip and not stream_url:
         from ..models.pedestal import Pedestal
         pedestal = db.get(Pedestal, pedestal_id)
         camera_ip = (pedestal.camera_ip or "") if pedestal else ""
 
-    if not camera_ip:
+    if not camera_ip and not stream_url:
         raise HTTPException(status_code=400, detail="No camera IP configured for this pedestal")
 
     return StreamingResponse(
-        stream_ip_camera(camera_ip),
+        stream_ip_camera(camera_ip, stream_url=stream_url, username=username, password=password),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )

@@ -122,23 +122,41 @@ def _mock_detections(duration_s: int = 60) -> list[dict]:
 
 # ─── MJPEG proxy for real IP camera ─────────────────────────────────────────
 
-def stream_ip_camera(camera_ip: str) -> Generator[bytes, None, None]:
+def stream_ip_camera(
+    camera_ip: str,
+    stream_url: str | None = None,
+    username: str = "",
+    password: str = "",
+) -> Generator[bytes, None, None]:
     """
     Proxy an IP camera MJPEG stream.
-    Expects camera to expose its stream at http://{camera_ip}/video or /mjpeg.
+
+    If stream_url is provided (HTTP/HTTPS), it is tried first — with auth if
+    username/password are given.  Falls back to probing common paths on camera_ip.
     """
     try:
         import requests
 
-        urls_to_try = [
-            f"http://{camera_ip}/video",
-            f"http://{camera_ip}/mjpeg",
-            f"http://{camera_ip}:8080/video",
-        ]
+        auth = (username, password) if username else None
+
+        urls_to_try: list[str] = []
+
+        # 1. Use the explicit URL first (may already embed credentials in it)
+        if stream_url and stream_url.startswith(("http://", "https://")):
+            urls_to_try.append(stream_url)
+
+        # 2. Probe common MJPEG paths on bare IP (works for unauthenticated cams)
+        if camera_ip:
+            urls_to_try += [
+                f"http://{camera_ip}/video",
+                f"http://{camera_ip}/mjpeg",
+                f"http://{camera_ip}/stream",
+                f"http://{camera_ip}:8080/video",
+            ]
 
         for url in urls_to_try:
             try:
-                response = requests.get(url, stream=True, timeout=5)
+                response = requests.get(url, stream=True, timeout=5, auth=auth)
                 if response.status_code == 200:
                     logger.info(f"Proxying camera stream from {url}")
                     for chunk in response.iter_content(chunk_size=4096):
@@ -147,7 +165,7 @@ def stream_ip_camera(camera_ip: str) -> Generator[bytes, None, None]:
             except Exception:
                 continue
 
-        logger.warning(f"Could not reach camera at {camera_ip}")
+        logger.warning(f"Could not reach camera at {camera_ip or stream_url}")
         yield b""
 
     except ImportError:

@@ -181,8 +181,8 @@ export default function DevicesPanel() {
 
   const assignCamera = (cam: DiscoveredCamera) => {
     setCameraIp(cam.ip)
-    setCameraUrl(`rtsp://${cam.ip}/stream1`)
-    setScanMsg('Camera assigned. Set credentials below if required, then save.')
+    setCameraUrl(`rtsp://user:password@${cam.ip}:554/profile1`)
+    setScanMsg('Camera assigned. Update the RTSP URL with correct credentials and stream path, then save.')
   }
 
   const assignTempSensor = (sensor: DiscoveredTempSensor) => {

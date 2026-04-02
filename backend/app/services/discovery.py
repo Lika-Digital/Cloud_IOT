@@ -218,16 +218,37 @@ async def check_camera(
     password: str = "",
 ) -> bool:
     """
-    HTTP HEAD to camera URL, return True if 2xx or 4xx (device reachable).
+    Check camera reachability.
+    - RTSP URLs: TCP connect on port 554 (browsers cannot receive RTSP, but we
+      can at least confirm the device is up for the snapshot path via ffmpeg).
+    - HTTP/HTTPS URLs: HTTP HEAD with optional Basic Auth.
     """
     if not url:
         return False
     try:
-        import httpx
-        auth = (username, password) if username else None
-        async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
-            resp = await client.head(url, auth=auth)
-            return resp.status_code < 500
+        if url.startswith("rtsp://") or url.startswith("rtsps://"):
+            # Extract host and port from rtsp://[user:pass@]host[:port]/path
+            import re
+            m = re.search(r"://(?:[^@]+@)?([^/:]+)(?::(\d+))?", url)
+            if not m:
+                return False
+            host = m.group(1)
+            port = int(m.group(2)) if m.group(2) else 554
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port), timeout=5.0
+            )
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            return True
+        else:
+            import httpx
+            auth = (username, password) if username else None
+            async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
+                resp = await client.head(url, auth=auth)
+                return resp.status_code < 500
     except Exception:
         return False
 

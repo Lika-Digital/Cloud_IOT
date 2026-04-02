@@ -145,12 +145,14 @@ def stream_ip_camera(
         if stream_url and stream_url.startswith(("http://", "https://")):
             urls_to_try.append(stream_url)
 
-        # 2. Probe common MJPEG paths on bare IP (works for unauthenticated cams)
+        # 2. Probe common MJPEG paths on bare IP (D-Link, Hikvision, generic)
         if camera_ip:
             urls_to_try += [
-                f"http://{camera_ip}/video",
+                f"http://{camera_ip}/video/mjpeg.cgi",   # D-Link DCS series
                 f"http://{camera_ip}/mjpeg",
+                f"http://{camera_ip}/video",
                 f"http://{camera_ip}/stream",
+                f"http://{camera_ip}/cgi-bin/mjpeg",
                 f"http://{camera_ip}:8080/video",
             ]
 

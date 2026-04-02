@@ -36,7 +36,10 @@ async def camera_snapshot(
             status_code=404,
             detail="No camera stream URL configured for this pedestal",
         )
-    if not cfg.camera_reachable:
+    # For RTSP streams the TCP-reachability check may lag behind by up to 30 s;
+    # skip the gate for RTSP and let ffmpeg report the actual error on failure.
+    stream_url = cfg.camera_stream_url or ""
+    if not stream_url.startswith("rtsp") and not cfg.camera_reachable:
         raise HTTPException(
             status_code=503,
             detail="Camera is not currently reachable",

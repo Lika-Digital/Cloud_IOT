@@ -99,7 +99,8 @@ def get_network_info(_: User = Depends(require_admin)):
         ip = "127.0.0.1"
     return {
         "lan_ip": ip,
-        "mqtt_port": 1883,
+        "mqtt_broker_host": settings.mqtt_broker_host,
+        "mqtt_port": settings.mqtt_broker_port,
         "snmp_trap_port": _get_snmp_config()["port"],
     }
 

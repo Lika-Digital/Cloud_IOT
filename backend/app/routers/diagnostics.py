@@ -51,7 +51,46 @@ async def run_diagnostics(pedestal_id: int, db: DBSession = Depends(get_db), _: 
     if not pedestal:
         raise HTTPException(status_code=404, detail="Pedestal not found")
 
-    # Publish diagnostic request
+    # ── Marina cabinet: skip MQTT request, derive results from known state ─────
+    from ..models.pedestal_config import PedestalConfig, SocketState
+    cfg = db.query(PedestalConfig).filter(PedestalConfig.pedestal_id == pedestal_id).first()
+    if cfg and getattr(cfg, "opta_client_id", None):
+        cabinet_id = cfg.opta_client_id
+        # Connectivity: opta_connected flag set by heartbeat handler
+        connected = bool(cfg.opta_connected)
+        # Socket states from DB
+        socket_states = {
+            ss.socket_id: ss.connected
+            for ss in db.query(SocketState).filter(SocketState.pedestal_id == pedestal_id).all()
+        }
+        sensors = {}
+        for i in range(1, 5):
+            if i in socket_states:
+                sensors[f"socket_{i}"] = "ok" if socket_states[i] else "fail"
+            else:
+                sensors[f"socket_{i}"] = "ok" if connected else "missing"
+        # Marina firmware has no water/temp/moisture/camera sensors via diagnostics
+        sensors["water"]       = "ok" if connected else "missing"
+        sensors["temperature"] = "ok" if connected else "missing"
+        sensors["moisture"]    = "ok" if connected else "missing"
+        sensors["camera"]      = "missing"  # not part of marina cabinet
+
+        all_ok = connected
+        if all_ok and not pedestal.initialized:
+            pedestal.initialized = True
+            db.commit()
+            db.refresh(pedestal)
+            logger.info(f"Marina cabinet {cabinet_id} (pedestal {pedestal_id}) marked as initialized")
+
+        return {
+            "pedestal_id": pedestal_id,
+            "sensors": sensors,
+            "all_ok": all_ok,
+            "initialized": pedestal.initialized,
+            "error": None if connected else f"Cabinet {cabinet_id} not connected — no recent heartbeat.",
+        }
+
+    # ── Legacy pedestal: MQTT diagnostics request/response ────────────────────
     mqtt_service.publish(
         f"pedestal/{pedestal_id}/diagnostics/request",
         json.dumps({"request": "all"}),

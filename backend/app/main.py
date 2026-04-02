@@ -146,6 +146,7 @@ async def _camera_health_check():
 
             for cfg in configs:
                 try:
+                    logger.info(f"[Camera] Checking pedestal {cfg.pedestal_id}: {cfg.camera_stream_url}")
                     reachable = await check_camera(
                         cfg.camera_stream_url,
                         username=cfg.camera_username or "",
@@ -175,7 +176,7 @@ async def _camera_health_check():
                             },
                         })
                 except Exception as e:
-                    logger.debug(f"Camera health check error for pedestal {cfg.pedestal_id}: {e}")
+                    logger.warning(f"Camera health check error for pedestal {cfg.pedestal_id}: {e}")
         except Exception as e:
             logger.warning(f"Camera health check loop error: {e}")
 

@@ -39,6 +39,7 @@ export const testSmtp = (): Promise<{ message: string }> =>
 
 export interface NetworkInfo {
   lan_ip: string
+  mqtt_broker_host: string
   mqtt_port: number
   snmp_trap_port: number
 }

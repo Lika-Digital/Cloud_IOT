@@ -306,14 +306,18 @@ function NetworkInfoPanel() {
     <div className="card">
       <h3 className="font-semibold text-white mb-3">Application Network Address</h3>
       <p className="text-xs text-gray-400 mb-3">
-        Auto-detected LAN IP of this machine. Use this address in the Pedestal Test Tool
-        and on the Arduino / MQTT broker configuration.
+        System IP is the address of this machine. MQTT Broker IP is the broker the application
+        is connected to. On a NUC deployment these are the same; on a dev setup they may differ.
       </p>
       {info ? (
         <div className="space-y-2 text-sm">
           <div className="flex justify-between items-center bg-gray-800 rounded-lg px-3 py-2">
-            <span className="text-gray-400">Host IP</span>
+            <span className="text-gray-400">System IP</span>
             <span className="font-mono text-blue-400 font-bold text-base">{info.lan_ip}</span>
+          </div>
+          <div className="flex justify-between items-center bg-gray-800 rounded-lg px-3 py-2">
+            <span className="text-gray-400">MQTT Broker IP</span>
+            <span className="font-mono text-purple-400 font-bold text-base">{info.mqtt_broker_host}</span>
           </div>
           <div className="flex justify-between items-center bg-gray-800 rounded-lg px-3 py-2">
             <span className="text-gray-400">MQTT Broker port</span>

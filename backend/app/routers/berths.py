@@ -39,6 +39,7 @@ class BerthOut(BaseModel):
     id: int
     name: str
     pedestal_id: Optional[int]
+    berth_type: str = "transit"
     status: str
     detected_status: str
     last_analyzed: Optional[str]
@@ -93,6 +94,12 @@ class BerthStatusUpdate(BaseModel):
     status: str  # "free" | "occupied" | "reserved"
 
 
+class BerthConfigUpdate(BaseModel):
+    name: Optional[str] = None
+    pedestal_id: Optional[int] = None
+    berth_type: Optional[str] = None   # "transit" | "yearly"
+
+
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _berth_to_out(b: Berth, pedestal_cfg=None, ref_count: int = 0) -> BerthOut:
@@ -100,6 +107,7 @@ def _berth_to_out(b: Berth, pedestal_cfg=None, ref_count: int = 0) -> BerthOut:
         id=b.id,
         name=b.name,
         pedestal_id=b.pedestal_id,
+        berth_type=b.berth_type or "transit",
         status=b.status,
         detected_status=b.detected_status,
         last_analyzed=b.last_analyzed.isoformat() if b.last_analyzed else None,
@@ -391,6 +399,29 @@ async def trigger_analysis(
         detected_label = f"⚠ Unknown ship detected (score {b.match_score:.2f})"
 
     return {"ok": True, "detected_status": detected_label, **res}
+
+
+@router.put("/api/admin/berths/{berth_id}/config")
+def update_berth_config(
+    berth_id: int,
+    body: BerthConfigUpdate,
+    user_db: DBSession = Depends(get_user_db),
+    _admin=Depends(require_admin),
+):
+    """Update berth name, pedestal assignment, and berth type (transit/yearly)."""
+    berth = user_db.get(Berth, berth_id)
+    if not berth:
+        raise HTTPException(status_code=404, detail="Berth not found")
+    if body.name is not None:
+        berth.name = body.name.strip()
+    if body.pedestal_id is not None:
+        berth.pedestal_id = body.pedestal_id if body.pedestal_id > 0 else None
+    if body.berth_type is not None:
+        if body.berth_type not in ("transit", "yearly"):
+            raise HTTPException(status_code=422, detail="berth_type must be 'transit' or 'yearly'")
+        berth.berth_type = body.berth_type
+    user_db.commit()
+    return {"ok": True}
 
 
 @router.put("/api/admin/berths/{berth_id}/status")

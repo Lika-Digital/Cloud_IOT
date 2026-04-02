@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import {
   getBerths, getBerthCalendar, triggerAnalysis,
-  getReferenceImages, uploadReferenceImages, deleteReferenceImage,
+  getReferenceImages, uploadReferenceImages, deleteReferenceImage, updateBerthConfig,
   type BerthOut, type CalendarEntry,
 } from '../api/berths'
 import { useAuthStore } from '../store/authStore'
@@ -20,7 +20,7 @@ const STATUS_LABEL: Record<string, string> = {
 }
 
 export default function BerthOccupancy() {
-  const { berthOccupancy, setBerthOccupancy } = useStore()
+  const { berthOccupancy, setBerthOccupancy, activeSessions } = useStore()
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
 
@@ -39,6 +39,9 @@ export default function BerthOccupancy() {
 
   // Reference images modal
   const [refModalBerth, setRefModalBerth] = useState<BerthOut | null>(null)
+
+  // Berth config modal
+  const [configBerth, setConfigBerth] = useState<BerthOut | null>(null)
 
   const refresh = useCallback(() =>
     getBerths()
@@ -138,6 +141,30 @@ export default function BerthOccupancy() {
             }}
           />
 
+          {/* ── Active pedestal summary ──────────────────────────────────────── */}
+          {(() => {
+            const activePedestalIds = new Set(activeSessions.map((s) => s.pedestal_id).filter(Boolean))
+            const total = berthOccupancy.length
+            const occupied = berthOccupancy.filter((b) => b.status === 'occupied').length
+            const transit = berthOccupancy.filter((b) => b.berth_type === 'transit').length
+            const yearly = berthOccupancy.filter((b) => b.berth_type === 'yearly').length
+            return (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <SummaryCard label="Total Berths" value={total} color="text-white" />
+                <SummaryCard label="Occupied" value={occupied} color="text-red-400" />
+                <SummaryCard label="Active Pedestals" value={activePedestalIds.size} color="text-blue-400" />
+                <div className="rounded-lg border border-gray-700 bg-gray-900 px-4 py-3 text-center">
+                  <div className="text-xs text-gray-500 mb-1">Type Split</div>
+                  <div className="text-sm text-gray-300">
+                    <span className="text-cyan-400 font-bold">{transit}</span> transit
+                    <span className="mx-1 text-gray-600">/</span>
+                    <span className="text-purple-400 font-bold">{yearly}</span> yearly
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
+
           {/* ── Berth table ──────────────────────────────────────────────────── */}
           <div className="bg-gray-900 rounded-xl border border-gray-800">
             <div className="px-6 py-4 border-b border-gray-800 flex items-center justify-between">
@@ -153,6 +180,7 @@ export default function BerthOccupancy() {
                 <thead>
                   <tr className="text-gray-500 text-xs uppercase border-b border-gray-800">
                     <th className="px-4 py-3 text-left">Berth</th>
+                    <th className="px-4 py-3 text-left">Type</th>
                     <th className="px-4 py-3 text-left">Status</th>
                     <th className="px-4 py-3 text-left">ML State</th>
                     <th className="px-4 py-3 text-left">Match Score</th>
@@ -172,6 +200,7 @@ export default function BerthOccupancy() {
                       <td className="px-4 py-3 font-medium text-white">
                         {b.alarm ? '🚨 ' : ''}{b.name}
                       </td>
+                      <td className="px-4 py-3"><BerthTypeBadge type={b.berth_type} /></td>
                       <td className="px-4 py-3"><StatusBadge status={b.status} /></td>
                       <td className="px-4 py-3"><StateCodeBadge stateCode={b.state_code} /></td>
                       <td className="px-4 py-3 text-xs font-mono">
@@ -246,6 +275,15 @@ export default function BerthOccupancy() {
                           >
                             🖼 Refs {(b.reference_image_count ?? 0) > 0 ? `(${b.reference_image_count})` : ''}
                           </button>
+
+                          {/* Berth config */}
+                          <button
+                            onClick={() => setConfigBerth(b as BerthOut)}
+                            title="Configure berth"
+                            className="text-xs text-gray-400 hover:text-gray-200 border border-gray-700 px-2 py-1 rounded"
+                          >
+                            ⚙ Config
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -277,6 +315,131 @@ export default function BerthOccupancy() {
           onClose={() => { setRefModalBerth(null); refresh() }}
         />
       )}
+
+      {configBerth && (
+        <BerthConfigModal
+          berth={configBerth}
+          onClose={() => { setConfigBerth(null); refresh() }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ─── Summary card ─────────────────────────────────────────────────────────────
+
+function SummaryCard({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div className="rounded-lg border border-gray-700 bg-gray-900 px-4 py-3 text-center">
+      <div className="text-xs text-gray-500 mb-1">{label}</div>
+      <div className={`text-2xl font-bold ${color}`}>{value}</div>
+    </div>
+  )
+}
+
+// ─── Berth config modal ───────────────────────────────────────────────────────
+
+function BerthConfigModal({ berth, onClose }: { berth: BerthOut; onClose: () => void }) {
+  const [name, setName] = useState(berth.name)
+  const [pedestalId, setPedestalId] = useState(String(berth.pedestal_id ?? ''))
+  const [berthType, setBerthType] = useState<'transit' | 'yearly'>(berth.berth_type ?? 'transit')
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  const handleSave = async () => {
+    setSaving(true)
+    setMsg(null)
+    try {
+      await updateBerthConfig(berth.id, {
+        name: name.trim() || undefined,
+        pedestal_id: pedestalId ? parseInt(pedestalId) : undefined,
+        berth_type: berthType,
+      })
+      setMsg({ ok: true, text: 'Berth configuration saved.' })
+    } catch {
+      setMsg({ ok: false, text: 'Save failed.' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-gray-900 rounded-2xl border border-gray-700 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
+          <div>
+            <h3 className="text-white font-bold text-lg">⚙ Berth Configuration</h3>
+            <p className="text-gray-400 text-sm">{berth.name}</p>
+          </div>
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-gray-700 text-white text-sm flex items-center justify-center hover:bg-gray-600">✕</button>
+        </div>
+
+        <div className="p-6 space-y-4">
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Berth Name</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-200 text-sm focus:outline-none focus:border-blue-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Pedestal ID</label>
+            <input
+              type="number"
+              value={pedestalId}
+              onChange={(e) => setPedestalId(e.target.value)}
+              placeholder="e.g. 1"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-200 text-sm focus:outline-none focus:border-blue-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs text-gray-400 mb-2">Berth Type</label>
+            <div className="grid grid-cols-2 gap-2">
+              {(['transit', 'yearly'] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setBerthType(t)}
+                  className={`py-2 rounded-lg text-sm font-semibold border transition-colors ${
+                    berthType === t
+                      ? t === 'transit'
+                        ? 'bg-cyan-700/40 border-cyan-500 text-cyan-300'
+                        : 'bg-purple-700/40 border-purple-500 text-purple-300'
+                      : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500'
+                  }`}
+                >
+                  {t === 'transit' ? '⛵ Transit' : '🔒 Yearly'}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-gray-600 mt-1.5">
+              {berthType === 'transit' ? 'Short-stay visitors passing through.' : 'Long-term tenants with a yearly contract.'}
+            </p>
+          </div>
+
+          {msg && (
+            <div className={`text-sm px-3 py-2 rounded-lg ${msg.ok ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'}`}>
+              {msg.text}
+            </div>
+          )}
+
+          <div className="flex gap-2 pt-1">
+            <button onClick={onClose} className="flex-1 py-2 rounded-lg border border-gray-700 text-gray-400 text-sm hover:text-gray-200">
+              {msg?.ok ? 'Close' : 'Cancel'}
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="flex-1 py-2 rounded-lg bg-blue-700 hover:bg-blue-600 text-white text-sm font-medium disabled:opacity-50"
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -596,6 +759,12 @@ function CameraStatusDot({ reachable, hasUrl }: { reachable: boolean; hasUrl: bo
       </span>
     </span>
   )
+}
+
+function BerthTypeBadge({ type }: { type: string }) {
+  return type === 'yearly'
+    ? <span className="text-xs font-semibold px-2 py-0.5 rounded-full border bg-purple-500/20 text-purple-400 border-purple-700/40">Yearly</span>
+    : <span className="text-xs font-semibold px-2 py-0.5 rounded-full border bg-cyan-500/20 text-cyan-400 border-cyan-700/40">Transit</span>
 }
 
 function StatusBadge({ status }: { status: string }) {

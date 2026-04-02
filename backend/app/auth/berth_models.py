@@ -12,6 +12,8 @@ class Berth(UserBase):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     # Optional reference to a pedestal (plain int, no FK — pedestals live in pedestal.db)
     pedestal_id: Mapped[int] = mapped_column(Integer, nullable=True)
+    # "transit" | "yearly"
+    berth_type: Mapped[str] = mapped_column(String(20), default="transit")
     # "free" | "occupied" | "reserved"
     status: Mapped[str] = mapped_column(String(20), default="free")
     # Latest status determined by ML analyzer (never "reserved")

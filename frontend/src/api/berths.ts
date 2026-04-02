@@ -21,6 +21,7 @@ export interface BerthOut {
   id: number
   name: string
   pedestal_id: number | null
+  berth_type: 'transit' | 'yearly'
   status: 'free' | 'occupied' | 'reserved'
   detected_status: string
   last_analyzed: string | null
@@ -78,3 +79,6 @@ export const uploadReferenceImages = (berthId: number, formData: FormData) =>
 
 export const deleteReferenceImage = (berthId: number, filename: string) =>
   api.delete(`/admin/berths/${berthId}/reference-images/${encodeURIComponent(filename)}`).then((r) => r.data)
+
+export const updateBerthConfig = (berthId: number, body: { name?: string; pedestal_id?: number; berth_type?: 'transit' | 'yearly' }) =>
+  api.put(`/admin/berths/${berthId}/config`, body).then((r) => r.data)

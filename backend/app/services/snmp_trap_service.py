@@ -38,9 +38,55 @@ def get_config() -> dict:
     return dict(_config)
 
 
+def load_config_from_db() -> None:
+    """Load persisted SNMP config from DB on startup, overriding env defaults."""
+    try:
+        from ..database import SessionLocal
+        from ..models.snmp_config import SnmpConfig
+        db = SessionLocal()
+        try:
+            row = db.get(SnmpConfig, 1)
+            if row:
+                _config["enabled"]     = bool(row.enabled)
+                _config["port"]        = row.port
+                _config["community"]   = row.community
+                _config["temp_oid"]    = row.temp_oid
+                _config["pedestal_id"] = row.pedestal_id
+                logger.info("[SNMP] Config loaded from DB: OID=%s pedestal=%d port=%d",
+                            row.temp_oid, row.pedestal_id, row.port)
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning("[SNMP] Could not load config from DB (using env defaults): %s", exc)
+
+
+def _save_config_to_db() -> None:
+    """Persist current in-memory config to DB."""
+    try:
+        from ..database import SessionLocal
+        from ..models.snmp_config import SnmpConfig
+        db = SessionLocal()
+        try:
+            row = db.get(SnmpConfig, 1)
+            if row is None:
+                row = SnmpConfig(id=1)
+                db.add(row)
+            row.enabled     = 1 if _config["enabled"] else 0
+            row.port        = _config["port"]
+            row.community   = _config["community"]
+            row.temp_oid    = _config["temp_oid"]
+            row.pedestal_id = _config["pedestal_id"]
+            db.commit()
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning("[SNMP] Could not save config to DB: %s", exc)
+
+
 def update_config(updates: dict) -> dict:
     _config.update(updates)
     logger.info("[SNMP] Config updated: %s", updates)
+    _save_config_to_db()
     return dict(_config)
 
 

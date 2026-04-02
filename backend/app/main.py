@@ -15,6 +15,7 @@ from .database import init_db, SessionLocal, engine
 from .models.pedestal import Pedestal
 from .models.session import Session as SessionModel
 from .models.pilot_assignment import PilotAssignment  # noqa — registers table with Base.metadata
+from .models.snmp_config import SnmpConfig  # noqa — registers table with Base.metadata
 from .services.mqtt_client import mqtt_service
 from .services.simulator_manager import simulator_manager
 from .services.session_service import session_service
@@ -393,6 +394,7 @@ async def lifespan(app: FastAPI):
 
     # Start SNMP trap receiver (IP temperature sensors)
     from .services import snmp_trap_service
+    snmp_trap_service.load_config_from_db()
     await snmp_trap_service.start(loop)
 
     # Register webhook broadcast hook for external API push

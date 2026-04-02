@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { useAuthStore } from '../store/authStore'
 
-const WS_URL = `ws://${window.location.host}/ws`
+const WS_URL = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`
 
 export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null)

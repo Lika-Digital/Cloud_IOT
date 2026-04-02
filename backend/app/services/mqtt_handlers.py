@@ -27,6 +27,8 @@ MARINA_SOCKET_RE  = re.compile(r"marina/cabinet/([^/]+)/sockets/([^/]+)/state")
 MARINA_WATER_RE   = re.compile(r"marina/cabinet/([^/]+)/water/([^/]+)/state")
 MARINA_DOOR_RE    = re.compile(r"marina/cabinet/([^/]+)/door/state")
 MARINA_STATUS_RE  = re.compile(r"marina/cabinet/([^/]+)/status")
+MARINA_EVENTS_RE  = re.compile(r"marina/cabinet/([^/]+)/events")
+MARINA_ACKS_RE    = re.compile(r"marina/cabinet/([^/]+)/acks")
 
 
 def _hw_warn(source: str, message: str, details: str | None = None):
@@ -133,6 +135,10 @@ async def handle_message(topic: str, payload: str):
             await _handle_marina_door(m.group(1), payload)
         elif m := MARINA_STATUS_RE.match(topic):
             await _handle_marina_status(m.group(1), payload)
+        elif m := MARINA_EVENTS_RE.match(topic):
+            await _handle_marina_events(m.group(1), payload)
+        elif m := MARINA_ACKS_RE.match(topic):
+            await _handle_marina_acks(m.group(1), payload)
         # ── Legacy pedestal/... schema ───────────────────────────────────────
         elif m := SOCKET_STATUS_RE.match(topic):
             await _handle_socket_status(int(m.group(1)), int(m.group(2)), payload)
@@ -282,6 +288,55 @@ async def _handle_marina_status(cabinet_id: str, payload: str):
     })
     logger.debug("[Marina] cabinet=%s status seq=%s → heartbeat pedestal=%d", cabinet_id, data.get("seq"), pedestal_id)
     await _handle_heartbeat(pedestal_id, legacy_payload)
+
+
+async def _handle_marina_events(cabinet_id: str, payload: str):
+    """
+    marina/cabinet/{cabinetId}/events
+    Generic event log from firmware — broadcast to dashboard for visibility.
+    """
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        data = {"raw": payload}
+
+    db = SessionLocal()
+    try:
+        pedestal_id = _cabinet_to_pedestal_id(db, cabinet_id)
+    finally:
+        db.close()
+
+    logger.info("[Marina] Event from cabinet %s: %s", cabinet_id, payload[:200])
+    await ws_manager.broadcast({
+        "event": "marina_event",
+        "data": {
+            "pedestal_id": pedestal_id,
+            "cabinet_id": cabinet_id,
+            "payload": data,
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    })
+
+
+async def _handle_marina_acks(cabinet_id: str, payload: str):
+    """
+    marina/cabinet/{cabinetId}/acks
+    Command acknowledgements from firmware — log and broadcast.
+    """
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        data = {"raw": payload}
+
+    logger.debug("[Marina] Ack from cabinet %s: %s", cabinet_id, payload[:200])
+    await ws_manager.broadcast({
+        "event": "marina_ack",
+        "data": {
+            "cabinet_id": cabinet_id,
+            "payload": data,
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    })
 
 
 async def _handle_socket_status(pedestal_id: int, socket_id: int, payload: str):
@@ -688,10 +743,21 @@ async def auto_reject_stale_socket_pending(
             db.commit()
 
             reason = f"Auto-rejected: no response within {timeout_seconds}s"
-            mqtt_publish(
-                f"pedestal/{s.pedestal_id}/socket/{s.socket_id}/command",
-                json.dumps({"cmd": "rejected", "reason": reason}),
-            )
+
+            # Publish to marina topics if this pedestal is a marina cabinet
+            from ..models.pedestal_config import PedestalConfig as _PC
+            cfg = db.query(_PC).filter(_PC.pedestal_id == s.pedestal_id).first()
+            cabinet_id = getattr(cfg, "opta_client_id", None) if cfg else None
+            if cabinet_id:
+                mqtt_publish(
+                    f"marina/cabinet/{cabinet_id}/cmd/socket/E{s.socket_id}",
+                    json.dumps({"cmd": "disable"}),
+                )
+            else:
+                mqtt_publish(
+                    f"pedestal/{s.pedestal_id}/socket/{s.socket_id}/command",
+                    json.dumps({"cmd": "rejected", "reason": reason}),
+                )
             log_transition(db, None, s.pedestal_id, s.socket_id, "auto_rejected", "system", reason=reason)
             await ws_broadcast({
                 "event": "socket_rejected",

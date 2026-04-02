@@ -23,6 +23,73 @@ from ..auth.models import User
 logger = logging.getLogger(__name__)
 
 
+def _get_cabinet_id(db: DBSession, pedestal_id: int) -> str | None:
+    """Return marina cabinet string ID if this pedestal is a marina cabinet, else None."""
+    from ..models.pedestal_config import PedestalConfig
+    cfg = db.query(PedestalConfig).filter(PedestalConfig.pedestal_id == pedestal_id).first()
+    return getattr(cfg, "opta_client_id", None) if cfg else None
+
+
+def _publish_socket_approve(db: DBSession, pedestal_id: int, socket_id: int):
+    cabinet_id = _get_cabinet_id(db, pedestal_id)
+    if cabinet_id:
+        mqtt_service.publish(
+            f"marina/cabinet/{cabinet_id}/cmd/socket/E{socket_id}",
+            json.dumps({"cmd": "enable"}),
+        )
+    else:
+        mqtt_service.publish(
+            f"pedestal/{pedestal_id}/socket/{socket_id}/command",
+            json.dumps({"cmd": "approved"}),
+        )
+
+
+def _publish_socket_reject(db: DBSession, pedestal_id: int, socket_id: int, reason: str):
+    cabinet_id = _get_cabinet_id(db, pedestal_id)
+    if cabinet_id:
+        mqtt_service.publish(
+            f"marina/cabinet/{cabinet_id}/cmd/socket/E{socket_id}",
+            json.dumps({"cmd": "disable"}),
+        )
+    else:
+        mqtt_service.publish(
+            f"pedestal/{pedestal_id}/socket/{socket_id}/command",
+            json.dumps({"cmd": "rejected", "reason": reason}),
+        )
+
+
+def _publish_session_control(db: DBSession, session: Session, action: str):
+    """Publish allow/deny/stop command, routing to marina or legacy topics."""
+    cabinet_id = _get_cabinet_id(db, session.pedestal_id)
+    if cabinet_id:
+        if session.type == "electricity":
+            sid = session.socket_id or 1
+            if action == "allow":
+                mqtt_service.publish(
+                    f"marina/cabinet/{cabinet_id}/cmd/socket/E{sid}",
+                    json.dumps({"cmd": "enable"}),
+                )
+            elif action == "deny":
+                mqtt_service.publish(
+                    f"marina/cabinet/{cabinet_id}/cmd/socket/E{sid}",
+                    json.dumps({"cmd": "disable"}),
+                )
+            elif action == "stop":
+                mqtt_service.publish(
+                    f"marina/cabinet/{cabinet_id}/outlet/PWR-{sid}/cmd/stop",
+                    json.dumps({"cmd": "stop"}),
+                )
+        elif session.type == "water":
+            wid = session.socket_id or 1
+            if action in ("deny", "stop"):
+                mqtt_service.publish(
+                    f"marina/cabinet/{cabinet_id}/outlet/WTR-{wid}/cmd/stop",
+                    json.dumps({"cmd": "stop"}),
+                )
+    else:
+        mqtt_service.publish(_control_topic(session), action)
+
+
 async def _send_expo_push(push_token: str, title: str, body: str, data: dict):
     """Fire-and-forget Expo push notification. Never raises."""
     try:
@@ -67,7 +134,7 @@ async def allow_session(
         raise HTTPException(status_code=400, detail=f"Session is {session.status}, expected pending")
 
     session_service.activate(db, session)
-    mqtt_service.publish(_control_topic(session), "allow")
+    _publish_session_control(db, session, "allow")
 
     await ws_manager.broadcast({
         "event": "session_updated",
@@ -109,7 +176,7 @@ async def deny_session(
         raise HTTPException(status_code=400, detail=f"Session is {session.status}, expected pending")
 
     session_service.deny(db, session, reason=body.reason)
-    mqtt_service.publish(_control_topic(session), "deny")
+    _publish_session_control(db, session, "deny")
 
     await ws_manager.broadcast({
         "event": "session_updated",
@@ -151,7 +218,7 @@ async def stop_session(
         raise HTTPException(status_code=400, detail=f"Session is {session.status}, expected active")
 
     session_service.complete(db, session)
-    mqtt_service.publish(_control_topic(session), "stop")
+    _publish_session_control(db, session, "stop")
 
     await ws_manager.broadcast({
         "event": "session_completed",
@@ -234,10 +301,7 @@ async def approve_socket(
     db.commit()
     db.refresh(session)
 
-    mqtt_service.publish(
-        f"pedestal/{pedestal_id}/socket/{socket_id}/command",
-        json.dumps({"cmd": "approved"}),
-    )
+    _publish_socket_approve(db, pedestal_id, socket_id)
     log_transition(
         db, session.id, pedestal_id, socket_id,
         "operator_approved", "operator", actor_id=current_user.id,
@@ -283,10 +347,7 @@ async def reject_socket(
     state.operator_status_at = datetime.utcnow()
     db.commit()
 
-    mqtt_service.publish(
-        f"pedestal/{pedestal_id}/socket/{socket_id}/command",
-        json.dumps({"cmd": "rejected", "reason": reason}),
-    )
+    _publish_socket_reject(db, pedestal_id, socket_id, reason)
     log_transition(
         db, None, pedestal_id, socket_id,
         "operator_rejected", "operator", actor_id=current_user.id, reason=reason,

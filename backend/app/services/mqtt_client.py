@@ -22,6 +22,8 @@ TOPICS = [
     "marina/cabinet/+/water/+/state",
     "marina/cabinet/+/door/state",
     "marina/cabinet/+/status",
+    "marina/cabinet/+/events",
+    "marina/cabinet/+/acks",
     "marina hello",
 ]
 

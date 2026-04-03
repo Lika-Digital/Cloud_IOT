@@ -15,5 +15,8 @@ class SessionResponse(BaseModel):
     water_liters: Optional[float] = None
     customer_id: Optional[int] = None
     deny_reason: Optional[str] = None
+    # customer_name is not a DB column — populated by endpoints that join customer data
+    # GAP-FE-BE: field required by frontend Session interface (store/index.ts)
+    customer_name: Optional[str] = None
 
     model_config = {"from_attributes": True}

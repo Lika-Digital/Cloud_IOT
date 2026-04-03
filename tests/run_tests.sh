@@ -303,6 +303,122 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# STAGE 5 — GAP TESTS (cross-layer boundary checks)
+# Added: 2026-04-03
+# ═══════════════════════════════════════════════════════════════════════════════
+echo ""
+echo -e "${CYAN}${BOLD}[5/5] Cross-layer gap checks${NC}"
+echo ""
+
+GAP_DIR="${ROOT_DIR}/scripts/gap-tests"
+
+# GAP: FE<->BE | LAYER: schema consistency | TOOL: custom Python inspector
+# Verifies SessionResponse Pydantic schema matches frontend Session TS interface.
+echo "  [GAP-1] FE<->BE: SessionResponse schema vs frontend Session interface..."
+if python "$GAP_DIR/gap_fe_be_session_schema.py" > /tmp/gap1.log 2>&1; then
+    echo -e "  ${GREEN}[✔] GAP-1 passed${NC}"
+else
+    echo -e "  ${RED}[✘] GAP-1 FAILED — schema mismatch detected${NC}"
+    cat /tmp/gap1.log
+    OVERALL_EXIT=1
+fi
+
+# GAP: security | LAYER: credential scan | TOOL: detect-secrets
+# Scans for accidentally committed secrets/credentials in source files.
+DETECT_SECRETS_BIN="${VENV_BIN}/detect-secrets"
+[ -f "${DETECT_SECRETS_BIN}.exe" ] && DETECT_SECRETS_BIN="${DETECT_SECRETS_BIN}.exe"
+
+echo "  [GAP-2] Security: detect-secrets credential scan..."
+if command -v "$DETECT_SECRETS_BIN" &>/dev/null || [ -f "$DETECT_SECRETS_BIN" ]; then
+    "$DETECT_SECRETS_BIN" scan \
+        --exclude-files ".*\.log$" \
+        --exclude-files ".*\.db$" \
+        --exclude-files ".*node_modules.*" \
+        --exclude-files ".*\.venv.*" \
+        --exclude-files ".*__pycache__.*" \
+        --exclude-files ".*DEB_Pack.*" \
+        --exclude-files ".*\.git.*" \
+        backend/app/ frontend/src/ \
+        2>/dev/null \
+        | python "$GAP_DIR/gap_security_detect_secrets.py" > /tmp/gap2.log 2>&1
+    DSEC_EXIT=$?
+
+    if [ $DSEC_EXIT -eq 0 ]; then
+        echo -e "  ${GREEN}[✔] GAP-2 passed — no secrets found${NC}"
+    else
+        echo -e "  ${YELLOW}[!] GAP-2 WARNING — review potential secrets${NC}"
+        head -20 /tmp/gap2.log
+        # Warn but do not block (detect-secrets has false positives)
+    fi
+else
+    echo -e "  ${YELLOW}[!] detect-secrets not found — skipping.${NC}"
+    echo -e "      Install: pip install detect-secrets"
+fi
+
+# GAP: security | LAYER: dependency CVEs | TOOL: pip-audit
+# Audits Python dependencies for known CVEs.
+PIP_AUDIT_BIN="${VENV_BIN}/pip-audit"
+[ -f "${PIP_AUDIT_BIN}.exe" ] && PIP_AUDIT_BIN="${PIP_AUDIT_BIN}.exe"
+
+echo "  [GAP-3] Security: pip-audit dependency CVE scan..."
+if command -v "$PIP_AUDIT_BIN" &>/dev/null || [ -f "$PIP_AUDIT_BIN" ]; then
+    AUDIT_LOG="${LOG_DIR}/pip_audit_last.log"
+    "$PIP_AUDIT_BIN" \
+        --requirement "${ROOT_DIR}/backend/requirements.txt" \
+        --format json \
+        --output "$AUDIT_LOG" \
+        2>/dev/null
+    AUDIT_EXIT=$?
+
+    AUDIT_SUMMARY=$(python - "$AUDIT_LOG" << 'PYEOF'
+import sys, json, os
+path = sys.argv[1]
+if not os.path.exists(path):
+    print("PARSE_ERROR=no output file")
+    sys.exit(0)
+try:
+    with open(path) as f:
+        data = json.load(f)
+    vulns = data.get("dependencies", [])
+    critical = [v for d in vulns for v in d.get("vulns", []) if v.get("fix_versions")]
+    print(f"VULNS={len(critical)}")
+    for v in critical[:5]:
+        print(f"CVE={v.get('id','?')} {v.get('description','')[:80]}")
+except Exception as e:
+    print(f"PARSE_ERROR={e}")
+PYEOF
+)
+
+    VULN_COUNT=$(echo "$AUDIT_SUMMARY" | grep "^VULNS=" | cut -d= -f2)
+    VULN_COUNT=${VULN_COUNT:-0}
+
+    if [ "$VULN_COUNT" -gt 0 ]; then
+        echo -e "  ${YELLOW}[!] GAP-3 WARNING — ${VULN_COUNT} fixable CVE(s) in dependencies${NC}"
+        echo "$AUDIT_SUMMARY" | grep "^CVE=" | sed 's/^CVE=/    /'
+        echo -e "      Full report: ${AUDIT_LOG}"
+        # Warn but do not block (production-decision on patching schedule)
+    else
+        echo -e "  ${GREEN}[✔] GAP-3 passed — no fixable CVEs found${NC}"
+    fi
+else
+    echo -e "  ${YELLOW}[!] pip-audit not found — skipping.${NC}"
+    echo -e "      Install: pip install pip-audit"
+fi
+
+# GAP: BE<->DB | LAYER: migration idempotency | TOOL: custom Python test
+# Verifies _migrate_schema() is safe to call multiple times (no crash on re-run).
+echo "  [GAP-4] BE<->DB: migration idempotency check..."
+python "$GAP_DIR/gap_be_db_migration_idempotency.py" > /tmp/gap4.log 2>&1
+GAP4_EXIT=$?
+if [ $GAP4_EXIT -eq 0 ]; then
+    echo -e "  ${GREEN}[✔] GAP-4 passed — migration is idempotent${NC}"
+else
+    echo -e "  ${RED}[✘] GAP-4 FAILED — migration crashes on second run${NC}"
+    cat /tmp/gap4.log
+    OVERALL_EXIT=1
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════════════
 echo ""

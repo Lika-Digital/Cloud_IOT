@@ -157,12 +157,44 @@ def list_berths(
     user_db: DBSession = Depends(get_user_db),
     db: DBSession = Depends(get_db),
 ):
+    """
+    Return berths synced to the registered pedestal list.
+    - Auto-creates a berth for any pedestal that doesn't have one yet.
+    - Returns only berths whose pedestal_id matches a real pedestal.
+    - Berth count always equals pedestal count.
+    """
     from ..services.berth_analyzer import list_reference_images
+    from ..models.pedestal import Pedestal
+
+    pedestals = db.query(Pedestal).order_by(Pedestal.id).all()
+    pedestal_ids = {p.id for p in pedestals}
+
+    # Auto-create missing berths (one per pedestal)
+    existing_ped_ids = {b.pedestal_id for b in user_db.query(Berth).all() if b.pedestal_id}
+    for ped in pedestals:
+        if ped.id not in existing_ped_ids:
+            user_db.add(Berth(
+                name=f"Berth {ped.name}",
+                pedestal_id=ped.id,
+                berth_type="transit",
+                status="free",
+                detected_status="free",
+            ))
+    user_db.commit()
+
+    # Return only berths tied to real pedestals, one per pedestal (first match)
     berths = user_db.query(Berth).order_by(Berth.id).all()
+    seen_pedestals: set = set()
+    filtered: list = []
+    for b in berths:
+        if b.pedestal_id in pedestal_ids and b.pedestal_id not in seen_pedestals:
+            seen_pedestals.add(b.pedestal_id)
+            filtered.append(b)
+
     cfg_map = _get_pedestal_cfg_map(db)
     return [
         _berth_to_out(b, cfg_map.get(b.pedestal_id), len(list_reference_images(b.id)))
-        for b in berths
+        for b in filtered
     ]
 
 

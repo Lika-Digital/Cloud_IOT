@@ -3,10 +3,12 @@ import { useStore } from '../store'
 import {
   getBerths, getBerthCalendar, triggerAnalysis,
   getReferenceImages, uploadReferenceImages, deleteReferenceImage, updateBerthConfig,
-  createBerth, deleteBerth,
+  deleteBerth,
   type BerthOut, type CalendarEntry,
 } from '../api/berths'
+import { getPedestals } from '../api'
 import { useAuthStore } from '../store/authStore'
+import type { Pedestal } from '../store'
 
 // Status → visual properties
 const STATUS_COLOR: Record<string, string> = {
@@ -177,10 +179,11 @@ export default function BerthOccupancy() {
                   </span>
                 )}
                 <button
-                  onClick={async () => { await createBerth({ name: 'New Berth', berth_type: 'transit' }); refresh() }}
-                  className="text-xs px-3 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-600 text-white font-medium"
+                  onClick={() => refresh()}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-white font-medium"
+                  title="Berths are auto-synced to registered pedestals"
                 >
-                  + Add Berth
+                  ↺ Refresh
                 </button>
               </div>
             </div>
@@ -350,23 +353,28 @@ function SummaryCard({ label, value, color }: { label: string; value: number; co
 
 function BerthConfigModal({ berth, onClose }: { berth: BerthOut; onClose: () => void }) {
   const [name, setName] = useState(berth.name)
-  const [pedestalId, setPedestalId] = useState(String(berth.pedestal_id ?? ''))
+  const [pedestalId, setPedestalId] = useState(berth.pedestal_id ?? null as number | null)
   const [berthType, setBerthType] = useState<'transit' | 'yearly'>(berth.berth_type ?? 'transit')
+  const [pedestals, setPedestals] = useState<Pedestal[]>([])
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
+  useEffect(() => { getPedestals().then(setPedestals).catch(() => {}) }, [])
+
   const handleSave = async () => {
+    if (!name.trim()) { setMsg({ ok: false, text: 'Berth name cannot be empty.' }); return }
     setSaving(true)
     setMsg(null)
     try {
       await updateBerthConfig(berth.id, {
-        name: name.trim() || undefined,
-        pedestal_id: pedestalId ? parseInt(pedestalId) : undefined,
+        name: name.trim(),
+        pedestal_id: pedestalId ?? undefined,
         berth_type: berthType,
       })
       setMsg({ ok: true, text: 'Berth configuration saved.' })
-    } catch {
-      setMsg({ ok: false, text: 'Save failed.' })
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail ?? 'Save failed. Check backend logs.'
+      setMsg({ ok: false, text: detail })
     } finally {
       setSaving(false)
     }
@@ -395,14 +403,17 @@ function BerthConfigModal({ berth, onClose }: { berth: BerthOut; onClose: () => 
           </div>
 
           <div>
-            <label className="block text-xs text-gray-400 mb-1">Pedestal ID</label>
-            <input
-              type="number"
-              value={pedestalId}
-              onChange={(e) => setPedestalId(e.target.value)}
-              placeholder="e.g. 1"
+            <label className="block text-xs text-gray-400 mb-1">Pedestal</label>
+            <select
+              value={pedestalId ?? ''}
+              onChange={(e) => setPedestalId(e.target.value ? Number(e.target.value) : null)}
               className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-200 text-sm focus:outline-none focus:border-blue-500"
-            />
+            >
+              <option value="">— None —</option>
+              {pedestals.map((p) => (
+                <option key={p.id} value={p.id}>{p.name} (ID {p.id})</option>
+              ))}
+            </select>
           </div>
 
           <div>

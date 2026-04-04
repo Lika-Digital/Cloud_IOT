@@ -3,12 +3,13 @@ import { useStore } from '../store'
 import {
   getBerths, getBerthCalendar, triggerAnalysis,
   getReferenceImages, uploadReferenceImages, deleteReferenceImage, updateBerthConfig,
-  deleteBerth,
-  type BerthOut, type CalendarEntry,
+  deleteBerth, matchShip, confirmCrop, getStorageStatus,
+  type BerthOut, type CalendarEntry, type StorageStatus,
 } from '../api/berths'
 import { getPedestals } from '../api'
 import { useAuthStore } from '../store/authStore'
 import type { Pedestal } from '../store'
+import SectorConfigModal from '../components/berths/SectorConfigModal'
 
 // Status → visual properties
 const STATUS_COLOR: Record<string, string> = {
@@ -46,6 +47,23 @@ export default function BerthOccupancy() {
   // Berth config modal
   const [configBerth, setConfigBerth] = useState<BerthOut | null>(null)
 
+  // Sector config modal (Section 8)
+  const [sectorConfigBerth, setSectorConfigBerth] = useState<BerthOut | null>(null)
+
+  // Match ship state (Section 9b)
+  const [matchingId, setMatchingId] = useState<number | null>(null)
+  const [matchResults, setMatchResults] = useState<Record<number, { score: number; time: string }>>({})
+
+  // Operator confirmation (Section 9c)
+  const [pendingConfirmation, setPendingConfirmation] = useState<{
+    berthId: number
+    imagePath: string
+    result: string
+  } | null>(null)
+
+  // Storage alarm (Section 10)
+  const [storageAlarm, setStorageAlarm] = useState<StorageStatus | null>(null)
+
   const refresh = useCallback(() =>
     getBerths()
       .then((data) => { setBerthOccupancy(data as any); setLoadError(null) })
@@ -53,6 +71,19 @@ export default function BerthOccupancy() {
   [setBerthOccupancy])
 
   useEffect(() => { refresh().finally(() => setLoading(false)) }, [refresh])
+
+  // Storage status polling every 5 minutes (Section 10a)
+  useEffect(() => {
+    const checkStorage = async () => {
+      try {
+        const status = await getStorageStatus()
+        setStorageAlarm(status)
+      } catch { /* ignore — backend may not have training storage */ }
+    }
+    checkStorage()
+    const interval = setInterval(checkStorage, 5 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [])
 
   const openCalendar = async (berth: BerthOut) => {
     setCalendarBerth(berth)
@@ -79,6 +110,31 @@ export default function BerthOccupancy() {
     setLiveModalBerth(berth)
   }
 
+  const handleMatchShip = async (berth: BerthOut) => {
+    setMatchingId(berth.id)
+    try {
+      const res = await matchShip(berth.id)
+      const time = new Date().toLocaleTimeString()
+      setMatchResults((prev) => ({ ...prev, [berth.id]: { score: res.match_score, time } }))
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Match failed'
+      setMatchResults((prev) => ({ ...prev, [berth.id]: { score: -1, time: detail } }))
+    } finally {
+      setMatchingId(null)
+    }
+  }
+
+  const handleConfirmCrop = async (confirmed: boolean) => {
+    if (!pendingConfirmation) return
+    const { berthId, imagePath } = pendingConfirmation
+    setPendingConfirmation(null)
+    try {
+      await confirmCrop(berthId, imagePath, confirmed)
+    } catch {
+      // silently ignore — confirmation is best-effort
+    }
+  }
+
   const handleAnalyze = async (berth: BerthOut) => {
     if (!berth.camera_stream_url || !berth.camera_reachable) {
       setAnalyzeResult({ ok: false, text: 'Camera not available — configure and connect a camera first.' })
@@ -87,12 +143,28 @@ export default function BerthOccupancy() {
     }
     setAnalyzingId(berth.id)
     setAnalyzeResult(null)
+    setPendingConfirmation(null)
     try {
       const res = await triggerAnalysis(berth.id)
-      setAnalyzeResult({ ok: res.ok, text: res.detected_status })
+      const timestamp = new Date().toLocaleTimeString()
+      const confidencePct = res.confidence != null ? ` (${(res.confidence * 100).toFixed(1)}% confidence)` : ''
+      const occupiedLabel = res.occupied_bit ? 'Occupied' : 'Empty'
+      const icon = res.occupied_bit ? '⛵' : '○'
+      setAnalyzeResult({
+        ok: res.ok,
+        text: `${icon} ${occupiedLabel}${confidencePct} — analyzed ${timestamp}`,
+      })
+      // Set up operator confirmation if a crop was saved
+      if (res.crop_path) {
+        setPendingConfirmation({
+          berthId: berth.id,
+          imagePath: res.crop_path,
+          result: occupiedLabel,
+        })
+      }
       await refresh()
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail ?? 'Analysis failed'
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Analysis failed'
       setAnalyzeResult({ ok: false, text: `⚠ ${detail}` })
     } finally {
       setAnalyzingId(null)
@@ -102,12 +174,40 @@ export default function BerthOccupancy() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-bold text-white">Berth Occupancy</h1>
-        <p className="text-gray-400 text-sm mt-1">
-          On-demand camera analysis — click Analyze to take a live snapshot and detect ship presence.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Berth Occupancy</h1>
+          <p className="text-gray-400 text-sm mt-1">
+            On-demand camera analysis — click Analyze to take a live snapshot and detect ship presence.
+          </p>
+        </div>
+        {storageAlarm && (
+          <div className="text-xs text-gray-500 flex items-center gap-1.5 whitespace-nowrap">
+            <span>Training data:</span>
+            <span className={storageAlarm.alarm_active ? 'text-amber-400 font-semibold' : 'text-gray-400'}>
+              {storageAlarm.size_gb.toFixed(1)} GB / {storageAlarm.max_gb} GB
+            </span>
+          </div>
+        )}
       </div>
+
+      {/* Storage warning banner (Section 10b) */}
+      {storageAlarm?.alarm_active && (
+        <div className="px-4 py-3 rounded-lg bg-amber-900/40 border border-amber-600/60 text-amber-300 text-sm flex items-center gap-3">
+          <span className="text-xl">⚠️</span>
+          <div>
+            <span className="font-bold">
+              Training data storage at {(storageAlarm.percent_used * 100).toFixed(0)}% capacity
+            </span>
+            <span className="text-amber-400/80 ml-2">
+              ({storageAlarm.size_gb.toFixed(1)} GB of {storageAlarm.max_gb} GB used)
+            </span>
+            <p className="text-amber-400/70 text-xs mt-0.5">
+              Copy training images to the training server and clear the folder manually on the NUC.
+            </p>
+          </div>
+        </div>
+      )}
 
       {loadError && (
         <div className="px-4 py-3 rounded-lg bg-red-900/30 border border-red-700/40 text-red-400 text-sm">
@@ -122,12 +222,33 @@ export default function BerthOccupancy() {
       )}
 
       {analyzeResult && (
-        <div className={`text-sm font-semibold px-4 py-2 rounded-lg border w-fit ${
-          analyzeResult.ok
-            ? 'bg-green-900/30 border-green-700/50 text-green-400'
-            : 'bg-red-900/30 border-red-700/50 text-red-400'
-        }`}>
-          {analyzeResult.text}
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className={`text-sm font-semibold px-4 py-2 rounded-lg border ${
+            analyzeResult.ok
+              ? 'bg-green-900/30 border-green-700/50 text-green-400'
+              : 'bg-red-900/30 border-red-700/50 text-red-400'
+          }`}>
+            {analyzeResult.text}
+          </div>
+          {pendingConfirmation && (
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-gray-500">Correct?</span>
+              <button
+                onClick={() => handleConfirmCrop(true)}
+                title="Confirm — ship detection was correct"
+                className="px-3 py-1.5 rounded-lg bg-green-700/30 hover:bg-green-700/50 border border-green-600/50 text-green-400 text-base"
+              >
+                👍
+              </button>
+              <button
+                onClick={() => handleConfirmCrop(false)}
+                title="Reject — detection was wrong"
+                className="px-3 py-1.5 rounded-lg bg-red-700/30 hover:bg-red-700/50 border border-red-600/50 text-red-400 text-base"
+              >
+                👎
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -296,7 +417,52 @@ export default function BerthOccupancy() {
                           >
                             ⚙ Config
                           </button>
+
+                          {/* Sector config (Section 8c) */}
+                          <button
+                            onClick={() => setSectorConfigBerth(b as BerthOut)}
+                            title="Configure detection zone and ship sample"
+                            className="text-xs text-purple-400 hover:text-purple-300 border border-purple-700/50 px-2 py-1 rounded"
+                          >
+                            ⚙ Sectors
+                          </button>
+
+                          {/* Match Ship (Section 9b) */}
+                          <button
+                            onClick={() => handleMatchShip(b as BerthOut)}
+                            disabled={
+                              matchingId === b.id ||
+                              b.status !== 'occupied' ||
+                              !b.sample_embedding_path
+                            }
+                            title={
+                              b.status !== 'occupied'
+                                ? 'Only available when berth is occupied'
+                                : !b.sample_embedding_path
+                                  ? 'No ship sample uploaded — configure via Sectors'
+                                  : 'Match current camera frame against stored ship sample'
+                            }
+                            className="text-xs text-cyan-400 hover:text-cyan-300 border border-cyan-700/50 px-2 py-1 rounded disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            {matchingId === b.id ? '⏳' : '🔍 Match'}
+                          </button>
                         </div>
+
+                        {/* Match result display */}
+                        {matchResults[b.id] && (
+                          <div className={`mt-1 text-xs ${
+                            matchResults[b.id].score >= 0
+                              ? matchResults[b.id].score >= 0.8
+                                ? 'text-green-400'
+                                : 'text-amber-400'
+                              : 'text-red-400'
+                          }`}>
+                            {matchResults[b.id].score >= 0
+                              ? `Ship match: ${(matchResults[b.id].score * 100).toFixed(1)}% — checked ${matchResults[b.id].time}`
+                              : matchResults[b.id].time
+                            }
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -332,6 +498,13 @@ export default function BerthOccupancy() {
         <BerthConfigModal
           berth={configBerth}
           onClose={() => { setConfigBerth(null); refresh() }}
+        />
+      )}
+
+      {sectorConfigBerth && (
+        <SectorConfigModal
+          berth={sectorConfigBerth}
+          onClose={() => { setSectorConfigBerth(null); refresh() }}
         />
       )}
     </div>

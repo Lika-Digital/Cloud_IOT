@@ -64,6 +64,8 @@ def _migrate_user_schema():
         ("berths",    "zone_y2",               "REAL NOT NULL DEFAULT 0.80"),
         ("berths",    "background_image",      "TEXT"),
         ("berths",    "berth_type",            "TEXT NOT NULL DEFAULT 'transit'"),
+        ("berths",    "sample_embedding_path", "TEXT"),
+        ("berths",    "sample_updated_at",     "DATETIME"),
     ]
 
     # All table/column/definition values below are hardcoded string literals —

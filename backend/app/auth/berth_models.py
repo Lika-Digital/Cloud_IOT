@@ -5,6 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from .user_database import UserBase
 
 
+
 class Berth(UserBase):
     __tablename__ = "berths"
 
@@ -45,6 +46,9 @@ class Berth(UserBase):
     analysis_error: Mapped[str] = mapped_column(Text, nullable=True)
     last_analyzed: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # Re-ID embedding path and update timestamp (Section 7)
+    sample_embedding_path: Mapped[str] = mapped_column(String(500), nullable=True)
+    sample_updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
 
 
 class BerthReservation(UserBase):

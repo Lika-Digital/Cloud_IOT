@@ -50,11 +50,15 @@ class BerthOut(BaseModel):
     alarm: int = 0
     match_score: Optional[float] = None
     analysis_error: Optional[str] = None
+    confidence: float = 0.0   # OpenVINO detection confidence (Section 6)
     # Camera info (from pedestal_config)
     camera_stream_url: Optional[str] = None
     camera_reachable: bool = False
     # Reference images
     reference_image_count: int = 0
+    # Re-ID embedding (Section 7)
+    sample_embedding_path: Optional[str] = None
+    sample_updated_at: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -117,9 +121,15 @@ def _berth_to_out(b: Berth, pedestal_cfg=None, ref_count: int = 0) -> BerthOut:
         alarm=b.alarm or 0,
         match_score=b.match_score,
         analysis_error=b.analysis_error,
+        confidence=0.0,  # populated by analyze endpoint when available
         camera_stream_url=pedestal_cfg.camera_stream_url if pedestal_cfg else None,
         camera_reachable=bool(pedestal_cfg.camera_reachable) if pedestal_cfg else False,
         reference_image_count=ref_count,
+        sample_embedding_path=getattr(b, "sample_embedding_path", None),
+        sample_updated_at=(
+            b.sample_updated_at.isoformat()
+            if getattr(b, "sample_updated_at", None) else None
+        ),
     )
 
 
@@ -355,16 +365,23 @@ async def trigger_analysis(
 ):
     """
     On-demand berth analysis:
-      1. Grab a live snapshot from the pedestal camera via ffmpeg.
-      2. Detect ship presence using edge-density (Laplacian variance).
-      3. Compare with uploaded reference images using histogram similarity.
-      4. Persist result and broadcast via WebSocket.
+      1. Get latest frame from frame buffer; fall back to live grab if none.
+      2. Crop to detection zone if configured.
+      3. Try YOLOv8n OpenVINO inference; fall back to Laplacian if unavailable.
+      4. Compare with reference images using histogram similarity.
+      5. Save training crop asynchronously.
+      6. Persist result and broadcast via WebSocket.
     """
+    import asyncio as _asyncio
     from ..models.pedestal_config import PedestalConfig
     from ..services.berth_analyzer import (
-        analyze_berth_now, list_reference_images,
+        analyze_berth_now, grab_snapshot, list_reference_images,
+        detect_ship, compute_match_score,
     )
     from ..services.websocket_manager import ws_manager
+    from ..services.frame_buffer import get_latest_frame
+    from ..services.cv_services import yolo_detector
+    from ..services.training_data import save_crop
 
     berth = user_db.get(Berth, berth_id)
     if not berth:
@@ -387,15 +404,87 @@ async def trigger_analysis(
             detail="Camera is not reachable. Check network connection and camera settings.",
         )
 
+    # 1. Get frame: try buffer first, fall back to live grab
+    snapshot = get_latest_frame(berth.pedestal_id)
+    if snapshot is None:
+        snapshot = await grab_snapshot(
+            cfg.camera_stream_url,
+            username=cfg.camera_username or "",
+            password=cfg.camera_password or "",
+        )
+
+    # 2. Crop to detection zone if configured
+    crop = snapshot
+    zone_rect = None
+    if berth.use_detection_zone and all(
+        v is not None for v in [berth.zone_x1, berth.zone_y1, berth.zone_x2, berth.zone_y2]
+    ):
+        try:
+            from PIL import Image
+            import io as _io
+            img = Image.open(_io.BytesIO(snapshot)).convert("RGB")
+            w, h = img.size
+            x1 = int(berth.zone_x1 * w)
+            y1 = int(berth.zone_y1 * h)
+            x2 = int(berth.zone_x2 * w)
+            y2 = int(berth.zone_y2 * h)
+            cropped = img.crop((x1, y1, x2, y2))
+            buf = _io.BytesIO()
+            cropped.save(buf, format="JPEG", quality=90)
+            crop = buf.getvalue()
+            zone_rect = {
+                "x1": berth.zone_x1, "y1": berth.zone_y1,
+                "x2": berth.zone_x2, "y2": berth.zone_y2,
+            }
+        except Exception as exc:
+            import logging as _logging
+            _logging.getLogger(__name__).warning("Berth %d zone crop failed: %s", berth_id, exc)
+            crop = snapshot  # fall back to full frame
+
+    # 3. Detection: try YOLOv8n OpenVINO first, fall back to Laplacian
+    ov_result = yolo_detector.detect(crop, conf_threshold=berth.detect_conf_threshold or 0.3)
+    confidence = 0.0
+    if ov_result.get("occupied") is not None:
+        # OpenVINO inference succeeded
+        occupied = bool(ov_result["occupied"])
+        confidence = float(ov_result.get("confidence", 0.0))
+    else:
+        # Fall back to existing Laplacian detection
+        # detect_conf_threshold is re-purposed as Laplacian variance threshold (default 300)
+        laplacian_threshold = berth.detect_conf_threshold or 300.0
+        occupied = detect_ship(crop, threshold=laplacian_threshold)
+        confidence = 0.0
+
+    # 4. Run full analysis pipeline (handles match scoring)
     res = await analyze_berth_now(
         berth_id=berth_id,
         stream_url=cfg.camera_stream_url,
         camera_username=cfg.camera_username or "",
         camera_password=cfg.camera_password or "",
-        # detect_conf_threshold repurposed as Laplacian variance threshold (default 300)
         detect_threshold=berth.detect_conf_threshold or 300.0,
         match_threshold=berth.match_threshold or 0.75,
     )
+    # If we got a concrete OpenVINO result, override the occupied_bit from full analysis
+    if ov_result.get("occupied") is not None:
+        if not occupied:
+            res = {
+                "occupied_bit": 0, "match_ok_bit": 0,
+                "state_code": 0, "alarm": 0, "match_score": None, "error": None,
+            }
+        # else keep the full analysis result (it also ran detect_ship but we trust OV)
+
+    # Add confidence to result
+    res["confidence"] = confidence
+
+    # 5. Save training crop (fire-and-forget)
+    try:
+        result_label = "occupied" if res.get("occupied_bit") else "empty"
+        camera_id = str(berth.pedestal_id or berth_id)
+        _asyncio.create_task(
+            _async_save_crop(berth_id, camera_id, crop, result_label, confidence, zone_rect or {})
+        )
+    except Exception:
+        pass  # never block the response
 
     # Persist ML outputs
     b = user_db.get(Berth, berth_id)
@@ -428,9 +517,185 @@ async def trigger_analysis(
     elif b.match_ok_bit:
         detected_label = f"Correct ship detected (score {b.match_score:.2f})"
     else:
-        detected_label = f"⚠ Unknown ship detected (score {b.match_score:.2f})"
+        detected_label = f"Unknown ship detected (score {b.match_score:.2f})"
 
     return {"ok": True, "detected_status": detected_label, **res}
+
+
+async def _async_save_crop(berth_id: int, camera_id: str, crop_bytes: bytes,
+                            result: str, confidence: float, rect: dict):
+    """Fire-and-forget async wrapper for save_crop."""
+    import asyncio as _asyncio
+    try:
+        from ..services.training_data import save_crop
+        loop = _asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None, save_crop, berth_id, camera_id, crop_bytes, result, confidence, rect
+        )
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger(__name__).debug("save_crop failed (non-critical): %s", exc)
+
+
+@router.post("/api/admin/berths/{berth_id}/match")
+async def match_ship(
+    berth_id: int,
+    user_db: DBSession = Depends(get_user_db),
+    db: DBSession = Depends(get_db),
+    _admin=Depends(require_admin),
+):
+    """
+    Compare the current camera frame against the stored Re-ID embedding for this berth.
+    Requires the berth to be occupied and a sample embedding to be saved.
+    """
+    import asyncio as _asyncio
+    from ..models.pedestal_config import PedestalConfig
+    from ..services.berth_analyzer import grab_snapshot
+    from ..services.frame_buffer import get_latest_frame
+    from ..services.cv_services import reid_matcher
+    from ..services.training_data import TRAINING_DATA_DIR, save_crop
+
+    berth = user_db.get(Berth, berth_id)
+    if not berth:
+        raise HTTPException(status_code=404, detail="Berth not found")
+    if not berth.pedestal_id:
+        raise HTTPException(status_code=400, detail="Berth has no pedestal configured")
+    if not berth.occupied_bit:
+        raise HTTPException(status_code=400, detail="Berth is not currently occupied")
+
+    cfg = db.query(PedestalConfig).filter(
+        PedestalConfig.pedestal_id == berth.pedestal_id
+    ).first()
+    if not cfg or not cfg.camera_stream_url:
+        raise HTTPException(status_code=400, detail="No camera stream URL configured")
+    if not cfg.camera_reachable:
+        raise HTTPException(status_code=503, detail="Camera is not reachable")
+
+    # Get frame
+    snapshot = get_latest_frame(berth.pedestal_id)
+    if snapshot is None:
+        snapshot = await grab_snapshot(
+            cfg.camera_stream_url,
+            username=cfg.camera_username or "",
+            password=cfg.camera_password or "",
+        )
+
+    # Crop to detection zone
+    crop = snapshot
+    if berth.use_detection_zone and all(
+        v is not None for v in [berth.zone_x1, berth.zone_y1, berth.zone_x2, berth.zone_y2]
+    ):
+        try:
+            from PIL import Image
+            import io as _io
+            img = Image.open(_io.BytesIO(snapshot)).convert("RGB")
+            w, h = img.size
+            cropped = img.crop((
+                int(berth.zone_x1 * w), int(berth.zone_y1 * h),
+                int(berth.zone_x2 * w), int(berth.zone_y2 * h),
+            ))
+            buf = _io.BytesIO()
+            cropped.save(buf, format="JPEG", quality=90)
+            crop = buf.getvalue()
+        except Exception:
+            crop = snapshot
+
+    if not reid_matcher.available:
+        raise HTTPException(
+            status_code=503,
+            detail="Re-ID model not available on this server. "
+                   "Run setup_openvino_models.py on the NUC first.",
+        )
+
+    # Load stored embedding
+    storage_dir = getattr(berth, "sample_embedding_path", None)
+    # sample_embedding_path holds the full .npy file path; derive storage_dir from it
+    import os as _os
+    if storage_dir and _os.path.isfile(storage_dir):
+        npy_dir = _os.path.dirname(storage_dir)
+    else:
+        npy_dir = _os.path.join(TRAINING_DATA_DIR, "embeddings")
+
+    stored_emb = reid_matcher.load_embedding(berth_id, npy_dir)
+    if stored_emb is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No sample embedding stored for this berth. "
+                   "Upload a sample image via POST /api/admin/berths/{id}/sample-embedding first.",
+        )
+
+    # Extract current embedding
+    current_emb = reid_matcher.extract_embedding(crop)
+    if current_emb is None:
+        raise HTTPException(status_code=500, detail="Failed to extract embedding from current frame")
+
+    match_score = reid_matcher.cosine_similarity(current_emb, stored_emb)
+
+    # Save training crop
+    try:
+        camera_id = str(berth.pedestal_id or berth_id)
+        _asyncio.create_task(
+            _async_save_crop(berth_id, camera_id, crop, "match", match_score, {})
+        )
+    except Exception:
+        pass
+
+    return {
+        "match_score": round(float(match_score), 4),
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+
+@router.post("/api/admin/berths/{berth_id}/sample-embedding")
+async def upload_sample_embedding(
+    berth_id: int,
+    file: UploadFile = File(...),
+    user_db: DBSession = Depends(get_user_db),
+    _admin=Depends(require_admin),
+):
+    """
+    Upload a sample image and extract + save its Re-ID embedding for this berth.
+    Used as the reference for future ship identity matching.
+    """
+    import os as _os
+    from ..services.cv_services import reid_matcher
+    from ..services.training_data import TRAINING_DATA_DIR
+
+    berth = user_db.get(Berth, berth_id)
+    if not berth:
+        raise HTTPException(status_code=404, detail="Berth not found")
+
+    if not reid_matcher.available:
+        raise HTTPException(
+            status_code=503,
+            detail="Re-ID model not available on this server. "
+                   "Run setup_openvino_models.py on the NUC first.",
+        )
+
+    img_data = await file.read()
+    if not img_data:
+        raise HTTPException(status_code=422, detail="Uploaded file is empty")
+
+    embedding = reid_matcher.extract_embedding(img_data)
+    if embedding is None:
+        raise HTTPException(status_code=500, detail="Failed to extract Re-ID embedding from image")
+
+    storage_dir = _os.path.join(TRAINING_DATA_DIR, "embeddings")
+    saved_path = reid_matcher.save_embedding(berth_id, embedding, storage_dir)
+    if saved_path is None:
+        raise HTTPException(status_code=500, detail="Failed to save embedding to disk")
+
+    # Persist path and update timestamp in DB
+    berth.sample_embedding_path = saved_path
+    berth.sample_updated_at = datetime.utcnow()
+    user_db.commit()
+
+    return {
+        "ok": True,
+        "berth_id": berth_id,
+        "embedding_dim": int(embedding.shape[0]),
+        "path": saved_path,
+    }
 
 
 @router.put("/api/admin/berths/{berth_id}/config")

@@ -59,6 +59,12 @@ class BerthOut(BaseModel):
     # Re-ID embedding (Section 7)
     sample_embedding_path: Optional[str] = None
     sample_updated_at: Optional[str] = None
+    # Detection zone (Section 8)
+    zone_x1: Optional[float] = None
+    zone_y1: Optional[float] = None
+    zone_x2: Optional[float] = None
+    zone_y2: Optional[float] = None
+    use_detection_zone: int = 0
 
     class Config:
         from_attributes = True
@@ -102,6 +108,17 @@ class BerthConfigUpdate(BaseModel):
     name: Optional[str] = None
     pedestal_id: Optional[int] = None
     berth_type: Optional[str] = None   # "transit" | "yearly"
+    # Detection zone (fractions 0.0–1.0)
+    zone_x1: Optional[float] = None
+    zone_y1: Optional[float] = None
+    zone_x2: Optional[float] = None
+    zone_y2: Optional[float] = None
+    use_detection_zone: Optional[int] = None  # 1=enabled, 0=disabled
+
+
+class ConfirmCropIn(BaseModel):
+    image_path: str
+    confirmed: bool
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -130,6 +147,11 @@ def _berth_to_out(b: Berth, pedestal_cfg=None, ref_count: int = 0) -> BerthOut:
             b.sample_updated_at.isoformat()
             if getattr(b, "sample_updated_at", None) else None
         ),
+        zone_x1=getattr(b, "zone_x1", None),
+        zone_y1=getattr(b, "zone_y1", None),
+        zone_x2=getattr(b, "zone_x2", None),
+        zone_y2=getattr(b, "zone_y2", None),
+        use_detection_zone=getattr(b, "use_detection_zone", 0) or 0,
     )
 
 
@@ -476,13 +498,14 @@ async def trigger_analysis(
     # Add confidence to result
     res["confidence"] = confidence
 
-    # 5. Save training crop (fire-and-forget)
+    # 5. Save training crop (fire-and-forget); capture path for operator confirmation
+    crop_path: Optional[str] = None
     try:
         result_label = "occupied" if res.get("occupied_bit") else "empty"
         camera_id = str(berth.pedestal_id or berth_id)
-        _asyncio.create_task(
-            _async_save_crop(berth_id, camera_id, crop, result_label, confidence, zone_rect or {})
-        )
+        from ..services.training_data import save_crop as _save_crop
+        img_path, _ = _save_crop(berth_id, camera_id, crop, result_label, confidence, zone_rect or {})
+        crop_path = img_path
     except Exception:
         pass  # never block the response
 
@@ -519,7 +542,7 @@ async def trigger_analysis(
     else:
         detected_label = f"Unknown ship detected (score {b.match_score:.2f})"
 
-    return {"ok": True, "detected_status": detected_label, **res}
+    return {"ok": True, "detected_status": detected_label, "crop_path": crop_path, **res}
 
 
 async def _async_save_crop(berth_id: int, camera_id: str, crop_bytes: bytes,
@@ -717,6 +740,16 @@ def update_berth_config(
         if body.berth_type not in ("transit", "yearly"):
             raise HTTPException(status_code=422, detail="berth_type must be 'transit' or 'yearly'")
         berth.berth_type = body.berth_type
+    if body.zone_x1 is not None:
+        berth.zone_x1 = body.zone_x1
+    if body.zone_y1 is not None:
+        berth.zone_y1 = body.zone_y1
+    if body.zone_x2 is not None:
+        berth.zone_x2 = body.zone_x2
+    if body.zone_y2 is not None:
+        berth.zone_y2 = body.zone_y2
+    if body.use_detection_zone is not None:
+        berth.use_detection_zone = body.use_detection_zone
     user_db.commit()
     return {"ok": True}
 
@@ -830,3 +863,45 @@ def delete_reference_image_endpoint(
     if not ok:
         raise HTTPException(status_code=404, detail="Image not found")
     return {"ok": True}
+
+
+# ─── Latest frame (for Sector Config UI) ────────────────────────────────────
+
+@router.get("/api/admin/pedestals/{pedestal_id}/latest-frame")
+async def get_latest_frame_endpoint(
+    pedestal_id: int,
+    _admin=Depends(require_admin),
+):
+    """Return the most recent buffered camera frame for a pedestal as base64 JPEG."""
+    import base64
+    from ..services.frame_buffer import get_latest_frame
+    frame = get_latest_frame(pedestal_id)
+    if frame is None:
+        return {"frame_b64": None}
+    return {"frame_b64": base64.b64encode(frame).decode()}
+
+
+# ─── Operator crop confirmation ───────────────────────────────────────────────
+
+@router.post("/api/admin/berths/{berth_id}/confirm-crop")
+def confirm_crop_endpoint(
+    berth_id: int,
+    body: ConfirmCropIn,
+    user_db: DBSession = Depends(get_user_db),
+    _admin=Depends(require_admin),
+):
+    """
+    Move a saved crop to confirmed/ or rejected/ subfolder for training data quality.
+    Called after an operator reviews an Analyze result.
+    """
+    from ..services.training_data import confirm_crop
+    berth = user_db.get(Berth, berth_id)
+    if not berth:
+        raise HTTPException(status_code=404, detail="Berth not found")
+    try:
+        new_path = confirm_crop(body.image_path, body.confirmed)
+        return {"ok": True, "new_path": new_path}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Crop image not found on disk")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))

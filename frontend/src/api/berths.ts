@@ -32,11 +32,21 @@ export interface BerthOut {
   alarm: number
   match_score: number | null
   analysis_error: string | null
+  confidence?: number
   // Camera (from pedestal_config)
   camera_stream_url: string | null
   camera_reachable: boolean
   // Reference images
   reference_image_count: number
+  // Re-ID embedding (Section 7)
+  sample_embedding_path?: string | null
+  sample_updated_at?: string | null
+  // Detection zone (Section 8)
+  zone_x1?: number
+  zone_y1?: number
+  zone_x2?: number
+  zone_y2?: number
+  use_detection_zone?: number
 }
 
 export interface CalendarEntry {
@@ -56,6 +66,15 @@ export interface AnalyzeResult {
   alarm: number
   match_score: number | null
   error: string | null
+  confidence?: number
+  crop_path?: string | null
+}
+
+export interface StorageStatus {
+  size_gb: number
+  max_gb: number
+  percent_used: number
+  alarm_active: boolean
 }
 
 export const getBerths = () =>
@@ -80,7 +99,16 @@ export const uploadReferenceImages = (berthId: number, formData: FormData) =>
 export const deleteReferenceImage = (berthId: number, filename: string) =>
   api.delete(`/admin/berths/${berthId}/reference-images/${encodeURIComponent(filename)}`).then((r) => r.data)
 
-export const updateBerthConfig = (berthId: number, body: { name?: string; pedestal_id?: number; berth_type?: 'transit' | 'yearly' }) =>
+export const updateBerthConfig = (berthId: number, body: {
+  name?: string
+  pedestal_id?: number
+  berth_type?: 'transit' | 'yearly'
+  zone_x1?: number
+  zone_y1?: number
+  zone_x2?: number
+  zone_y2?: number
+  use_detection_zone?: number
+}) =>
   api.put(`/admin/berths/${berthId}/config`, body).then((r) => r.data)
 
 export const createBerth = (body: { name?: string; pedestal_id?: number; berth_type?: 'transit' | 'yearly' }) =>
@@ -88,3 +116,22 @@ export const createBerth = (body: { name?: string; pedestal_id?: number; berth_t
 
 export const deleteBerth = (berthId: number) =>
   api.delete(`/admin/berths/${berthId}`).then((r) => r.data)
+
+// Sector configuration (Section 8)
+export const getLatestFrame = (pedestalId: number) =>
+  api.get<{ frame_b64: string | null }>(`/admin/pedestals/${pedestalId}/latest-frame`).then(r => r.data)
+
+export const uploadSampleEmbedding = (berthId: number, formData: FormData) =>
+  api.post<{ ok: boolean; berth_id: number; embedding_dim: number }>(
+    `/admin/berths/${berthId}/sample-embedding`, formData,
+    { headers: { 'Content-Type': 'multipart/form-data' } }
+  ).then(r => r.data)
+
+export const matchShip = (berthId: number) =>
+  api.post<{ match_score: number; timestamp: string }>(`/admin/berths/${berthId}/match`).then(r => r.data)
+
+export const confirmCrop = (berthId: number, imagePath: string, confirmed: boolean) =>
+  api.post(`/admin/berths/${berthId}/confirm-crop`, { image_path: imagePath, confirmed }).then(r => r.data)
+
+export const getStorageStatus = () =>
+  api.get<StorageStatus>('/system/training-storage').then(r => r.data)

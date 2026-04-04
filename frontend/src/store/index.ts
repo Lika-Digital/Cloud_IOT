@@ -79,6 +79,17 @@ export interface BerthStatus {
   camera_reachable?: boolean
   reference_image_count?: number
   berth_type?: 'transit' | 'yearly'
+  // ML confidence
+  confidence?: number
+  // Re-ID embedding
+  sample_embedding_path?: string | null
+  sample_updated_at?: string | null
+  // Detection zone
+  zone_x1?: number
+  zone_y1?: number
+  zone_x2?: number
+  zone_y2?: number
+  use_detection_zone?: number
 }
 
 export interface PedestalHealth {

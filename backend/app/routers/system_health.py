@@ -126,3 +126,15 @@ def clear_logs(_: User = Depends(require_admin)):
 def manual_purge(_: User = Depends(require_admin)):
     purge_old_logs()
     return {"message": "Purge complete"}
+
+
+# ─── Training storage endpoint ────────────────────────────────────────────────
+
+@router.get("/training-storage")
+def get_training_storage():
+    """
+    Return training-data disk usage.
+    No authentication required — this is a monitoring/ops endpoint.
+    """
+    from ..services.storage_monitor import get_training_storage_status
+    return get_training_storage_status()

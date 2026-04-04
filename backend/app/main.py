@@ -411,6 +411,7 @@ async def lifespan(app: FastAPI):
 
     from .services.berth_analyzer import run_berth_analysis
     from .services.frame_buffer import run_frame_buffer
+    from .services.storage_monitor import run_storage_monitor
     cleanup_task         = asyncio.create_task(_hourly_log_purge())
     watchdog_task        = asyncio.create_task(_pending_session_watchdog())
     socket_pending_task  = asyncio.create_task(_socket_pending_watchdog())
@@ -418,6 +419,7 @@ async def lifespan(app: FastAPI):
     berth_task           = asyncio.create_task(run_berth_analysis())
     camera_task          = asyncio.create_task(_camera_health_check())
     frame_buffer_task    = asyncio.create_task(run_frame_buffer())
+    storage_monitor_task = asyncio.create_task(run_storage_monitor())
 
     yield
 
@@ -429,6 +431,7 @@ async def lifespan(app: FastAPI):
     berth_task.cancel()
     camera_task.cancel()
     frame_buffer_task.cancel()
+    storage_monitor_task.cancel()
     mqtt_service.stop()
     snmp_trap_service.stop()
     simulator_manager.stop()

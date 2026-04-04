@@ -107,10 +107,17 @@ export default function DevicesPanel() {
   const [mqttUser, setMqttUser]           = useState('')
   const [mqttPass, setMqttPass]           = useState('')
   const [cameraIp, setCameraIp]           = useState('')
-  const [cameraUrl, setCameraUrl]         = useState('')
   const [cameraUser, setCameraUser]       = useState('')
   const [cameraPass, setCameraPass]       = useState('')
   const [showCameraPass, setShowCameraPass] = useState(false)
+
+  // Auto-computed RTSP URL — derived from ip + user + pass
+  const computedRtspUrl = cameraIp && cameraUser && cameraPass
+    ? `rtsp://${cameraUser}:${cameraPass}@${cameraIp}:554/profile1`
+    : null
+  const maskedRtspUrl = cameraIp && cameraUser
+    ? `rtsp://${cameraUser}:${'●'.repeat(10)}@${cameraIp}:554/profile1`
+    : ''
 
   // Scan state
   const [scanning, setScanning]           = useState(false)
@@ -137,9 +144,9 @@ export default function DevicesPanel() {
       setMqttUser(c.mqtt_username ?? '')
       setMqttPass(c.mqtt_password ?? '')
       setCameraIp(c.camera_fqdn ?? '')
-      setCameraUrl(c.camera_stream_url ?? '')
       setCameraUser(c.camera_username ?? '')
-      setCameraPass(c.camera_password ?? '')
+      // Backend masks password as "***" — load as empty so user knows to re-enter
+      setCameraPass(c.camera_password && c.camera_password !== '***' ? c.camera_password : '')
       setScanResult(null)
       setScanMsg('')
       setSaveMsg(null)
@@ -167,10 +174,7 @@ export default function DevicesPanel() {
 
   const assignCamera = (cam: DiscoveredCamera) => {
     setCameraIp(cam.ip)
-    const user = cameraUser || 'user'
-    const pass = (cameraPass && cameraPass !== '***') ? cameraPass : 'password'
-    setCameraUrl(`rtsp://${user}:${pass}@${cam.ip}:554/profile1`)
-    setScanMsg('Camera assigned. Verify the RTSP URL and click Save.')
+    setScanMsg('Camera assigned. Enter username and password then click Save.')
   }
 
   const handleSave = async () => {
@@ -179,13 +183,15 @@ export default function DevicesPanel() {
     setSaveMsg(null)
     try {
       await updatePedestalConfig(selectedId, {
-        opta_client_id:       optaClientId   || undefined,
-        mqtt_username:        mqttUser        || undefined,
-        mqtt_password:        mqttPass        || undefined,
-        camera_fqdn:          cameraIp        || undefined,
-        camera_stream_url:    cameraUrl       || undefined,
-        camera_username:      cameraUser      || undefined,
-        camera_password:      cameraPass      || undefined,
+        opta_client_id:       optaClientId    || undefined,
+        mqtt_username:        mqttUser         || undefined,
+        mqtt_password:        mqttPass         || undefined,
+        camera_fqdn:          cameraIp         || undefined,
+        // Only send the computed URL when we have all three credentials
+        camera_stream_url:    computedRtspUrl  || undefined,
+        camera_username:      cameraUser        || undefined,
+        // Empty password = keep existing (user didn't re-enter it)
+        camera_password:      cameraPass        || undefined,
       })
       // Refresh cfg to get updated health/status
       const fresh = await getPedestalConfig(selectedId)
@@ -302,10 +308,7 @@ export default function DevicesPanel() {
         status={<StatusDot ok={cfg?.camera_reachable ?? false} label={cfg?.camera_reachable ? 'Reachable' : 'Unreachable'} />}
       >
         <Field label="Camera IP / Hostname">
-          <TextInput value={cameraIp} onChange={setCameraIp} placeholder="e.g. 192.168.1.50" />
-        </Field>
-        <Field label="RTSP Stream URL">
-          <TextInput value={cameraUrl} onChange={setCameraUrl} placeholder="rtsp://user:password@192.168.1.50:554/profile1" />
+          <TextInput value={cameraIp} onChange={setCameraIp} placeholder="e.g. 192.168.1.192" />
         </Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Username">
@@ -313,7 +316,7 @@ export default function DevicesPanel() {
           </Field>
           <Field label="Password">
             <div className="relative">
-              <TextInput value={cameraPass} onChange={setCameraPass} placeholder="camera password" type={showCameraPass ? 'text' : 'password'} />
+              <TextInput value={cameraPass} onChange={setCameraPass} placeholder="enter to set / update" type={showCameraPass ? 'text' : 'password'} />
               <button
                 type="button"
                 onClick={() => setShowCameraPass((v) => !v)}
@@ -325,6 +328,34 @@ export default function DevicesPanel() {
             </div>
           </Field>
         </div>
+        <Field label="RTSP Stream URL (auto-generated)">
+          <div className="relative">
+            <input
+              type="text"
+              readOnly
+              value={showCameraPass ? (computedRtspUrl ?? '') : maskedRtspUrl}
+              placeholder={
+                !cameraIp ? 'Enter IP above' :
+                !cameraUser ? 'Enter username above' :
+                !cameraPass ? 'Enter password above to generate URL' : ''
+              }
+              className="w-full bg-gray-900/50 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-400 text-xs font-mono pr-10 cursor-default"
+            />
+            {maskedRtspUrl && (
+              <button
+                type="button"
+                onClick={() => setShowCameraPass((v) => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 text-sm px-1"
+                tabIndex={-1}
+              >
+                {showCameraPass ? '🙈' : '👁'}
+              </button>
+            )}
+          </div>
+          {!computedRtspUrl && cfg?.camera_stream_url && (
+            <p className="text-xs text-gray-600 mt-1">Current saved URL will be kept. Re-enter password to update it.</p>
+          )}
+        </Field>
         {cfg?.last_camera_check && (
           <p className="text-xs text-gray-600">
             Last check: {new Date(cfg.last_camera_check).toLocaleString()}

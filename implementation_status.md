@@ -1,6 +1,6 @@
 # Implementation Status — Cloud_IOT CV Feature Extension
 
-Last updated: 2026-04-03
+Last updated: 2026-04-03 (Sections 8-10 complete)
 
 ## Sections
 
@@ -11,6 +11,9 @@ Last updated: 2026-04-03
 - [x] Section 5: Storage Monitor
 - [x] Section 6: Updated Analyze and Match Endpoints
 - [x] Section 7: New Berth DB Columns
+- [x] Section 8: Sector Configuration UI
+- [x] Section 9: Runtime UI Updates
+- [x] Section 10: Storage Warning Banner + Polling
 
 ## What was done
 
@@ -69,12 +72,36 @@ Last updated: 2026-04-03
 - Added fields to `BerthOut` schema and `_berth_to_out()` helper
 - Added `confidence: float = 0.0` to `BerthOut`
 
+### Section 8 — Sector Configuration UI
+- Added zone fields to `BerthConfigUpdate` schema (zone_x1/y1/x2/y2, use_detection_zone)
+- Added zone fields to `BerthOut` schema and `_berth_to_out()` helper
+- Added `GET /api/admin/pedestals/{id}/latest-frame` — frame buffer → base64 JPEG
+- Added `POST /api/admin/berths/{id}/confirm-crop` — operator training data feedback
+- Updated `frontend/src/api/berths.ts`: BerthOut extended with zone + embedding + confidence fields; new API functions; StorageStatus type
+- Updated `frontend/src/store/index.ts`: BerthStatus extended with new fields
+- Created `frontend/src/components/berths/SectorConfigModal.tsx`:
+  - Canvas drawing area with image background and drag-to-resize zone rectangle
+  - Right panel: zone coordinate display, use_detection_zone toggle, sample embedding upload
+  - Save/Reset buttons
+
+### Section 9 — Runtime UI Updates
+- `handleAnalyze` shows: `⛵ Occupied (87.3% confidence) — analyzed 14:32:11`
+- `crop_path` from analyze response enables operator confirmation
+- `handleMatchShip` + Match Ship button (disabled when not occupied / no embedding)
+- Match result displayed inline: `Ship match: 94.2% — checked 14:32:15`
+- Thumbs up 👍 / 👎 buttons for operator crop confirmation; disappear after click
+- `handleConfirmCrop` calls `confirmCrop()` (fire-and-forget, non-blocking)
+- "Sectors" button in each berth row opens SectorConfigModal
+
+### Section 10 — Storage Warning Banner + Polling
+- Storage polling every 5 minutes via `getStorageStatus()` in `useEffect`
+- Amber warning banner at page top when `alarm_active` is true
+- Compact storage indicator in page header (size_gb / max_gb) always visible when data loaded
+- Storage state stored in `storageAlarm: StorageStatus | null`
+
 ## Notes
 
 - Dev machine: 32-bit Python 3.13 on Windows — all ML imports lazy/try-except
 - Production: Ubuntu 24.04 NUC with 64-bit Python — all ML packages available
 - All commits go to `develop` branch
 - 124/124 backend tests pass
-
-## Remaining (Sections 8-10)
-- Frontend UI for berth analysis, match, and training data review (next agent call)

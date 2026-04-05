@@ -37,6 +37,13 @@ if [ ! -d "frontend/node_modules/@playwright" ]; then
     exit 0
 fi
 
+# ── Skip if backend is not running (E2E needs live API on :8000) ──────────────
+if ! curl -sf http://localhost:8000/api/pedestals -o /dev/null 2>/dev/null; then
+    echo -e "${YELLOW}[!] Backend not reachable on :8000 — skipping Playwright.${NC}"
+    echo "    Start the backend then re-run: bash tests/playwright_e2e.sh"
+    exit 0
+fi
+
 # ── Run Playwright ─────────────────────────────────────────────────────────────
 cd frontend
 # playwright.config.ts already configures both list + json reporters

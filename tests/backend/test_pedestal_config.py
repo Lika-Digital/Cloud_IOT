@@ -44,7 +44,7 @@ def test_get_config_unknown_pedestal(client, auth_headers):
 
 
 def test_update_camera_settings(client, auth_headers):
-    """Operator sets camera stream URL and credentials — values persist."""
+    """Operator sets camera stream URL and credentials — credentials are auto-injected into URL."""
     payload = {
         "camera_stream_url": "rtsp://192.168.1.200:554/live",
         "camera_username": "admin",
@@ -54,7 +54,8 @@ def test_update_camera_settings(client, auth_headers):
     r = client.put("/api/admin/pedestal/1/config", json=payload, headers=auth_headers)
     assert r.status_code == 200
     data = r.json()
-    assert data["camera_stream_url"] == "rtsp://192.168.1.200:554/live"
+    # Credentials are auto-injected into the stream URL
+    assert data["camera_stream_url"] == "rtsp://admin:secret@192.168.1.200:554/live"
     assert data["camera_username"] == "admin"
     assert data["camera_fqdn"] == "cam.marina.local"
     # Password must be masked in response — never returned in plaintext
@@ -63,25 +64,26 @@ def test_update_camera_settings(client, auth_headers):
     # Verify it persisted
     r2 = client.get("/api/admin/pedestal/1/config", headers=auth_headers)
     assert r2.status_code == 200
-    assert r2.json()["camera_stream_url"] == "rtsp://192.168.1.200:554/live"
+    assert r2.json()["camera_stream_url"] == "rtsp://admin:secret@192.168.1.200:554/live"
     assert r2.json()["camera_password"] == "***"
 
 
 def test_update_camera_url_cleared(client, auth_headers):
-    """Camera URL can be explicitly cleared to null."""
-    # First set it
+    """Camera URL persists across partial updates; non-camera fields don't affect it."""
+    # First set URL + credentials (credentials get injected into URL)
     client.put("/api/admin/pedestal/1/config",
-               json={"camera_stream_url": "rtsp://192.168.1.200:554/live"},
+               json={"camera_stream_url": "rtsp://192.168.1.200:554/live",
+                     "camera_username": "admin", "camera_password": "secret"},
                headers=auth_headers)
-    # Then clear by omitting (partial update — PUT only updates provided fields)
+    # Then update an unrelated field — camera_stream_url should remain
     r = client.put("/api/admin/pedestal/1/config",
                    json={"site_id": "marina-a"},
                    headers=auth_headers)
     assert r.status_code == 200
-    # camera_stream_url should remain (partial update, not full replace)
     data = r.json()
     assert data["site_id"] == "marina-a"
-    assert data["camera_stream_url"] == "rtsp://192.168.1.200:554/live"
+    # URL still has injected credentials from the prior save
+    assert data["camera_stream_url"] == "rtsp://admin:secret@192.168.1.200:554/live"
 
 
 def test_update_mqtt_settings(client, auth_headers):

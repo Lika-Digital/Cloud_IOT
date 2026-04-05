@@ -101,6 +101,8 @@ export default function PedestalConfigForm({ pedestal }: Props) {
         sensor_config_mode: sensorMode,
       })
       setCfg(updated)
+      // Sync camera_stream_url back — backend may have injected credentials
+      if (updated.camera_stream_url) setCamUrl(updated.camera_stream_url)
       setMsg({ type: 'success', text: 'Configuration saved.' })
     } catch {
       setMsg({ type: 'error', text: 'Failed to save configuration.' })
@@ -225,6 +227,26 @@ export default function PedestalConfigForm({ pedestal }: Props) {
                   <Field label="FQDN / Hostname" value={camFqdn} onChange={setCamFqdn} />
                   <Field label="Username" value={camUser} onChange={setCamUser} />
                   <Field label="Password" value={camPass} onChange={setCamPass} type="password" />
+                  <div className="col-span-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!camFqdn) return
+                        const host = camFqdn.trim()
+                        const creds = camUser ? `${encodeURIComponent(camUser)}${camPass ? ':' + encodeURIComponent(camPass) : ''}@` : ''
+                        // Preserve existing path, or default to empty
+                        let path = ''
+                        try {
+                          const existing = new URL(camUrl)
+                          path = existing.pathname + existing.search
+                        } catch { /* no existing URL */ }
+                        setCamUrl(`rtsp://${creds}${host}${path}`)
+                      }}
+                      className="text-xs text-blue-400 hover:text-blue-300 underline"
+                    >
+                      Build URL from FQDN + credentials
+                    </button>
+                  </div>
                 </div>
               </Section>
 

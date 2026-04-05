@@ -32,7 +32,8 @@ export default function LoginScreen() {
           : 'Cannot connect to server.\nCheck Wi-Fi and EXPO_PUBLIC_API_URL in .env'
         )
       } else {
-        setError(e?.response?.data?.detail ?? 'Login failed')
+        const detail = e?.response?.data?.detail
+        setError(typeof detail === 'string' ? detail : Array.isArray(detail) ? detail.map((d: any) => d.msg ?? String(d)).join(', ') : 'Login failed')
       }
     } finally {
       setLoading(false)
@@ -66,7 +67,7 @@ export default function LoginScreen() {
             secureTextEntry
             maxLength={128}
           />
-          {error ? <Text style={styles.error}>{error}</Text> : null}
+          {!!error && <Text style={styles.error}>{typeof error === 'string' ? error : JSON.stringify(error)}</Text>}
           <TouchableOpacity style={styles.btn} onPress={handleLogin} disabled={loading}>
             {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Sign In</Text>}
           </TouchableOpacity>

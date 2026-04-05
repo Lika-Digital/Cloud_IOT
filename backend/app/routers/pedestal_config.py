@@ -4,6 +4,7 @@ auto-discovery (mDNS / SNMP), and health status.
 """
 import json
 import logging
+import urllib.parse
 from datetime import datetime
 from typing import Optional
 
@@ -154,6 +155,29 @@ def update_config(
 
     db.commit()
     db.refresh(cfg)
+
+    # Auto-inject credentials into camera_stream_url whenever URL or credentials change
+    if any(f in updated_fields for f in ("camera_stream_url", "camera_username", "camera_password", "camera_fqdn")):
+        url = cfg.camera_stream_url or ""
+        username = cfg.camera_username or ""
+        password = cfg.camera_password or ""
+        if url and (username or password):
+            try:
+                parsed = urllib.parse.urlparse(url)
+                # Strip existing credentials from netloc
+                host = parsed.hostname or ""
+                if parsed.port:
+                    host = f"{host}:{parsed.port}"
+                creds = urllib.parse.quote(username, safe="") + ":" + urllib.parse.quote(password, safe="")
+                netloc = f"{creds}@{host}"
+                injected = urllib.parse.urlunparse(
+                    (parsed.scheme or "rtsp", netloc, parsed.path, parsed.params, parsed.query, parsed.fragment)
+                )
+                cfg.camera_stream_url = injected
+                db.commit()
+                db.refresh(cfg)
+            except Exception:
+                pass
 
     # Audit log — list which config keys changed (no values for secrets)
     try:

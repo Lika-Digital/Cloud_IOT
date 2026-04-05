@@ -95,6 +95,12 @@ Mosquitto Broker (:1883)                  │                         │
 - Operator training data loop: save crop → confirm / reject
 - Training storage monitor: WebSocket alarm at 80% capacity
 - Berth count auto-synced to pedestal count
+- **Sector management** (v3.1):
+  - **+ Add Sector** button in Berth Occupancy table — create new berths directly without going to Settings
+  - Each sector has a user-assigned **berth number** (e.g. #1, #2) shown as a badge in the table
+  - Creating a sector immediately opens the zone config + sample image upload in one flow
+  - Berth number editable inside ⚙ Sectors modal alongside detection zone config
+  - Sample ship image upload per sector for Re-ID Match procedure
 
 ### SNMP Trap Receiver
 - Listens on UDP :1620 (configurable)

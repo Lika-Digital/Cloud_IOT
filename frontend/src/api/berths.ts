@@ -47,6 +47,8 @@ export interface BerthOut {
   zone_x2?: number
   zone_y2?: number
   use_detection_zone?: number
+  // User-assigned berth number
+  berth_number?: number | null
 }
 
 export interface CalendarEntry {
@@ -103,6 +105,7 @@ export const updateBerthConfig = (berthId: number, body: {
   name?: string
   pedestal_id?: number
   berth_type?: 'transit' | 'yearly'
+  berth_number?: number
   zone_x1?: number
   zone_y1?: number
   zone_x2?: number
@@ -111,7 +114,12 @@ export const updateBerthConfig = (berthId: number, body: {
 }) =>
   api.put(`/admin/berths/${berthId}/config`, body).then((r) => r.data)
 
-export const createBerth = (body: { name?: string; pedestal_id?: number; berth_type?: 'transit' | 'yearly' }) =>
+export const createBerth = (body: {
+  name?: string
+  pedestal_id?: number
+  berth_type?: 'transit' | 'yearly'
+  berth_number?: number
+}) =>
   api.post('/admin/berths', body).then((r) => r.data)
 
 export const deleteBerth = (berthId: number) =>

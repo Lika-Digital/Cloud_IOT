@@ -90,6 +90,8 @@ export interface BerthStatus {
   zone_x2?: number
   zone_y2?: number
   use_detection_zone?: number
+  // User-assigned berth number
+  berth_number?: number | null
 }
 
 export interface PedestalHealth {

@@ -38,6 +38,9 @@ export default function SectorConfigModal({ berth, onClose }: Props) {
     exists: !!berth.sample_embedding_path,
     updatedAt: berth.sample_updated_at ?? null,
   })
+  const [berthNumber, setBerthNumber] = useState<string>(
+    berth.berth_number != null ? String(berth.berth_number) : ''
+  )
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
@@ -192,12 +195,14 @@ export default function SectorConfigModal({ berth, onClose }: Props) {
     setSaving(true)
     setMsg(null)
     try {
+      const parsedNum = berthNumber.trim() !== '' ? parseInt(berthNumber, 10) : undefined
       await updateBerthConfig(berth.id, {
         zone_x1: zone.x1,
         zone_y1: zone.y1,
         zone_x2: zone.x2,
         zone_y2: zone.y2,
         use_detection_zone: useZone ? 1 : 0,
+        ...(parsedNum !== undefined && !isNaN(parsedNum) ? { berth_number: parsedNum } : {}),
       })
       setMsg({ ok: true, text: 'Sector configuration saved.' })
     } catch (err: unknown) {
@@ -308,6 +313,22 @@ export default function SectorConfigModal({ berth, onClose }: Props) {
               <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Berth</div>
               <div className="text-white font-semibold">{berth.name}</div>
               <div className="text-gray-500 text-xs">ID {berth.id} · Pedestal {berth.pedestal_id ?? '—'}</div>
+            </div>
+
+            {/* Berth number */}
+            <div>
+              <label className="block text-xs text-gray-500 uppercase tracking-wide mb-1">
+                Berth Number
+              </label>
+              <input
+                type="number"
+                min={1}
+                value={berthNumber}
+                onChange={(e) => setBerthNumber(e.target.value)}
+                placeholder="e.g. 1"
+                className="w-full bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
+              />
+              <p className="text-xs text-gray-600 mt-1">Displayed identifier for this sector (e.g. Berth 1).</p>
             </div>
 
             {/* Zone coordinates */}

@@ -65,6 +65,8 @@ class BerthOut(BaseModel):
     zone_x2: Optional[float] = None
     zone_y2: Optional[float] = None
     use_detection_zone: int = 0
+    # User-assigned berth number
+    berth_number: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -108,6 +110,7 @@ class BerthConfigUpdate(BaseModel):
     name: Optional[str] = None
     pedestal_id: Optional[int] = None
     berth_type: Optional[str] = None   # "transit" | "yearly"
+    berth_number: Optional[int] = None
     # Detection zone (fractions 0.0–1.0)
     zone_x1: Optional[float] = None
     zone_y1: Optional[float] = None
@@ -152,6 +155,7 @@ def _berth_to_out(b: Berth, pedestal_cfg=None, ref_count: int = 0) -> BerthOut:
         zone_x2=getattr(b, "zone_x2", None),
         zone_y2=getattr(b, "zone_y2", None),
         use_detection_zone=getattr(b, "use_detection_zone", 0) or 0,
+        berth_number=getattr(b, "berth_number", None),
     )
 
 
@@ -750,6 +754,8 @@ def update_berth_config(
         berth.zone_y2 = body.zone_y2
     if body.use_detection_zone is not None:
         berth.use_detection_zone = body.use_detection_zone
+    if body.berth_number is not None:
+        berth.berth_number = body.berth_number
     user_db.commit()
     return {"ok": True}
 
@@ -765,6 +771,7 @@ def create_berth(
         name=(body.name or "New Berth").strip(),
         pedestal_id=body.pedestal_id if body.pedestal_id and body.pedestal_id > 0 else None,
         berth_type=body.berth_type or "transit",
+        berth_number=body.berth_number,
         status="free",
         detected_status="free",
     )

@@ -49,6 +49,8 @@ class Berth(UserBase):
     # Re-ID embedding path and update timestamp (Section 7)
     sample_embedding_path: Mapped[str] = mapped_column(String(500), nullable=True)
     sample_updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    # User-assigned berth number (e.g. 1, 2, 3) — distinct from DB primary key
+    berth_number: Mapped[int] = mapped_column(Integer, nullable=True)
 
 
 class BerthReservation(UserBase):

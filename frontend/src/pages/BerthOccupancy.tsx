@@ -3,7 +3,7 @@ import { useStore } from '../store'
 import {
   getBerths, getBerthCalendar, triggerAnalysis,
   getReferenceImages, uploadReferenceImages, deleteReferenceImage, updateBerthConfig,
-  deleteBerth, matchShip, confirmCrop, getStorageStatus,
+  deleteBerth, matchShip, confirmCrop, getStorageStatus, createBerth,
   type BerthOut, type CalendarEntry, type StorageStatus,
 } from '../api/berths'
 import { getPedestals } from '../api'
@@ -49,6 +49,9 @@ export default function BerthOccupancy() {
 
   // Sector config modal (Section 8)
   const [sectorConfigBerth, setSectorConfigBerth] = useState<BerthOut | null>(null)
+
+  // Add sector modal
+  const [showAddSector, setShowAddSector] = useState(false)
 
   // Match ship state (Section 9b)
   const [matchingId, setMatchingId] = useState<number | null>(null)
@@ -300,6 +303,12 @@ export default function BerthOccupancy() {
                   </span>
                 )}
                 <button
+                  onClick={() => setShowAddSector(true)}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-600 text-white font-medium"
+                >
+                  + Add Sector
+                </button>
+                <button
                   onClick={() => refresh()}
                   className="text-xs px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-white font-medium"
                   title="Berths are auto-synced to registered pedestals"
@@ -331,7 +340,11 @@ export default function BerthOccupancy() {
                       }`}
                     >
                       <td className="px-4 py-3 font-medium text-white">
-                        {b.alarm ? '🚨 ' : ''}{b.name}
+                        {b.alarm ? '🚨 ' : ''}
+                        {b.berth_number != null && (
+                          <span className="text-xs text-blue-400 font-mono mr-1.5">#{b.berth_number}</span>
+                        )}
+                        {b.name}
                       </td>
                       <td className="px-4 py-3"><BerthTypeBadge type={b.berth_type ?? 'transit'} /></td>
                       <td className="px-4 py-3"><StatusBadge status={b.status} /></td>
@@ -507,6 +520,136 @@ export default function BerthOccupancy() {
           onClose={() => { setSectorConfigBerth(null); refresh() }}
         />
       )}
+
+      {showAddSector && (
+        <AddSectorModal
+          onClose={() => setShowAddSector(false)}
+          onCreated={(newBerth) => {
+            setShowAddSector(false)
+            refresh().then(() => setSectorConfigBerth(newBerth))
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ─── Add Sector Modal ─────────────────────────────────────────────────────────
+
+function AddSectorModal({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void
+  onCreated: (berth: BerthOut) => void
+}) {
+  const [name, setName] = useState('')
+  const [berthNumber, setBerthNumber] = useState('')
+  const [pedestalId, setPedestalId] = useState<number | null>(null)
+  const [berthType, setBerthType] = useState<'transit' | 'yearly'>('transit')
+  const [pedestals, setPedestals] = useState<Pedestal[]>([])
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  useEffect(() => { getPedestals().then(setPedestals).catch(() => {}) }, [])
+
+  const handleCreate = async () => {
+    if (!name.trim()) { setErr('Name is required.'); return }
+    setSaving(true)
+    setErr(null)
+    try {
+      const parsedNum = berthNumber.trim() !== '' ? parseInt(berthNumber, 10) : undefined
+      const res = await createBerth({
+        name: name.trim(),
+        pedestal_id: pedestalId ?? undefined,
+        berth_type: berthType,
+        ...(parsedNum !== undefined && !isNaN(parsedNum) ? { berth_number: parsedNum } : {}),
+      })
+      // Fetch the created berth to pass to onCreated
+      const berths = await getBerths()
+      const created = berths.find((b) => b.id === res.id) ?? null
+      if (created) onCreated(created as BerthOut)
+      else onClose()
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail ?? 'Create failed.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-gray-900 rounded-2xl border border-gray-700 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
+          <h3 className="text-white font-bold text-lg">+ Add Sector</h3>
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-gray-700 text-white text-sm flex items-center justify-center hover:bg-gray-600">✕</button>
+        </div>
+        <div className="p-6 space-y-4">
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Berth Name *</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. North Dock A"
+              className="w-full bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Berth Number</label>
+            <input
+              type="number"
+              min={1}
+              value={berthNumber}
+              onChange={(e) => setBerthNumber(e.target.value)}
+              placeholder="e.g. 1"
+              className="w-full bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Pedestal (Camera)</label>
+            <select
+              className="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded-lg px-3 py-2 focus:outline-none"
+              value={pedestalId ?? ''}
+              onChange={(e) => setPedestalId(e.target.value ? Number(e.target.value) : null)}
+            >
+              <option value="">— None —</option>
+              {pedestals.map((p) => (
+                <option key={p.id} value={p.id}>{p.name} (ID {p.id})</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Type</label>
+            <div className="flex rounded-lg overflow-hidden border border-gray-700">
+              {(['transit', 'yearly'] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setBerthType(t)}
+                  className={`flex-1 py-1.5 text-xs font-medium transition-colors ${
+                    berthType === t ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                  }`}
+                >
+                  {t.charAt(0).toUpperCase() + t.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+          {err && <p className="text-red-400 text-sm">{err}</p>}
+          <div className="flex gap-2 pt-1">
+            <button onClick={onClose} className="flex-1 py-2 rounded-lg border border-gray-700 text-gray-400 text-sm hover:text-gray-200">
+              Cancel
+            </button>
+            <button
+              onClick={handleCreate}
+              disabled={saving}
+              className="flex-1 py-2 rounded-lg bg-blue-700 hover:bg-blue-600 text-white text-sm font-medium disabled:opacity-50"
+            >
+              {saving ? 'Creating…' : 'Create & Configure'}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

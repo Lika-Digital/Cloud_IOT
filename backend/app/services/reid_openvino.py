@@ -1,10 +1,11 @@
 """
-MobileNetV3 Re-ID OpenVINO inference for ship identity matching.
+MobileNetV2 Re-ID OpenVINO inference for ship identity matching.
 Falls back to returning None if OpenVINO is not available (32-bit dev machine).
 """
 import io
 import logging
 import os
+import time
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -16,7 +17,7 @@ _STD  = (0.229, 0.224, 0.225)
 
 class ReidOVMatcher:
     """
-    Extracts 128-dim L2-normalised Re-ID embeddings using MobileNetV3-Small
+    Extracts 128-dim L2-normalised Re-ID embeddings using MobileNetV2
     compiled to OpenVINO IR.
 
     If the model is missing or OpenVINO cannot be imported, `self.available`
@@ -29,7 +30,7 @@ class ReidOVMatcher:
         self._input_layer: Any = None
         self._output_layer: Any = None
 
-        model_path = os.path.join(model_dir, "mobilenetv3_reid_openvino")
+        model_path = os.path.join(model_dir, "mobilenetv2_reid_openvino")
         if not os.path.isdir(model_path):
             logger.debug("ReidOVMatcher: model directory not found at %s — Re-ID disabled", model_path)
             return
@@ -85,7 +86,10 @@ class ReidOVMatcher:
             arr = (arr - mean) / std
 
             inp = arr.transpose(2, 0, 1)[np.newaxis, ...]  # NCHW [1,3,224,224]
+            t0 = time.perf_counter()
             result = self._compiled_model([inp])[self._output_layer]
+            inference_ms = (time.perf_counter() - t0) * 1000
+            logger.info("ReidOVMatcher: inference_ms=%.1f", inference_ms)
             embedding = result.flatten().astype(np.float32)
 
             # L2 normalise

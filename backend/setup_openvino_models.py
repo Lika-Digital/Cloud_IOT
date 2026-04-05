@@ -29,7 +29,7 @@ else:
     MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 
 YOLO_OUT_DIR = os.path.join(MODELS_DIR, "yolov8n_openvino")
-REID_OUT_DIR = os.path.join(MODELS_DIR, "mobilenetv3_reid_openvino")
+REID_OUT_DIR = os.path.join(MODELS_DIR, "mobilenetv2_reid_openvino")
 
 
 def _ensure_models_dir():
@@ -91,14 +91,15 @@ def export_yolo():
 
 def export_reid():
     """
-    Build a MobileNetV3-Small backbone with 128-dim projection head,
+    Build a MobileNetV2 backbone with 128-dim projection head,
     export to ONNX, then convert to OpenVINO IR.
+    MobileNetV2 is lighter than V3 — better suited for Intel Atom x7425E.
     """
     if os.path.isdir(REID_OUT_DIR) and os.listdir(REID_OUT_DIR):
-        log.info("MobileNetV3 Re-ID model already exists at %s — skipping", REID_OUT_DIR)
+        log.info("MobileNetV2 Re-ID model already exists at %s — skipping", REID_OUT_DIR)
         return
 
-    log.info("Building MobileNetV3-Small Re-ID model …")
+    log.info("Building MobileNetV2 Re-ID model …")
 
     try:
         import torch  # type: ignore
@@ -109,18 +110,19 @@ def export_reid():
         log.error("Install with: pip install torch torchvision")
         sys.exit(1)
 
-    # Build model: MobileNetV3-Small backbone + L2-normalised 128-dim head
+    # Build model: MobileNetV2 backbone + L2-normalised 128-dim head
+    # MobileNetV2 chosen over V3 for better performance on Intel Atom x7425E (no AVX2)
     class ReidModel(nn.Module):
         def __init__(self):
             super().__init__()
             # Load pretrained backbone
-            backbone = tv_models.mobilenet_v3_small(weights=tv_models.MobileNet_V3_Small_Weights.DEFAULT)
-            # Remove classifier; keep features + avgpool
+            backbone = tv_models.mobilenet_v2(weights=tv_models.MobileNet_V2_Weights.DEFAULT)
+            # Keep feature extractor; drop classifier
             self.features = backbone.features
-            self.avgpool = backbone.avgpool
-            # 576 is the output channels of MobileNetV3-Small features
+            self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+            # MobileNetV2 last conv output: 1280 channels
             self.proj = nn.Sequential(
-                nn.Linear(576, 256),
+                nn.Linear(1280, 256),
                 nn.ReLU(inplace=True),
                 nn.Linear(256, 128),
             )
@@ -179,7 +181,7 @@ def export_reid():
     except Exception:
         pass
 
-    log.info("MobileNetV3 Re-ID OpenVINO model saved to: %s", REID_OUT_DIR)
+    log.info("MobileNetV2 Re-ID OpenVINO model saved to: %s", REID_OUT_DIR)
 
 
 # ─── Main ──────────────────────────────────────────────────────────────────────

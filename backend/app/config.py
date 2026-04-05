@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     # Pending session / socket approval timeout (seconds)
     pending_timeout_seconds: int = 15
 
+    # Computer vision — set USE_ML_MODELS=true in .env to enable OpenVINO inference.
+    # Default is false: uses fast Laplacian+histogram fallback (works on all hardware).
+    # On Intel Atom x7425E, OpenVINO inference takes ~500-2000ms per click — acceptable
+    # for on-demand use. Enable after running setup_openvino_models.py and measuring
+    # latency via the logged "inference_ms" values.
+    use_ml_models: bool = False
+
     # Default admin credentials for first-run seeding — override via env vars
     default_admin_email: str = "admin@iot-dashboard.local"
     default_admin_password: Optional[str] = None

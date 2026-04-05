@@ -6,6 +6,7 @@ Falls back gracefully to returning None results if OpenVINO is not available
 import io
 import logging
 import os
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -88,7 +89,10 @@ class YoloOVDetector:
             arr = np.array(img_resized, dtype=np.float32) / 255.0  # HWC
             inp = arr.transpose(2, 0, 1)[np.newaxis, ...]           # NCHW
 
+            t0 = time.perf_counter()
             result = self._compiled_model([inp])[self._output_layer]
+            inference_ms = (time.perf_counter() - t0) * 1000
+            logger.info("YoloOVDetector: inference_ms=%.1f", inference_ms)
             # YOLOv8 output shape: [1, 84, 8400] → transpose to [1, 8400, 84]
             if result.ndim == 3 and result.shape[1] == 84:
                 result = result.transpose(0, 2, 1)

@@ -102,6 +102,11 @@ Mosquitto Broker (:1883)                  │                         │
   - Berth number editable inside ⚙ Sectors modal alongside detection zone config
   - Sample ship image upload per sector for Re-ID Match procedure
 
+### Pedestal Settings — Camera Configuration (v3.1)
+- **Stream URL auto-build**: entering FQDN + username + password and clicking *"Build URL from FQDN + credentials"* constructs the full `rtsp://user:pass@host/path` URL
+- **Credential injection on save**: when username / password are saved, the backend automatically embeds them into the stored `camera_stream_url` (URL-encoded) so the camera worker always has a complete, authenticated URL — no manual URL editing needed
+- Credentials are always masked (`***`) in API responses
+
 ### SNMP Trap Receiver
 - Listens on UDP :1620 (configurable)
 - Decodes BER-encoded SNMP v1/v2c traps (pure Python, no external library)

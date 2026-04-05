@@ -1,6 +1,6 @@
 # Implementation Status — Cloud_IOT CV Feature Extension
 
-Last updated: 2026-04-03 (Sections 8-10 complete)
+Last updated: 2026-04-05 (All sections complete including Tests)
 
 ## Sections
 
@@ -14,6 +14,7 @@ Last updated: 2026-04-03 (Sections 8-10 complete)
 - [x] Section 8: Sector Configuration UI
 - [x] Section 9: Runtime UI Updates
 - [x] Section 10: Storage Warning Banner + Polling
+- [x] Tests: CV berth test suite (19 new tests, 143 total passing)
 
 ## What was done
 
@@ -104,4 +105,16 @@ Last updated: 2026-04-03 (Sections 8-10 complete)
 - Dev machine: 32-bit Python 3.13 on Windows — all ML imports lazy/try-except
 - Production: Ubuntu 24.04 NUC with 64-bit Python — all ML packages available
 - All commits go to `develop` branch
-- 124/124 backend tests pass
+- 143/143 backend tests pass (124 pre-existing + 19 new CV tests)
+
+### Tests — CV Berth Test Suite
+- Created `tests/backend/test_berth_cv.py` — 19 tests across 7 classes
+  - `TestSectorConfig`: zone field persistence, admin-only enforcement
+  - `TestLatestFrameEndpoint`: empty buffer returns None, unauthenticated blocked
+  - `TestAnalyzeEndpoint`: schema check, graceful 400 when no pedestal/camera
+  - `TestMatchEndpoint`: 400 when not occupied, admin-only enforcement
+  - `TestSampleEmbeddingEndpoint`: 503 when Re-ID model unavailable, admin-only
+  - `TestConfirmCrop`: 404 on non-existent path, admin-only enforcement
+  - `TestStorageMonitor`: all 4 expected fields, no auth required, alarm=False in CI
+  - `TestTrainingData`: unit tests via `temp_training_dir` fixture — save_crop creates files,
+    JSON has required fields, confirm_crop moves to confirmed/ subfolder

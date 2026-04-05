@@ -6,7 +6,7 @@ import { useEffect } from 'react'
 import { getUnreadCount } from '../../api/billing'
 
 export default function Layout() {
-  const { wsConnected, pedestalOnline, unreadChatCount, setUnreadChatCount, newErrorCount } = useStore()
+  const { wsConnected, pedestalOnline, unreadChatCount, setUnreadChatCount, newErrorCount, hwAlarmLevel } = useStore()
   const { email, role, logout } = useAuthStore()
   const navigate = useNavigate()
 
@@ -21,7 +21,8 @@ export default function Layout() {
     return () => clearInterval(interval)
   }, [isAdmin])
 
-  const NAV_ITEMS = [
+  type NavItem = { to: string; label: string; icon: string; badge: number; hwAlarm?: 'none' | 'warning' | 'critical' }
+  const NAV_ITEMS: NavItem[] = [
     { to: '/dashboard', label: 'Dashboard', icon: '⚡', badge: 0 },
     { to: '/analytics', label: 'Analytics', icon: '📊', badge: 0 },
     { to: '/history', label: 'History', icon: '📋', badge: 0 },
@@ -30,7 +31,7 @@ export default function Layout() {
       { to: '/users', label: 'Customers', icon: '👥', badge: unreadChatCount },
       { to: '/contracts', label: 'Contracts', icon: '📝', badge: 0 },
       { to: '/berths', label: 'Berth Occupancy', icon: '⚓', badge: 0 },
-      { to: '/system-health', label: 'System Health', icon: '🔧', badge: newErrorCount },
+      { to: '/system-health', label: 'System Health', icon: '🔧', badge: newErrorCount, hwAlarm: hwAlarmLevel },
       { to: '/api-gateway', label: 'API Gateway', icon: '🔌', badge: 0 },
       { to: '/settings', label: 'Settings', icon: '⚙️', badge: 0 },
     ] : []),
@@ -67,6 +68,11 @@ export default function Layout() {
             >
               <span>{item.icon}</span>
               <span className="flex-1">{item.label}</span>
+              {item.hwAlarm && item.hwAlarm !== 'none' && (
+                <span className={`w-2.5 h-2.5 rounded-full animate-pulse flex-shrink-0 ${
+                  item.hwAlarm === 'critical' ? 'bg-red-500' : 'bg-yellow-400'
+                }`} title={`HW ${item.hwAlarm} alarm active`} />
+              )}
               {item.badge > 0 && (
                 <span className="bg-red-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
                   {item.badge > 9 ? '9+' : item.badge}

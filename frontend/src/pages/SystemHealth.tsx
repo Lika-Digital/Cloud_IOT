@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
-  getHealthSummary, getErrorLogs, clearLogs,
-  type HealthSummary, type ErrorLogEntry,
+  getHealthSummary, getErrorLogs, clearLogs, getHardwareStats,
+  type HealthSummary, type ErrorLogEntry, type HardwareStats, type HardwareAlarm,
 } from '../api/systemHealth'
 import { useStore } from '../store'
 
@@ -9,23 +9,26 @@ type FilterCategory = 'all' | 'system' | 'hw'
 type FilterLevel    = 'all' | 'error' | 'warning' | 'info'
 
 export default function SystemHealth() {
-  const [summary, setSummary] = useState<HealthSummary | null>(null)
-  const [logs, setLogs] = useState<ErrorLogEntry[]>([])
-  const [category, setCategory] = useState<FilterCategory>('all')
-  const [level, setLevel] = useState<FilterLevel>('all')
-  const [hours, setHours] = useState(24)
-  const [expanded, setExpanded] = useState<number | null>(null)
-  const [clearing, setClearing] = useState(false)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const { resetNewErrors } = useStore()
+  const [summary, setSummary]         = useState<HealthSummary | null>(null)
+  const [logs, setLogs]               = useState<ErrorLogEntry[]>([])
+  const [hw, setHw]                   = useState<HardwareStats | null>(null)
+  const [category, setCategory]       = useState<FilterCategory>('all')
+  const [level, setLevel]             = useState<FilterLevel>('all')
+  const [hours, setHours]             = useState(24)
+  const [expanded, setExpanded]       = useState<number | null>(null)
+  const [clearing, setClearing]       = useState(false)
+  const [loadError, setLoadError]     = useState<string | null>(null)
+  const [hwError, setHwError]         = useState<string | null>(null)
+  const { resetNewErrors, setHwAlarmLevel } = useStore()
 
-  const load = useCallback(async () => {
+  // ── Error log polling (15s) ────────────────────────────────────────────────
+  const loadLogs = useCallback(async () => {
     try {
       const [s, l] = await Promise.all([
         getHealthSummary(),
         getErrorLogs({
           category: category === 'all' ? undefined : category,
-          level: level === 'all' ? undefined : level,
+          level:    level    === 'all' ? undefined : level,
           hours,
         }),
       ])
@@ -37,12 +40,35 @@ export default function SystemHealth() {
     }
   }, [category, level, hours])
 
+  // ── Hardware stats polling (10s) ───────────────────────────────────────────
+  const loadHw = useCallback(async () => {
+    try {
+      const stats = await getHardwareStats()
+      setHw(stats)
+      setHwError(null)
+      // Sync nav indicator based on highest alarm level
+      const highest = stats.alarms.find((a) => a.level === 'critical')
+        ? 'critical'
+        : stats.alarms.find((a) => a.level === 'warning')
+          ? 'warning'
+          : 'none'
+      setHwAlarmLevel(highest)
+    } catch {
+      setHwError('Hardware stats unavailable (psutil may not be installed on this host)')
+    }
+  }, [])
+
   useEffect(() => {
     resetNewErrors()
-    load()
-    const interval = setInterval(load, 15_000)
-    return () => clearInterval(interval)
-  }, [load])
+    loadLogs()
+    loadHw()
+    const logInterval = setInterval(loadLogs, 15_000)
+    const hwInterval  = setInterval(loadHw,   10_000)
+    return () => {
+      clearInterval(logInterval)
+      clearInterval(hwInterval)
+    }
+  }, [loadLogs, loadHw])
 
   const handleClear = async () => {
     if (!confirm('Delete all error logs? This cannot be undone.')) return
@@ -50,13 +76,13 @@ export default function SystemHealth() {
     try {
       await clearLogs()
       setLogs([])
-      load()
-    } catch {
-      // If clear fails the backend will surface it; just re-enable the button
-    } finally {
-      setClearing(false)
-    }
+      loadLogs()
+    } catch { /* backend will surface */ }
+    finally { setClearing(false) }
   }
+
+  const criticalAlarms = hw?.alarms.filter((a) => a.level === 'critical') ?? []
+  const warningAlarms  = hw?.alarms.filter((a) => a.level === 'warning')  ?? []
 
   return (
     <div className="space-y-6">
@@ -65,11 +91,12 @@ export default function SystemHealth() {
           {loadError}
         </div>
       )}
-      {/* Header */}
+
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-white">System Health</h1>
-          <p className="text-gray-400 text-sm mt-1">Error logs — last 7 days · auto-refresh every 15s</p>
+          <p className="text-gray-400 text-sm mt-1">Hardware stats refresh every 10s · Error logs every 15s</p>
         </div>
         <button
           className="px-4 py-2 bg-red-900/40 border border-red-700/40 text-red-400 rounded-lg text-sm font-medium hover:bg-red-900/60 transition-colors disabled:opacity-40"
@@ -80,15 +107,168 @@ export default function SystemHealth() {
         </button>
       </div>
 
-      {/* Infrastructure status */}
+      {/* ── Hardware alarm banners ─────────────────────────────────────────── */}
+      {criticalAlarms.length > 0 && (
+        <div className="rounded-lg border border-red-600/50 bg-red-900/30 px-4 py-3 space-y-1">
+          <p className="text-red-400 font-semibold text-sm flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse inline-block" />
+            CRITICAL ALARM — automatic downgrade actions applied
+          </p>
+          {criticalAlarms.map((a) => (
+            <p key={a.param} className="text-red-300 text-sm ml-4">
+              {a.label}: <span className="font-bold">{a.value.toFixed(1)}{a.unit}</span>
+              {' '}(threshold {a.threshold}{a.unit})
+            </p>
+          ))}
+        </div>
+      )}
+      {warningAlarms.length > 0 && (
+        <div className="rounded-lg border border-yellow-600/50 bg-yellow-900/20 px-4 py-3 space-y-1">
+          <p className="text-yellow-400 font-semibold text-sm flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-yellow-400 animate-pulse inline-block" />
+            WARNING — monitor closely, no automatic action taken
+          </p>
+          {warningAlarms.map((a) => (
+            <p key={a.param} className="text-yellow-300 text-sm ml-4">
+              {a.label}: <span className="font-bold">{a.value.toFixed(1)}{a.unit}</span>
+              {' '}(threshold {a.threshold}{a.unit})
+            </p>
+          ))}
+        </div>
+      )}
+
+      {/* ── Hardware performance dashboard ─────────────────────────────────── */}
+      {hwError ? (
+        <div className="card">
+          <p className="text-gray-500 text-sm">{hwError}</p>
+        </div>
+      ) : hw?.available ? (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold text-white">Hardware Performance</h2>
+            <span className="text-xs text-gray-600">
+              collected in {hw.elapsed_ms}ms
+              {hw.rtsp_suspended && (
+                <span className="ml-2 text-orange-400">[RTSP suspended — thermal protection]</span>
+              )}
+            </span>
+          </div>
+
+          {/* Main gauges row */}
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+            <GaugeCard title="CPU Usage" icon="⚙️"
+              value={hw.cpu_percent} unit="%" warn={hw.thresholds.cpu_warning} crit={hw.thresholds.cpu_critical}
+              sub={`${hw.cpu_freq_mhz ? hw.cpu_freq_mhz.toFixed(0) + ' MHz · ' : ''}${hw.cpu_per_core.length} cores`}
+            />
+            <GaugeCard title="Memory" icon="🧠"
+              value={hw.mem_percent} unit="%" warn={hw.thresholds.mem_warning} crit={hw.thresholds.mem_critical}
+              sub={`${hw.mem_used_hr} / ${hw.mem_total_hr}`}
+            />
+            <GaugeCard title="Disk Usage" icon="💾"
+              value={hw.disk_percent} unit="%" warn={hw.thresholds.disk_warning} crit={hw.thresholds.disk_critical}
+              sub={`${hw.disk_used_hr} / ${hw.disk_total_hr}`}
+            />
+            {hw.cpu_temp !== null && (
+              <GaugeCard title="CPU Temperature" icon="🌡️"
+                value={hw.cpu_temp} max={hw.cpu_temp_max} unit="°C"
+                warn={hw.thresholds.temp_warning} crit={hw.thresholds.temp_critical}
+                sub={`max ${hw.cpu_temp_max}°C safe`}
+              />
+            )}
+          </div>
+
+          {/* Per-core CPU */}
+          {hw.cpu_per_core.length > 1 && (
+            <div className="card space-y-2">
+              <p className="text-xs text-gray-400 font-medium uppercase tracking-wider">CPU per core</p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                {hw.cpu_per_core.map((pct, i) => (
+                  <Gauge key={i}
+                    label={`Core ${i}`}
+                    value={pct} max={100} unit="%"
+                    warn={hw.thresholds.cpu_warning}
+                    crit={hw.thresholds.cpu_critical}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* System info row */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <InfoCard label="Uptime" value={hw.uptime} icon="⏱️" />
+            <InfoCard label="Load avg (1m)" value={hw.load_1.toFixed(2)} icon="📈" />
+            <InfoCard label="Load avg (5m)" value={hw.load_5.toFixed(2)} icon="📊" />
+            <InfoCard label="Load avg (15m)" value={hw.load_15.toFixed(2)} icon="📉" />
+          </div>
+
+          {/* Network interfaces */}
+          {hw.interfaces.length > 0 && (
+            <div className="card space-y-3">
+              <p className="text-xs text-gray-400 font-medium uppercase tracking-wider">Network Interfaces</p>
+              <div className="space-y-2">
+                {hw.interfaces.map((iface) => (
+                  <div key={iface.name}
+                    className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2 rounded-lg bg-gray-900/50 border border-gray-700/50">
+                    <div className="flex items-center gap-2 min-w-[120px]">
+                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${iface.up ? 'bg-green-400 animate-pulse' : 'bg-red-500'}`} />
+                      <span className="font-mono text-sm text-white">{iface.name}</span>
+                      <span className={`text-xs ${iface.up ? 'text-green-400' : 'text-red-400'}`}>
+                        {iface.up ? 'UP' : 'DOWN'}
+                      </span>
+                    </div>
+                    {iface.ip && <span className="font-mono text-xs text-gray-400">{iface.ip}</span>}
+                    {iface.speed > 0 && <span className="text-xs text-gray-600">{iface.speed} Mb/s</span>}
+                    <span className="text-xs text-gray-500 ml-auto">
+                      ↑ {iface.bytes_sent_hr} · ↓ {iface.bytes_recv_hr}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Automatic actions log */}
+          {hw.action_log.length > 0 && (
+            <div className="card space-y-3">
+              <p className="text-xs text-gray-400 font-medium uppercase tracking-wider">Automatic Actions Log</p>
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {hw.action_log.map((entry, i) => (
+                  <div key={i} className={`px-3 py-2 rounded-lg text-xs border ${
+                    entry.alarm_level === 'critical'
+                      ? 'bg-red-900/20 border-red-700/30'
+                      : 'bg-yellow-900/20 border-yellow-700/30'
+                  }`}>
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className={`font-semibold ${entry.alarm_level === 'critical' ? 'text-red-400' : 'text-yellow-400'}`}>
+                        {entry.alarm_level.toUpperCase()}
+                      </span>
+                      <span className="text-gray-500 font-mono">{formatTime(entry.timestamp)}</span>
+                      <span className="text-gray-400 uppercase">{entry.param}</span>
+                      <span className="text-gray-500">{entry.value.toFixed(1)}</span>
+                    </div>
+                    <p className="text-gray-300">{entry.action}</p>
+                    <p className="text-gray-600 mt-0.5">Result: {entry.result}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : hw && !hw.available ? (
+        <div className="card">
+          <p className="text-gray-500 text-sm">Hardware stats not available: {hw.error}</p>
+        </div>
+      ) : (
+        <div className="card">
+          <p className="text-gray-600 text-sm">Loading hardware stats…</p>
+        </div>
+      )}
+
+      {/* ── Infrastructure status ───────────────────────────────────────────── */}
       {summary && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <InfraCard
-            label="MQTT Broker"
-            ok={summary.mqtt_connected}
-            okText="Connected"
-            failText="Disconnected"
-          />
+          <InfraCard label="MQTT Broker" ok={summary.mqtt_connected} okText="Connected" failText="Disconnected" />
           <StatCard label="Errors (7d)"   value={summary.errors_7d}   color="red" />
           <StatCard label="Warnings (7d)" value={summary.warnings_7d} color="yellow" />
         </div>
@@ -104,10 +284,9 @@ export default function SystemHealth() {
         </div>
       )}
 
-      {/* Filters */}
+      {/* ── Error log filters ───────────────────────────────────────────────── */}
       <div className="card">
         <div className="flex flex-wrap gap-4 items-center">
-          {/* Category */}
           <FilterGroup
             label="Category"
             options={[
@@ -118,8 +297,6 @@ export default function SystemHealth() {
             value={category}
             onChange={(v) => setCategory(v as FilterCategory)}
           />
-
-          {/* Level */}
           <FilterGroup
             label="Level"
             options={[
@@ -131,8 +308,6 @@ export default function SystemHealth() {
             value={level}
             onChange={(v) => setLevel(v as FilterLevel)}
           />
-
-          {/* Time window */}
           <div className="flex items-center gap-2">
             <span className="text-gray-400 text-xs font-medium">Window</span>
             <select
@@ -147,12 +322,11 @@ export default function SystemHealth() {
               <option value={168}>Last 7d</option>
             </select>
           </div>
-
           <span className="text-gray-600 text-xs ml-auto">{logs.length} entries</span>
         </div>
       </div>
 
-      {/* Log table */}
+      {/* ── Error log table ────────────────────────────────────────────────── */}
       <div className="card p-0 overflow-hidden">
         {logs.length === 0 ? (
           <div className="text-center py-16 text-gray-500">
@@ -185,12 +359,8 @@ export default function SystemHealth() {
                       <td className="px-4 py-3 text-gray-500 font-mono text-xs whitespace-nowrap">
                         {formatTime(entry.created_at)}
                       </td>
-                      <td className="px-4 py-3">
-                        <LevelBadge level={entry.level} />
-                      </td>
-                      <td className="px-4 py-3">
-                        <CategoryBadge category={entry.category} />
-                      </td>
+                      <td className="px-4 py-3"><LevelBadge level={entry.level} /></td>
+                      <td className="px-4 py-3"><CategoryBadge category={entry.category} /></td>
                       <td className="px-4 py-3 text-gray-400 font-mono text-xs truncate max-w-[140px]">
                         {entry.source}
                       </td>
@@ -223,7 +393,85 @@ export default function SystemHealth() {
   )
 }
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
+// ─── Gauge card (full card with title) ───────────────────────────────────────
+
+function GaugeCard({
+  title, icon, value, max = 100, unit, warn, crit, sub,
+}: {
+  title: string; icon: string; value: number | null; max?: number
+  unit: string; warn: number; crit: number; sub?: string
+}) {
+  if (value === null) return null
+  const pct     = Math.min((value / max) * 100, 100)
+  const warnPct = (warn / max) * 100
+  const critPct = (crit / max) * 100
+  const color   = value >= crit ? 'bg-red-500' : value >= warn ? 'bg-yellow-500' : 'bg-green-500'
+  const textCol = value >= crit ? 'text-red-400' : value >= warn ? 'text-yellow-400' : 'text-green-400'
+  const border  = value >= crit ? 'border-red-700/40' : value >= warn ? 'border-yellow-700/30' : 'border-gray-700'
+
+  return (
+    <div className={`rounded-xl border bg-gray-800/60 p-4 space-y-3 ${border}`}>
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-gray-400 font-medium flex items-center gap-1.5">
+          <span>{icon}</span>{title}
+        </span>
+        <span className={`text-xl font-bold ${textCol}`}>
+          {value.toFixed(1)}<span className="text-sm font-normal ml-0.5">{unit}</span>
+        </span>
+      </div>
+      <div className="relative h-3 bg-gray-700 rounded-full overflow-hidden">
+        {/* Threshold markers */}
+        <div className="absolute top-0 bottom-0 w-0.5 bg-yellow-500/50 z-10" style={{ left: `${warnPct}%` }} />
+        <div className="absolute top-0 bottom-0 w-0.5 bg-red-500/50 z-10"    style={{ left: `${critPct}%` }} />
+        <div className={`h-full rounded-full transition-all duration-500 ${color}`} style={{ width: `${pct}%` }} />
+      </div>
+      <div className="flex justify-between text-xs text-gray-600">
+        <span>{sub}</span>
+        <span>{warn}% · {crit}%</span>
+      </div>
+    </div>
+  )
+}
+
+// ─── Inline gauge (no card) ───────────────────────────────────────────────────
+
+function Gauge({
+  label, value, max = 100, unit, warn, crit,
+}: {
+  label: string; value: number | null; max?: number
+  unit: string; warn: number; crit: number
+}) {
+  if (value === null) return null
+  const pct    = Math.min((value / max) * 100, 100)
+  const color  = value >= crit ? 'bg-red-500' : value >= warn ? 'bg-yellow-500' : 'bg-green-500'
+  const textCol= value >= crit ? 'text-red-400' : value >= warn ? 'text-yellow-400' : 'text-green-400'
+  return (
+    <div className="space-y-1">
+      <div className="flex justify-between">
+        <span className="text-xs text-gray-500">{label}</span>
+        <span className={`text-xs font-semibold ${textCol}`}>{value.toFixed(0)}{unit}</span>
+      </div>
+      <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  )
+}
+
+// ─── Info card ────────────────────────────────────────────────────────────────
+
+function InfoCard({ label, value, icon }: { label: string; value: string; icon: string }) {
+  return (
+    <div className="rounded-xl border border-gray-700 bg-gray-800/60 p-4">
+      <p className="text-gray-400 text-xs font-medium flex items-center gap-1.5">
+        <span>{icon}</span>{label}
+      </p>
+      <p className="text-white font-bold text-lg mt-1">{value}</p>
+    </div>
+  )
+}
+
+// ─── Infrastructure / stat cards (existing) ───────────────────────────────────
 
 function InfraCard({
   label, ok, okText, failText, neutral,
@@ -231,9 +479,8 @@ function InfraCard({
   label: string; ok: boolean; okText: string; failText: string; neutral?: boolean
 }) {
   const color = neutral
-    ? (ok ? 'border-gray-700 bg-gray-800/60' : 'border-gray-700 bg-gray-800/60')
+    ? 'border-gray-700 bg-gray-800/60'
     : (ok ? 'border-green-700/40 bg-green-900/20' : 'border-red-700/40 bg-red-900/20')
-
   return (
     <div className={`rounded-xl border p-4 ${color}`}>
       <p className="text-gray-400 text-xs font-medium">{label}</p>
@@ -271,6 +518,8 @@ function StatCard({
     </div>
   )
 }
+
+// ─── Badges / filters ────────────────────────────────────────────────────────
 
 function LevelBadge({ level }: { level: string }) {
   const styles: Record<string, string> = {

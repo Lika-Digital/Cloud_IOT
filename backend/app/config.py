@@ -34,6 +34,18 @@ class Settings(BaseSettings):
     # Pending session / socket approval timeout (seconds)
     pending_timeout_seconds: int = 15
 
+    # Hardware monitoring thresholds — percentages except hw_temp_max (°C).
+    # Change in .env and restart; no code changes needed.
+    hw_cpu_warning: float = 60.0    # % CPU → Alarm 1
+    hw_cpu_critical: float = 80.0   # % CPU → Alarm 2 + auto nice()
+    hw_mem_warning: float = 60.0    # % RAM → Alarm 1
+    hw_mem_critical: float = 80.0   # % RAM → Alarm 2 + gc.collect()
+    hw_disk_warning: float = 60.0   # % disk → Alarm 1 (display only)
+    hw_disk_critical: float = 80.0  # % disk → Alarm 2 (display only)
+    hw_temp_max: float = 90.0       # maximum safe CPU temperature (°C)
+    hw_temp_warning_pct: float = 60.0   # 60% of 90°C = 54°C → Alarm 1
+    hw_temp_critical_pct: float = 80.0  # 80% of 90°C = 72°C → Alarm 2 + RTSP suspend
+
     # Computer vision — set USE_ML_MODELS=true in .env to enable OpenVINO inference.
     # Default is false: uses fast Laplacian+histogram fallback (works on all hardware).
     # On Intel Atom x7425E, OpenVINO inference takes ~500-2000ms per click — acceptable

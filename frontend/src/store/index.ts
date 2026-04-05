@@ -158,6 +158,10 @@ interface AppStore {
   incrementNewErrors: () => void
   resetNewErrors: () => void
 
+  // Hardware alarm level (for nav indicator and WS events)
+  hwAlarmLevel: 'none' | 'warning' | 'critical'
+  setHwAlarmLevel: (level: 'none' | 'warning' | 'critical') => void
+
   // Berth occupancy
   berthOccupancy: BerthStatus[]
   setBerthOccupancy: (berths: BerthStatus[]) => void
@@ -284,6 +288,9 @@ export const useStore = create<AppStore>((set) => ({
   newErrorCount: 0,
   incrementNewErrors: () => set((s) => ({ newErrorCount: s.newErrorCount + 1 })),
   resetNewErrors: () => set({ newErrorCount: 0 }),
+
+  hwAlarmLevel: 'none',
+  setHwAlarmLevel: (level) => set({ hwAlarmLevel: level }),
 
   berthOccupancy: [],
   setBerthOccupancy: (berths) => set({ berthOccupancy: berths }),

@@ -30,6 +30,7 @@ from .routers import service_orders as service_orders_router
 from .routers import reviews as reviews_router
 from .routers import berths as berths_router
 from .routers import pedestal_config as pedestal_config_router
+from .routers import hardware_stats as hardware_stats_router
 from .routers import external_api_admin as ext_api_admin_router
 from .routers import external_api_gateway as ext_api_gateway_router
 from .routers import settings as settings_router
@@ -491,6 +492,7 @@ app.include_router(customer_invoices.router)
 app.include_router(billing.router)
 app.include_router(chat.router)
 app.include_router(system_health.router)
+app.include_router(hardware_stats_router.router)
 app.include_router(alarms_router.router)
 app.include_router(customer_alarms.router)
 app.include_router(contracts_router.router)

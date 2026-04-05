@@ -222,6 +222,18 @@ async def analyze_berth_now(
       4. Return a result dict with: occupied_bit, match_ok_bit, state_code,
          alarm, match_score, error.
     """
+    # Thermal protection: skip RTSP grab while CPU temperature suspension is active
+    try:
+        from .hardware_monitor import is_rtsp_suspended
+        if is_rtsp_suspended():
+            return {
+                "occupied_bit": 0, "match_ok_bit": 0,
+                "state_code": 0, "alarm": 0, "match_score": None,
+                "error": "RTSP grab suspended (thermal protection active)",
+            }
+    except ImportError:
+        pass
+
     try:
         snapshot = await grab_snapshot(stream_url, camera_username, camera_password)
     except Exception as exc:

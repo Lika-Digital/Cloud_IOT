@@ -25,6 +25,7 @@ export function useWebSocket() {
     addPendingSocket,
     removePendingSocket,
     setMarinaDoorState,
+    setHwAlarmLevel,
   } = useStore()
   const { role } = useAuthStore()
 
@@ -228,6 +229,13 @@ export function useWebSocket() {
           // Future: show in event log; for now just update health to keep pedestal visible
           const pedestalId = msg.data.pedestal_id as number
           if (pedestalId) updatePedestalHealthEntry(pedestalId, {})
+          break
+        }
+        case 'hardware_alarm': {
+          if (role === 'admin') {
+            const level = msg.data.alarm_level as 'warning' | 'critical'
+            setHwAlarmLevel(level)
+          }
           break
         }
       }

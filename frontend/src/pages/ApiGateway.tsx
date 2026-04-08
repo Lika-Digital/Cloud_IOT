@@ -26,8 +26,7 @@ function groupBy<T>(items: T[], key: keyof T): Record<string, T[]> {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function StatusBadge({ active, verified, hasKey }: { active: boolean; verified: boolean; hasKey: boolean }) {
-  if (!hasKey) return <span className="px-3 py-1 rounded-full text-xs font-bold bg-gray-700 text-gray-300">Not Configured</span>
+function StatusBadge({ active, verified }: { active: boolean; verified: boolean }) {
   if (active) return <span className="px-3 py-1 rounded-full text-xs font-bold bg-green-600/20 text-green-400 border border-green-600/30">Active</span>
   if (verified) return <span className="px-3 py-1 rounded-full text-xs font-bold bg-yellow-600/20 text-yellow-400 border border-yellow-600/30">Verified</span>
   return <span className="px-3 py-1 rounded-full text-xs font-bold bg-gray-700 text-gray-400">Inactive</span>
@@ -282,6 +281,7 @@ export default function ApiGateway() {
   const isActive = !!config?.active
   const isVerified = !!config?.verified
   const baseUrl  = `${window.location.origin}/api/ext/`
+  const hasEndpoints = (config?.allowed_endpoints?.length ?? 0) > 0
 
   const endpointsByCategory = catalog ? groupBy(catalog.endpoints, 'category') : {}
   const eventsByCategory    = catalog ? groupBy(catalog.events, 'category') : {}
@@ -300,18 +300,26 @@ export default function ApiGateway() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <StatusBadge active={isActive} verified={isVerified} hasKey={hasKey} />
-          {hasKey && (
-            <span className="text-xs text-gray-500 font-mono bg-gray-800 px-3 py-1 rounded-lg border border-gray-700">
-              {baseUrl}
-            </span>
-          )}
+          <StatusBadge active={isActive} verified={isVerified} />
+          <span className="text-xs text-gray-500 font-mono bg-gray-800 px-3 py-1 rounded-lg border border-gray-700">
+            {baseUrl}
+          </span>
         </div>
       </div>
 
-      {/* Card 1 — API Key */}
-      <Card title="API Key">
+      {/* Card 1 — API Key (optional legacy) */}
+      <Card title="API Key (Optional)">
         <div className="space-y-4">
+          <div className="flex items-start gap-2 p-3 bg-blue-600/10 border border-blue-600/20 rounded-lg">
+            <svg className="w-4 h-4 text-blue-400 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <p className="text-xs text-blue-300">
+              This system uses <strong>JWT service accounts</strong> (api_client role) as the primary auth mechanism for ERP integration.
+              A static API key is optional and only needed for legacy or 3rd-party webhook integrations.
+            </p>
+          </div>
+
           {hasKey ? (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
@@ -492,9 +500,12 @@ export default function ApiGateway() {
             Run a live connectivity check on all enabled GET endpoints before activating the gateway.
           </p>
 
-          <Btn onClick={handleVerify} loading={verifying} disabled={!hasKey}>
+          <Btn onClick={handleVerify} loading={verifying} disabled={!hasEndpoints}>
             Run Verification
           </Btn>
+          {!hasEndpoints && (
+            <p className="text-xs text-gray-500">Enable and save at least one endpoint first</p>
+          )}
 
           {verifyResults && (
             <div className="mt-3">
@@ -547,7 +558,10 @@ export default function ApiGateway() {
                 Deactivate
               </Btn>
             )}
-            {!isActive && !verifyOk && (
+            {!isActive && !verifyOk && !hasEndpoints && (
+              <span className="text-xs text-gray-500">Save endpoints, then run verification</span>
+            )}
+            {!isActive && !verifyOk && hasEndpoints && (
               <span className="text-xs text-gray-500">Run verification first</span>
             )}
           </div>

@@ -294,8 +294,6 @@ def activate_config(
     cfg = db.get(ExternalApiConfig, 1)
     if not cfg:
         raise HTTPException(status_code=404, detail="No config found")
-    if not cfg.api_key:
-        raise HTTPException(status_code=400, detail="Generate an API key first")
     if not cfg.verified:
         raise HTTPException(status_code=400, detail="Run verification first")
 

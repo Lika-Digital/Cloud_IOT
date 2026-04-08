@@ -80,6 +80,11 @@ def _migrate_user_schema():
                 conn.commit()
                 log.info(f"User DB migration: added column '{column}' to '{table}'")
 
+        # Widen the role column to accept api_client (SQLite TEXT has no size limit,
+        # but validate here that the schema column definition is at least 20 chars).
+        # No DDL change needed — this is a documentation marker.
+        # Role values now accepted: admin | monitor | api_client | external_api
+
         # Enable zone detection (centered 60%) on all berths that have a video source
         # and are still at factory default (use_detection_zone=0, threshold=0.30).
         # This is idempotent — runs every startup but only modifies unchanged rows.

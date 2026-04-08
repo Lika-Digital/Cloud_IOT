@@ -33,11 +33,19 @@ def _extract_bearer(request: Request) -> str | None:
     return None
 
 
+_GATEWAY_ROLES = {"external_api", "api_client"}
+
+
 def _decode_external_jwt(token: str) -> dict | None:
-    """Decode and validate an external API JWT."""
+    """Decode and validate an external API JWT.
+
+    Accepted roles:
+      - 'external_api': legacy static key issued by rotate-key endpoint
+      - 'api_client':   service-account JWT issued by /api/auth/service-token
+    """
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
-        if payload.get("role") != "external_api":
+        if payload.get("role") not in _GATEWAY_ROLES:
             return None
         return payload
     except jwt.ExpiredSignatureError:
@@ -125,13 +133,15 @@ async def gateway(request: Request, path: str) -> Response:
             media_type="application/json",
         )
 
-    # Verify the API key in the request matches the stored key
-    if not hmac.compare_digest(cfg.api_key or "", token):
-        return Response(
-            content=json.dumps({"detail": "Invalid API key"}),
-            status_code=403,
-            media_type="application/json",
-        )
+    # api_client JWTs are short-lived user tokens validated by JWT signature above;
+    # external_api tokens are static keys stored in ExternalApiConfig and must match.
+    if payload.get("role") == "external_api":
+        if not hmac.compare_digest(cfg.api_key or "", token):
+            return Response(
+                content=json.dumps({"detail": "Invalid API key"}),
+                status_code=403,
+                media_type="application/json",
+            )
 
     # 3. Reconstruct full internal path
     internal_path = f"/api/{path}"

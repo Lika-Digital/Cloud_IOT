@@ -25,6 +25,31 @@ from ..auth.schemas import (
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
+@router.post("/service-token", response_model=TokenResponse)
+def service_token(body: LoginRequest, db: Session = Depends(get_user_db)):
+    """
+    Direct JWT login for api_client service accounts — skips OTP.
+
+    Only accounts with role='api_client' are accepted here. Human operator
+    accounts (admin / monitor) must use the two-step /login + /verify-otp flow.
+    """
+    user = db.query(User).filter(User.email == body.email).first()
+    if not user or not verify_password(body.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password",
+        )
+    if not user.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled")
+    if user.role != "api_client":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This endpoint is only for api_client service accounts",
+        )
+    token = create_access_token(user.id, user.email, user.role)
+    return TokenResponse(access_token=token, role=user.role, email=user.email)
+
+
 @router.post("/login")
 def login(request: Request, body: LoginRequest, db: Session = Depends(get_user_db)):
     """Step 1: validate credentials and send OTP to email."""

@@ -24,7 +24,14 @@ TOPICS = [
     "marina/cabinet/+/status",
     "marina/cabinet/+/events",
     "marina/cabinet/+/acks",
-    "marina hello",
+    # Opta firmware schema (cabinetId in payload, not in topic path)
+    "opta/status",
+    "opta/sockets/+/status",
+    "opta/sockets/+/power",
+    "opta/water/+/status",
+    "opta/door/status",
+    "opta/events",
+    "opta/acks",
 ]
 
 

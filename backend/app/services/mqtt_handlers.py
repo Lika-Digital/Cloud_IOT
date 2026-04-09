@@ -30,6 +30,15 @@ MARINA_STATUS_RE  = re.compile(r"marina/cabinet/([^/]+)/status")
 MARINA_EVENTS_RE  = re.compile(r"marina/cabinet/([^/]+)/events")
 MARINA_ACKS_RE    = re.compile(r"marina/cabinet/([^/]+)/acks")
 
+# Topic patterns — opta firmware schema (cabinetId carried in JSON payload, not in topic)
+OPTA_STATUS_RE       = re.compile(r"opta/status")
+OPTA_SOCKET_RE       = re.compile(r"opta/sockets/([^/]+)/status")
+OPTA_SOCKET_POWER_RE = re.compile(r"opta/sockets/([^/]+)/power")
+OPTA_WATER_RE        = re.compile(r"opta/water/([^/]+)/status")
+OPTA_DOOR_RE         = re.compile(r"opta/door/status")
+OPTA_EVENTS_RE       = re.compile(r"opta/events")
+OPTA_ACKS_RE         = re.compile(r"opta/acks")
+
 
 def _hw_warn(source: str, message: str, details: str | None = None):
     try:
@@ -107,8 +116,9 @@ def _cabinet_to_pedestal_id(db, cabinet_id: str) -> int | None:
 
 
 def _socket_name_to_id(name: str) -> int:
-    """E1→1, E2→2, E3→3, E4→4; fallback: strip non-digits."""
-    mapping = {"E1": 1, "E2": 2, "E3": 3, "E4": 4}
+    """E1→1, E2→2, E3→3, E4→4; Q1→1, Q2→2, Q3→3, Q4→4; fallback: strip non-digits."""
+    mapping = {"E1": 1, "E2": 2, "E3": 3, "E4": 4,
+               "Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4}
     if name in mapping:
         return mapping[name]
     digits = re.sub(r"\D", "", name)
@@ -126,8 +136,23 @@ def _water_name_to_id(name: str) -> int:
 
 async def handle_message(topic: str, payload: str):
     try:
+        # ── Opta firmware (cabinetId in payload) ─────────────────────────────
+        if OPTA_STATUS_RE.match(topic):
+            await _handle_opta_status(payload)
+        elif m := OPTA_SOCKET_RE.match(topic):
+            await _handle_opta_socket(m.group(1), payload)
+        elif m := OPTA_SOCKET_POWER_RE.match(topic):
+            await _handle_opta_socket_power(m.group(1), payload)
+        elif m := OPTA_WATER_RE.match(topic):
+            await _handle_opta_water(m.group(1), payload)
+        elif OPTA_DOOR_RE.match(topic):
+            await _handle_opta_door(payload)
+        elif OPTA_EVENTS_RE.match(topic):
+            await _handle_opta_events(payload)
+        elif OPTA_ACKS_RE.match(topic):
+            await _handle_opta_acks(payload)
         # ── Marina cabinet firmware (real hardware) ──────────────────────────
-        if m := MARINA_SOCKET_RE.match(topic):
+        elif m := MARINA_SOCKET_RE.match(topic):
             await _handle_marina_socket(m.group(1), m.group(2), payload)
         elif m := MARINA_WATER_RE.match(topic):
             await _handle_marina_water(m.group(1), m.group(2), payload)
@@ -337,6 +362,130 @@ async def _handle_marina_acks(cabinet_id: str, payload: str):
             "timestamp": datetime.utcnow().isoformat(),
         },
     })
+
+
+# ── Opta firmware handlers ────────────────────────────────────────────────────
+# The opta schema sends cabinetId inside the JSON payload instead of the topic path.
+# We extract it and delegate to the equivalent _handle_marina_* function.
+
+def _opta_cabinet_id(payload: str, topic_hint: str) -> str | None:
+    """Parse cabinetId from opta JSON payload. Returns None and logs a warning on failure."""
+    try:
+        return json.loads(payload).get("cabinetId", "") or None
+    except json.JSONDecodeError as e:
+        logger.warning("[Opta] Cannot parse payload on %s: %s", topic_hint, e)
+        return None
+
+
+async def _handle_opta_status(payload: str):
+    """opta/status — cabinet heartbeat (same as marina status but cabinetId in payload)."""
+    cabinet_id = _opta_cabinet_id(payload, "opta/status")
+    if cabinet_id:
+        await _handle_marina_status(cabinet_id, payload)
+
+
+async def _handle_opta_socket(socket_name: str, payload: str):
+    """
+    opta/sockets/{socketName}/status
+    Payload: {"cabinetId":"...", "id":"Q1", "state":"idle"|"active", "ts":...}
+    """
+    cabinet_id = _opta_cabinet_id(payload, f"opta/sockets/{socket_name}/status")
+    if cabinet_id:
+        await _handle_marina_socket(cabinet_id, socket_name, payload)
+
+
+async def _handle_opta_socket_power(socket_name: str, payload: str):
+    """
+    opta/sockets/{socketName}/power
+    Payload: {"cabinetId":"...", "id":"Q1", "watts":N, "kwh_total":N, "ts":...}
+    """
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError as e:
+        logger.warning("[Opta] Bad power payload on %s: %s", socket_name, e)
+        return
+
+    cabinet_id = data.get("cabinetId", "")
+    if not cabinet_id:
+        logger.warning("[Opta] Missing cabinetId in power payload: %s", payload[:200])
+        return
+
+    db = SessionLocal()
+    try:
+        pedestal_id = _cabinet_to_pedestal_id(db, cabinet_id)
+    finally:
+        db.close()
+
+    if pedestal_id is None:
+        logger.warning("[Opta] Could not resolve cabinet '%s' to pedestal_id", cabinet_id)
+        return
+
+    socket_id = _socket_name_to_id(socket_name)
+    # Reuse legacy handler with just the fields it needs
+    power_payload = json.dumps({
+        "watts": data.get("watts", 0),
+        "kwh_total": data.get("kwh_total", 0),
+    })
+    logger.debug("[Opta] cabinet=%s socket=%s(%d) power", cabinet_id, socket_name, socket_id)
+    await _handle_socket_power(pedestal_id, socket_id, power_payload)
+
+
+async def _handle_opta_water(water_name: str, payload: str):
+    """
+    opta/water/{waterName}/status
+    Payload: {"cabinetId":"...", "id":"V1", "state":"idle", "ts":..., "total_l":N, "session_l":N}
+    """
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError as e:
+        logger.warning("[Opta] Bad water payload on %s: %s", water_name, e)
+        return
+
+    cabinet_id = data.get("cabinetId", "")
+    if not cabinet_id:
+        logger.warning("[Opta] Missing cabinetId in water payload: %s", payload[:200])
+        return
+
+    await _handle_marina_water(cabinet_id, water_name, payload)
+
+
+async def _handle_opta_door(payload: str):
+    """
+    opta/door/status
+    Payload: {"cabinetId":"...", "door":"open"|"closed", "ts":"..."}
+    """
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError as e:
+        logger.warning("[Opta] Bad door payload: %s", e)
+        return
+
+    cabinet_id = data.get("cabinetId", "")
+    if not cabinet_id:
+        logger.warning("[Opta] Missing cabinetId in door payload: %s", payload[:200])
+        return
+
+    await _handle_marina_door(cabinet_id, payload)
+
+
+async def _handle_opta_events(payload: str):
+    """
+    opta/events
+    Payload: {"cabinetId":"...", ...}
+    """
+    cabinet_id = _opta_cabinet_id(payload, "opta/events")
+    if cabinet_id:
+        await _handle_marina_events(cabinet_id, payload)
+
+
+async def _handle_opta_acks(payload: str):
+    """
+    opta/acks
+    Payload: {"cabinetId":"...", "cmd":"...", "status":"ok"|"err", ...}
+    """
+    cabinet_id = _opta_cabinet_id(payload, "opta/acks")
+    if cabinet_id:
+        await _handle_marina_acks(cabinet_id, payload)
 
 
 async def _handle_socket_status(pedestal_id: int, socket_id: int, payload: str):
@@ -744,7 +893,7 @@ async def auto_reject_stale_socket_pending(
 
             reason = f"Auto-rejected: no response within {timeout_seconds}s"
 
-            # Publish to marina topics if this pedestal is a marina cabinet
+            # Publish to marina + opta topics if this pedestal is a marina cabinet
             from ..models.pedestal_config import PedestalConfig as _PC
             cfg = db.query(_PC).filter(_PC.pedestal_id == s.pedestal_id).first()
             cabinet_id = getattr(cfg, "opta_client_id", None) if cfg else None
@@ -752,6 +901,10 @@ async def auto_reject_stale_socket_pending(
                 mqtt_publish(
                     f"marina/cabinet/{cabinet_id}/cmd/socket/E{s.socket_id}",
                     json.dumps({"cmd": "disable"}),
+                )
+                mqtt_publish(
+                    f"opta/cmd/socket/Q{s.socket_id}",
+                    json.dumps({"cabinetId": cabinet_id, "cmd": "disable"}),
                 )
             else:
                 mqtt_publish(

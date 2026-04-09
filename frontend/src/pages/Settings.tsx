@@ -62,12 +62,57 @@ export default function Settings() {
           <div className="card">
             <h3 className="font-semibold text-white mb-3">MQTT Topics</h3>
             <div className="space-y-1 text-xs font-mono text-gray-400">
-              <p className="text-gray-500">// Pedestal → Backend</p>
+
+              <p className="text-purple-400 font-semibold mt-1">// Opta firmware (Arduino → NUC)</p>
+              <p>opta/status</p>
+              <p className="text-gray-600 ml-2">{'{'}"cabinetId":"…","seq":N,"uptime_ms":N{"}"}</p>
+              <p className="mt-1">opta/sockets/Q{'{1-4}'}/status</p>
+              <p className="text-gray-600 ml-2">{'{'}"cabinetId":"…","state":"idle|active","ts":"…"{"}"}</p>
+              <p className="mt-1">opta/sockets/Q{'{1-4}'}/power</p>
+              <p className="text-gray-600 ml-2">{'{'}"cabinetId":"…","watts":N,"kwh_total":N{"}"}</p>
+              <p className="mt-1">opta/water/V{'{1-2}'}/status</p>
+              <p className="text-gray-600 ml-2">{'{'}"cabinetId":"…","state":"idle","total_l":N,"session_l":N{"}"}</p>
+              <p className="mt-1">opta/door/status</p>
+              <p className="text-gray-600 ml-2">{'{'}"cabinetId":"…","door":"open|closed","ts":"…"{"}"}</p>
+              <p className="mt-1">opta/events</p>
+              <p className="text-gray-600 ml-2">{'{'}"cabinetId":"…", …event data…{"}"}</p>
+              <p className="mt-1">opta/acks</p>
+              <p className="text-gray-600 ml-2">{'{'}"cabinetId":"…","cmd":"…","status":"ok|err"{"}"}</p>
+
+              <p className="text-purple-400 font-semibold mt-3">// Opta firmware (NUC → Arduino)</p>
+              <p>opta/cmd/socket/Q{'{1-4}'}</p>
+              <p className="text-gray-600 ml-2">{'{'}"cabinetId":"…","cmd":"enable|disable|stop"{"}"}</p>
+              <p className="mt-1">opta/cmd/water/V{'{1-2}'}</p>
+              <p className="text-gray-600 ml-2">{'{'}"cabinetId":"…","cmd":"open|close|stop"{"}"}</p>
+              <p className="mt-1">opta/cmd/reset</p>
+              <p className="text-gray-600 ml-2">{'{'}"cabinetId":"…","cmd":"reset"{"}"}</p>
+              <p className="mt-1">opta/cmd/led</p>
+              <p className="text-gray-600 ml-2">{'{'}"cabinetId":"…","color":"red|green|blue|off","state":"on|off|blink"{"}"}</p>
+
+              <p className="text-blue-400 font-semibold mt-3">// Marina cabinet firmware (Arduino → NUC)</p>
+              <p>marina/cabinet/{'{cabinetId}'}/status</p>
+              <p>marina/cabinet/{'{cabinetId}'}/sockets/{'{socketName}'}/state</p>
+              <p>marina/cabinet/{'{cabinetId}'}/water/{'{waterName}'}/state</p>
+              <p>marina/cabinet/{'{cabinetId}'}/door/state</p>
+              <p>marina/cabinet/{'{cabinetId}'}/events</p>
+              <p>marina/cabinet/{'{cabinetId}'}/acks</p>
+
+              <p className="text-blue-400 font-semibold mt-3">// Marina cabinet firmware (NUC → Arduino)</p>
+              <p>marina/cabinet/{'{cabinetId}'}/cmd/socket/E{'{1-4}'}</p>
+              <p className="text-gray-600 ml-2">{'{'}"cmd":"enable|disable"{"}"}</p>
+              <p className="mt-1">marina/cabinet/{'{cabinetId}'}/outlet/PWR-{'{n}'}/cmd/stop</p>
+              <p className="mt-1">marina/cabinet/{'{cabinetId}'}/outlet/WTR-{'{n}'}/cmd/stop</p>
+
+              <p className="text-gray-500 font-semibold mt-3">// Legacy (simulator / test tool)</p>
               <p>pedestal/{'{id}'}/socket/{'{1-4}'}/status</p>
               <p>pedestal/{'{id}'}/socket/{'{1-4}'}/power</p>
               <p>pedestal/{'{id}'}/water/flow</p>
               <p>pedestal/{'{id}'}/heartbeat</p>
-              <p className="text-gray-500 mt-2">// Backend → Pedestal</p>
+              <p>pedestal/{'{id}'}/sensors/temperature</p>
+              <p>pedestal/{'{id}'}/sensors/moisture</p>
+              <p>pedestal/{'{id}'}/diagnostics/response</p>
+              <p>pedestal/{'{id}'}/register</p>
+              <p className="text-gray-500 mt-1">// Legacy → pedestal</p>
               <p>pedestal/{'{id}'}/socket/{'{1-4}'}/control</p>
               <p>pedestal/{'{id}'}/water/control</p>
             </div>

@@ -15,6 +15,8 @@ ENDPOINT_CATALOG = [
     {"id": "berths.list",            "path": "/api/berths",                          "method": "GET",  "category": "Berths",      "allow_bidirectional": False},
     {"id": "diagnostics.run",        "path": "/api/pedestals/{id}/diagnostics/run",  "method": "POST", "category": "Diagnostics", "allow_bidirectional": True},
     {"id": "camera.detections",      "path": "/api/camera/{id}/detections",          "method": "GET",  "category": "Camera",      "allow_bidirectional": False},
+    {"id": "controls.reset",         "path": "/api/controls/pedestal/{id}/reset",    "method": "POST", "category": "Controls",    "allow_bidirectional": True},
+    {"id": "controls.led",           "path": "/api/controls/pedestal/{id}/led",      "method": "POST", "category": "Controls",    "allow_bidirectional": True},
 ]
 
 EVENT_CATALOG = [
@@ -29,4 +31,8 @@ EVENT_CATALOG = [
     {"id": "session_completed",        "name": "Session Completed",   "category": "Sessions"},
     {"id": "berth_occupancy_updated",  "name": "Berth Occupancy",     "category": "Berths"},
     {"id": "diagnostics_result",       "name": "Diagnostics Results", "category": "Diagnostics"},
+    {"id": "marina_door",              "name": "Cabinet Door",        "category": "Hardware"},
+    {"id": "marina_event",             "name": "Cabinet Events",      "category": "Hardware"},
+    {"id": "marina_ack",               "name": "Command Acks",        "category": "Hardware"},
+    {"id": "pedestal_reset_sent",      "name": "Pedestal Reset",      "category": "Controls"},
 ]

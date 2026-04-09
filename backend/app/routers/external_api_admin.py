@@ -288,15 +288,10 @@ def activate_config(
     db: DBSession = Depends(get_db),
     _: User = Depends(require_admin),
 ):
-    """Activate the gateway. Requires verified=True."""
+    """Activate the gateway."""
     from ..services.webhook_service import invalidate_cache
 
-    cfg = db.get(ExternalApiConfig, 1)
-    if not cfg:
-        raise HTTPException(status_code=404, detail="No config found")
-    if not cfg.verified:
-        raise HTTPException(status_code=400, detail="Run verification first")
-
+    cfg = _get_or_create_config(db)
     cfg.active     = 1
     cfg.updated_at = datetime.utcnow()
     db.commit()

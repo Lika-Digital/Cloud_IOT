@@ -281,13 +281,9 @@ export default function ApiGateway() {
   const isActive = !!config?.active
   const isVerified = !!config?.verified
   const baseUrl  = `${window.location.origin}/api/ext/`
-  const hasEndpoints = (config?.allowed_endpoints?.length ?? 0) > 0
 
   const endpointsByCategory = catalog ? groupBy(catalog.endpoints, 'category') : {}
   const eventsByCategory    = catalog ? groupBy(catalog.events, 'category') : {}
-
-  // Check if verify results have any outright failures
-  const hasFailures = verifyResults?.some((r) => r.ok === false) ?? false
 
   return (
     <div className="space-y-6">
@@ -499,13 +495,19 @@ export default function ApiGateway() {
           <p className="text-sm text-gray-400">
             Run a live connectivity check on all enabled GET endpoints before activating the gateway.
           </p>
+          <div className="flex items-start gap-2 p-3 bg-blue-600/10 border border-blue-600/20 rounded-lg">
+            <svg className="w-4 h-4 text-blue-400 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <p className="text-xs text-blue-300">
+              If you are using <strong>JWT service accounts</strong> (ERP integration) or <strong>webhook push</strong>,
+              verification and activation are not required — the gateway is accessible via Bearer token authentication.
+            </p>
+          </div>
 
-          <Btn onClick={handleVerify} loading={verifying} disabled={!hasEndpoints}>
+          <Btn onClick={handleVerify} loading={verifying}>
             Run Verification
           </Btn>
-          {!hasEndpoints && (
-            <p className="text-xs text-gray-500">Enable and save at least one endpoint first</p>
-          )}
 
           {verifyResults && (
             <div className="mt-3">
@@ -546,23 +548,13 @@ export default function ApiGateway() {
 
           <div className="flex items-center gap-3 pt-2 border-t border-gray-800">
             {!isActive ? (
-              <Btn
-                onClick={handleActivate}
-                loading={activating}
-                disabled={!verifyOk || hasFailures}
-              >
+              <Btn onClick={handleActivate} loading={activating}>
                 Activate API
               </Btn>
             ) : (
               <Btn onClick={handleDeactivate} loading={activating} variant="danger">
                 Deactivate
               </Btn>
-            )}
-            {!isActive && !verifyOk && !hasEndpoints && (
-              <span className="text-xs text-gray-500">Save endpoints, then run verification</span>
-            )}
-            {!isActive && !verifyOk && hasEndpoints && (
-              <span className="text-xs text-gray-500">Run verification first</span>
             )}
           </div>
         </div>

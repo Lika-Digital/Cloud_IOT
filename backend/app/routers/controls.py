@@ -33,9 +33,14 @@ def _get_cabinet_id(db: DBSession, pedestal_id: int) -> str | None:
 def _publish_socket_approve(db: DBSession, pedestal_id: int, socket_id: int):
     cabinet_id = _get_cabinet_id(db, pedestal_id)
     if cabinet_id:
+        # Publish to both marina and opta schemas — device responds to whichever it subscribes to
         mqtt_service.publish(
             f"marina/cabinet/{cabinet_id}/cmd/socket/E{socket_id}",
             json.dumps({"cmd": "enable"}),
+        )
+        mqtt_service.publish(
+            f"opta/cmd/socket/Q{socket_id}",
+            json.dumps({"cabinetId": cabinet_id, "cmd": "enable"}),
         )
     else:
         mqtt_service.publish(
@@ -51,6 +56,10 @@ def _publish_socket_reject(db: DBSession, pedestal_id: int, socket_id: int, reas
             f"marina/cabinet/{cabinet_id}/cmd/socket/E{socket_id}",
             json.dumps({"cmd": "disable"}),
         )
+        mqtt_service.publish(
+            f"opta/cmd/socket/Q{socket_id}",
+            json.dumps({"cabinetId": cabinet_id, "cmd": "disable"}),
+        )
     else:
         mqtt_service.publish(
             f"pedestal/{pedestal_id}/socket/{socket_id}/command",
@@ -59,7 +68,7 @@ def _publish_socket_reject(db: DBSession, pedestal_id: int, socket_id: int, reas
 
 
 def _publish_session_control(db: DBSession, session: Session, action: str):
-    """Publish allow/deny/stop command, routing to marina or legacy topics."""
+    """Publish allow/deny/stop command, routing to marina and opta topics (or legacy)."""
     cabinet_id = _get_cabinet_id(db, session.pedestal_id)
     if cabinet_id:
         if session.type == "electricity":
@@ -69,15 +78,27 @@ def _publish_session_control(db: DBSession, session: Session, action: str):
                     f"marina/cabinet/{cabinet_id}/cmd/socket/E{sid}",
                     json.dumps({"cmd": "enable"}),
                 )
+                mqtt_service.publish(
+                    f"opta/cmd/socket/Q{sid}",
+                    json.dumps({"cabinetId": cabinet_id, "cmd": "enable"}),
+                )
             elif action == "deny":
                 mqtt_service.publish(
                     f"marina/cabinet/{cabinet_id}/cmd/socket/E{sid}",
                     json.dumps({"cmd": "disable"}),
                 )
+                mqtt_service.publish(
+                    f"opta/cmd/socket/Q{sid}",
+                    json.dumps({"cabinetId": cabinet_id, "cmd": "disable"}),
+                )
             elif action == "stop":
                 mqtt_service.publish(
                     f"marina/cabinet/{cabinet_id}/outlet/PWR-{sid}/cmd/stop",
                     json.dumps({"cmd": "stop"}),
+                )
+                mqtt_service.publish(
+                    f"opta/cmd/socket/Q{sid}",
+                    json.dumps({"cabinetId": cabinet_id, "cmd": "stop"}),
                 )
         elif session.type == "water":
             wid = session.socket_id or 1
@@ -85,6 +106,10 @@ def _publish_session_control(db: DBSession, session: Session, action: str):
                 mqtt_service.publish(
                     f"marina/cabinet/{cabinet_id}/outlet/WTR-{wid}/cmd/stop",
                     json.dumps({"cmd": "stop"}),
+                )
+                mqtt_service.publish(
+                    f"opta/cmd/water/V{wid}",
+                    json.dumps({"cabinetId": cabinet_id, "cmd": "stop"}),
                 )
     else:
         mqtt_service.publish(_control_topic(session), action)
@@ -358,3 +383,65 @@ async def reject_socket(
         "data": {"pedestal_id": pedestal_id, "socket_id": socket_id},
     })
     return {"status": "rejected", "pedestal_id": pedestal_id, "socket_id": socket_id}
+
+
+# ── Pedestal reset (opta/cmd/reset) ──────────────────────────────────────────
+
+@router.post("/pedestal/{pedestal_id}/reset")
+async def reset_pedestal(
+    pedestal_id: int,
+    db: DBSession = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """
+    Send a reset command to the pedestal.
+    Publishes to opta/cmd/reset (cabinetId in payload) and legacy pedestal topic.
+    """
+    cabinet_id = _get_cabinet_id(db, pedestal_id)
+    if cabinet_id:
+        mqtt_service.publish(
+            "opta/cmd/reset",
+            json.dumps({"cabinetId": cabinet_id, "cmd": "reset"}),
+        )
+    else:
+        mqtt_service.publish(
+            f"pedestal/{pedestal_id}/cmd/reset",
+            json.dumps({"cmd": "reset"}),
+        )
+    log_transition(db, None, pedestal_id, None, "reset_sent", "operator")
+    await ws_manager.broadcast({
+        "event": "pedestal_reset_sent",
+        "data": {"pedestal_id": pedestal_id, "cabinet_id": cabinet_id},
+    })
+    return {"status": "reset_sent", "pedestal_id": pedestal_id}
+
+
+# ── LED control (opta/cmd/led) ────────────────────────────────────────────────
+
+class LedBody(BaseModel):
+    color: str = Field("green", pattern=r"^(red|green|blue|yellow|off)$")
+    state: str = Field("on", pattern=r"^(on|off|blink)$")
+
+
+@router.post("/pedestal/{pedestal_id}/led")
+async def set_pedestal_led(
+    pedestal_id: int,
+    body: LedBody = LedBody(),
+    db: DBSession = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """
+    Set the pedestal LED color/state via opta/cmd/led.
+    """
+    cabinet_id = _get_cabinet_id(db, pedestal_id)
+    if cabinet_id:
+        mqtt_service.publish(
+            "opta/cmd/led",
+            json.dumps({"cabinetId": cabinet_id, "color": body.color, "state": body.state}),
+        )
+    else:
+        mqtt_service.publish(
+            f"pedestal/{pedestal_id}/cmd/led",
+            json.dumps({"color": body.color, "state": body.state}),
+        )
+    return {"status": "led_set", "pedestal_id": pedestal_id, "color": body.color, "state": body.state}

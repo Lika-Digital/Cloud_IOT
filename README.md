@@ -197,41 +197,118 @@ OTP prints to the backend console (SMTP not configured by default).
 
 The production system runs at `/opt/cloud-iot/` on Ubuntu 24.04.
 
-### First-time setup
+> **IMPORTANT — Two directories exist on the NUC. Never confuse them:**
+>
+> | Path | Purpose | Managed by |
+> |---|---|---|
+> | `/opt/cloud-iot/` | **Production app** — what is actually running | systemd |
+> | `~/Cloud_IOT/` | Git repo — source of truth for updates | git |
+>
+> The git repo is NOT the running app. Do NOT run uvicorn from `~/Cloud_IOT/`.
+> Do NOT install packages into `~/Cloud_IOT/backend/.venv-nuc` for production purposes.
+
+---
+
+### ⚠ WARNING — NUC Troubleshooting Rules (Do NOT Repeat These Mistakes)
+
+**When the site is down:**
+1. Check if the NUC is physically alive first: `tailscale status` from Windows
+2. If NUC shows offline in Tailscale → hardware issue, physical access required
+3. If NUC shows online → check services: `sudo cloud-iot status`
+4. **Never run uvicorn manually** — `cloud-iot-backend.service` uses `Restart=always`. Running uvicorn manually will conflict on port 8000 and cause confusion.
+5. **Never install packages into `~/Cloud_IOT/backend/.venv-nuc`** — production venv is `/opt/cloud-iot/backend/.venv`
+6. **Never create a new systemd service** — `cloud-iot-backend`, `cloud-iot-compose`, `nginx`, `cloudflared`, `tailscaled` are all already configured and enabled on boot
+
+**All services auto-start on reboot.** If the NUC reboots cleanly, wait 30–60s and the site will come back on its own. Do not intervene unless a service has `failed` status.
+
+**Quick status check:**
 ```bash
-# Create Python venv
-python3 -m venv /opt/cloud-iot/backend/.venv
-/opt/cloud-iot/backend/.venv/bin/pip install -r /opt/cloud-iot/backend/requirements.txt
-/opt/cloud-iot/backend/.venv/bin/pip install psutil openvino
+sudo cloud-iot status        # shows all service states
+sudo cloud-iot logs backend  # live backend logs
+```
+
+---
+
+### First-time setup (ISO install)
+
+The NUC is provisioned from a pre-built ISO (`nuc_image/cloud-iot-nuc-v2.0.iso`).
+The install script handles everything: Python venv, systemd services, nginx, Docker/MQTT.
+Do NOT run setup steps manually on an already-provisioned NUC.
+
+```bash
+# Optional: Enable ML inference (Laplacian fallback works without it)
+echo "USE_ML_MODELS=true" | sudo tee -a /opt/cloud-iot/backend/.env
 
 # Export OpenVINO models (once, takes 5-10 min)
 cd /opt/cloud-iot/backend
 .venv/bin/python3 ~/Cloud_IOT/backend/setup_openvino_models.py
-
-# Enable ML inference (optional — Laplacian fallback works without it)
-echo "USE_ML_MODELS=true" | sudo tee -a /opt/cloud-iot/backend/.env
 ```
 
-### Update from git
+---
+
+### Updating the NUC — Correct Procedure
+
+**The ONLY correct way to update production code on the NUC:**
+
 ```bash
+# Run on the NUC (via SSH through Tailscale or Cloudflare)
+sudo bash ~/Cloud_IOT/nuc_image/upgrade.sh
+```
+
+This script:
+- Pulls latest `main` from GitHub into `~/Cloud_IOT`
+- Detects what changed (backend / frontend)
+- Copies changed files to `/opt/cloud-iot/`
+- Installs new Python packages if `requirements.txt` changed
+- Rebuilds and deploys frontend if needed
+- Restarts only the affected services
+- Preserves `.env` and databases — never touches them
+- Logs everything to `/var/log/cloud-iot/upgrade.log`
+
+**Never do this instead:**
+```bash
+# WRONG — do not do this manually before running upgrade.sh
 cd ~/Cloud_IOT && git pull origin main
+```
+If you `git pull` manually first, `upgrade.sh` will see "already up to date" and skip copying files to `/opt/cloud-iot/`. The production code will remain outdated.
 
-# Copy backend app
-sudo cp -r backend/app /opt/cloud-iot/backend/
-
-# Build and deploy frontend
-cd frontend && npm run build
-sudo cp -r dist/* /opt/cloud-iot/frontend/dist/
-
-# Restart
+**If you accidentally git-pulled already**, run the copy steps manually:
+```bash
+sudo cp -r ~/Cloud_IOT/backend/app /opt/cloud-iot/backend/
+sudo chown -R cloud_iot:cloud_iot /opt/cloud-iot/backend/app
+sudo /opt/cloud-iot/backend/.venv/bin/pip install -r ~/Cloud_IOT/backend/requirements.txt -q
 sudo systemctl restart cloud-iot-backend
 ```
 
+---
+
+### Remote Access to NUC
+
+The NUC has no static IP (behind 5G router). Access is only via:
+
+| Method | When to use |
+|---|---|
+| Tailscale SSH: `ssh cloud_iot@marina-iot` | Primary remote access |
+| Cloudflare Tunnel: `marina.lika.solutions` | Web UI access |
+| Physical keyboard/monitor | Last resort — NUC is unreachable remotely |
+
+If both Tailscale and Cloudflare are down → **the NUC is physically offline** (power loss or hardware crash). Do not attempt to reconfigure services remotely. Get physical access.
+
+> **Known fix (applied 2026-04-10):** Tailscale was configured to start before DHCP completed (`network-pre.target`). Fixed via systemd override to `network-online.target`. Also fixed `systemd-networkd-wait-online` with `--any` flag so it doesn't hang waiting for offline interfaces (`enp1s0`, `wlp4s0`). Both fixes are now in `install-cloud-iot.sh` for future ISO builds.
+
+Check NUC connectivity from Windows:
+```powershell
+tailscale status   # shows if marina-iot is online/offline and last seen time
+```
+
+---
+
 ### Check logs
 ```bash
-sudo journalctl -u cloud-iot-backend -f
-sudo journalctl -u cloud-iot-backend -f | grep inference_ms   # ML latency
-sudo journalctl -u cloud-iot-backend -f | grep hardware_monitor  # HW alarms
+sudo cloud-iot logs backend   # live backend logs
+sudo cloud-iot logs nginx     # nginx errors
+sudo cloud-iot logs mqtt      # MQTT broker
+sudo journalctl -u cloud-iot-backend -n 50 --no-pager  # last 50 lines
 ```
 
 ---

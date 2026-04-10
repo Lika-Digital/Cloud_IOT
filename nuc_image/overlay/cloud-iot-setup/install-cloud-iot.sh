@@ -359,6 +359,30 @@ WDCONFEOF
 
 systemctl enable watchdog 2>/dev/null || true
 
+# ── Fix tailscaled boot ordering (wait for DHCP before starting) ─────────────
+# Default tailscaled uses network-pre.target (before DHCP) — causes "network
+# is unreachable" on boot when behind a DHCP router (e.g. 5G with no static IP).
+# Override to wait for network-online.target (after DHCP lease is acquired).
+mkdir -p /etc/systemd/system/tailscaled.service.d
+cat > /etc/systemd/system/tailscaled.service.d/override.conf << 'TSEOF'
+[Unit]
+After=network-online.target
+Wants=network-online.target
+TSEOF
+info "tailscaled boot order fixed (network-online.target)"
+
+# ── Fix network-online.target to not hang on offline interfaces ───────────────
+# Without --any, systemd-networkd-wait-online waits for ALL interfaces (including
+# enp1s0 and wlp4s0 which are always DOWN on this NUC) → times out → services
+# start without network. With --any, it completes as soon as enp2s0 has DHCP.
+mkdir -p /etc/systemd/system/systemd-networkd-wait-online.service.d
+cat > /etc/systemd/system/systemd-networkd-wait-online.service.d/override.conf << 'NWEOF'
+[Service]
+ExecStart=
+ExecStart=/lib/systemd/systemd-networkd-wait-online --any
+NWEOF
+info "network-online.target fixed (--any flag, won't hang on offline interfaces)"
+
 # ── Logrotate ─────────────────────────────────────────────────────────────────
 cp "${SETUP_DIR}/logrotate-cloud-iot" /etc/logrotate.d/cloud-iot
 info "Logrotate configured"

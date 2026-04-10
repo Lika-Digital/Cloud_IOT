@@ -110,6 +110,7 @@ export default function DevicesPanel() {
   const [cameraUser, setCameraUser]       = useState('')
   const [cameraPass, setCameraPass]       = useState('')
   const [showCameraPass, setShowCameraPass] = useState(false)
+  const [hasSavedPassword, setHasSavedPassword] = useState(false)
 
   // Auto-computed RTSP URL — derived from ip + user + pass
   const computedRtspUrl = cameraIp && cameraUser && cameraPass
@@ -145,8 +146,10 @@ export default function DevicesPanel() {
       setMqttPass(c.mqtt_password ?? '')
       setCameraIp(c.camera_fqdn ?? '')
       setCameraUser(c.camera_username ?? '')
-      // Backend masks password as "***" — load as empty so user knows to re-enter
-      setCameraPass(c.camera_password && c.camera_password !== '***' ? c.camera_password : '')
+      // Backend masks password as "***" — track whether one is saved
+      const passwordSaved = c.camera_password === '***'
+      setHasSavedPassword(passwordSaved)
+      setCameraPass(passwordSaved ? '' : (c.camera_password ?? ''))
       setScanResult(null)
       setScanMsg('')
       setSaveMsg(null)
@@ -179,6 +182,17 @@ export default function DevicesPanel() {
 
   const handleSave = async () => {
     if (!selectedId) return
+
+    // Validate camera fields — if IP is set, credentials must be complete
+    if (cameraIp && !cameraUser) {
+      setSaveMsg({ type: 'error', text: 'Camera username is required when IP is set.' })
+      return
+    }
+    if (cameraIp && cameraUser && !cameraPass && !hasSavedPassword) {
+      setSaveMsg({ type: 'error', text: 'Camera password is required. Enter a password to save the camera configuration.' })
+      return
+    }
+
     setSaving(true)
     setSaveMsg(null)
     try {
@@ -316,7 +330,7 @@ export default function DevicesPanel() {
           </Field>
           <Field label="Password">
             <div className="relative">
-              <TextInput value={cameraPass} onChange={setCameraPass} placeholder="enter to set / update" type={showCameraPass ? 'text' : 'password'} />
+              <TextInput value={cameraPass} onChange={(v) => { setCameraPass(v); if (v) setHasSavedPassword(false) }} placeholder={hasSavedPassword ? 'saved — enter to change' : 'enter password'} type={showCameraPass ? 'text' : 'password'} />
               <button
                 type="button"
                 onClick={() => setShowCameraPass((v) => !v)}
@@ -326,6 +340,9 @@ export default function DevicesPanel() {
                 {showCameraPass ? '🙈' : '👁'}
               </button>
             </div>
+            {hasSavedPassword && !cameraPass && (
+              <p className="text-xs text-green-500 mt-1">✓ Password saved. Leave blank to keep existing.</p>
+            )}
           </Field>
         </div>
         <Field label="RTSP Stream URL (auto-generated)">

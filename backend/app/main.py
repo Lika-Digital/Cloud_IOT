@@ -256,13 +256,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log_error("system", "startup", f"Database connectivity FAILED on startup: {e}", exc=e)
 
-    # Clear all pedestals on every startup — they are re-created from MQTT messages.
-    # This guarantees the dashboard starts at zero pedestals and shows only devices
-    # that are physically present and actively sending MQTT data.
+    # Clear pedestals and socket states on every startup — they are re-created from MQTT.
+    # pedestal_configs is NOT cleared: camera URLs, credentials, and MQTT settings are
+    # manually configured and must survive reboots. When the pedestal reconnects via MQTT,
+    # _ensure_pedestal() re-creates the Pedestal row with the same ID and the existing
+    # config automatically re-links via the FK.
     db = SessionLocal()
     try:
         db.execute(text("DELETE FROM socket_states"))
-        db.execute(text("DELETE FROM pedestal_configs"))
         db.execute(text("DELETE FROM pedestals"))
         db.commit()
         logger.info("Startup: pedestal table cleared — waiting for MQTT registration")

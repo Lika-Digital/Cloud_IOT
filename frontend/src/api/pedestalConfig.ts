@@ -22,6 +22,8 @@ api.interceptors.response.use(
 export interface PedestalConfigData {
   id: number
   pedestal_id: number
+  pedestal_name: string | null
+  pedestal_location: string | null
   site_id: string | null
   dock_id: string | null
   berth_ref: string | null
@@ -65,6 +67,8 @@ export interface PedestalSensorData {
 }
 
 export interface PedestalConfigUpdate {
+  pedestal_name?: string
+  pedestal_location?: string
   site_id?: string
   dock_id?: string
   berth_ref?: string

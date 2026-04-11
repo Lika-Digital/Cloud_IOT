@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 # ─── Pydantic schemas ─────────────────────────────────────────────────────────
 
 class PedestalConfigUpdate(BaseModel):
+    # Pedestal display identity (stored on Pedestal row, not PedestalConfig)
+    pedestal_name: Optional[str] = None
+    pedestal_location: Optional[str] = None
+    # Config fields
     site_id: Optional[str] = None
     dock_id: Optional[str] = None
     berth_ref: Optional[str] = None
@@ -65,10 +69,12 @@ def _get_or_create_config(db: Session, pedestal_id: int) -> PedestalConfig:
     return cfg
 
 
-def _config_to_dict(cfg: PedestalConfig) -> dict:
+def _config_to_dict(cfg: PedestalConfig, pedestal=None) -> dict:
     return {
         "id": cfg.id,
         "pedestal_id": cfg.pedestal_id,
+        "pedestal_name": pedestal.name if pedestal else None,
+        "pedestal_location": pedestal.location if pedestal else None,
         "site_id": cfg.site_id,
         "dock_id": cfg.dock_id,
         "berth_ref": cfg.berth_ref,
@@ -126,7 +132,7 @@ def get_config(
         raise HTTPException(status_code=404, detail="Pedestal not found")
     cfg = _get_or_create_config(db, pedestal_id)
     sensors = db.query(PedestalSensor).filter(PedestalSensor.pedestal_id == pedestal_id).all()
-    result = _config_to_dict(cfg)
+    result = _config_to_dict(cfg, pedestal)
     result["sensors"] = [_sensor_to_dict(s) for s in sensors]
     return result
 
@@ -149,12 +155,19 @@ def update_config(
         if updated_fields.get(secret_field) == "***":
             updated_fields.pop(secret_field)
 
+    # pedestal_name / pedestal_location go to the Pedestal row, not PedestalConfig
+    if "pedestal_name" in updated_fields:
+        pedestal.name = updated_fields.pop("pedestal_name")
+    if "pedestal_location" in updated_fields:
+        pedestal.location = updated_fields.pop("pedestal_location")
+
     for field, value in updated_fields.items():
         setattr(cfg, field, value)
     cfg.updated_at = datetime.utcnow()
 
     db.commit()
     db.refresh(cfg)
+    db.refresh(pedestal)
 
     # Auto-inject credentials into camera_stream_url whenever URL or credentials change
     if any(f in updated_fields for f in ("camera_stream_url", "camera_username", "camera_password", "camera_fqdn")):
@@ -203,7 +216,7 @@ def update_config(
     except Exception:
         pass
 
-    return _config_to_dict(cfg)
+    return _config_to_dict(cfg, pedestal)
 
 
 @router.get("/api/admin/pedestal/{pedestal_id}/sensors")

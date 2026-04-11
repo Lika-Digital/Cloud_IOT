@@ -103,6 +103,8 @@ export default function DevicesPanel() {
   const [cfg, setCfg] = useState<PedestalConfigData | null>(null)
 
   // Editable fields
+  const [displayName, setDisplayName]     = useState('')
+  const [displayLocation, setDisplayLocation] = useState('')
   const [optaClientId, setOptaClientId]   = useState('')
   const [mqttUser, setMqttUser]           = useState('')
   const [mqttPass, setMqttPass]           = useState('')
@@ -141,6 +143,8 @@ export default function DevicesPanel() {
     if (!selectedId) return
     getPedestalConfig(selectedId).then((c) => {
       setCfg(c)
+      setDisplayName(c.pedestal_name ?? '')
+      setDisplayLocation(c.pedestal_location ?? '')
       setOptaClientId(c.opta_client_id ?? '')
       setMqttUser(c.mqtt_username ?? '')
       setMqttPass(c.mqtt_password ?? '')
@@ -197,7 +201,9 @@ export default function DevicesPanel() {
     setSaveMsg(null)
     try {
       await updatePedestalConfig(selectedId, {
-        opta_client_id:       optaClientId    || undefined,
+        pedestal_name:        displayName      || undefined,
+        pedestal_location:    displayLocation  || undefined,
+        opta_client_id:       optaClientId     || undefined,
         mqtt_username:        mqttUser         || undefined,
         mqtt_password:        mqttPass         || undefined,
         camera_fqdn:          cameraIp         || undefined,
@@ -237,6 +243,32 @@ export default function DevicesPanel() {
           </select>
         </div>
       )}
+
+      {/* ── Display Identity ─────────────────────────────────────────────────── */}
+      <DeviceCard
+        icon="🏷️"
+        title="Pedestal Display Identity"
+        status={<span className="text-xs text-gray-500">UI only — does not affect MQTT</span>}
+      >
+        <p className="text-xs text-gray-500">
+          These labels are shown in the dashboard. They are independent of the MQTT Cabinet ID
+          used for hardware communication.
+        </p>
+        <Field label="Display Name">
+          <TextInput
+            value={displayName}
+            onChange={setDisplayName}
+            placeholder="e.g. Berth 3 — South Dock"
+          />
+        </Field>
+        <Field label="Location">
+          <TextInput
+            value={displayLocation}
+            onChange={setDisplayLocation}
+            placeholder="e.g. South Dock, Gate B"
+          />
+        </Field>
+      </DeviceCard>
 
       {/* ── Network Scan ─────────────────────────────────────────────────────── */}
       <div className="rounded-lg border border-gray-700 bg-gray-800/30 p-4 space-y-3">
@@ -295,10 +327,11 @@ export default function DevicesPanel() {
       >
         <p className="text-xs text-gray-500">
           Arduino connects automatically via MQTT when powered on.
-          Client ID is set by the Arduino firmware.
+          The Cabinet ID below must match the ID set in the Arduino firmware (e.g. <code className="text-gray-400">MAR_KRK_ORM_01</code>).
+          Changing it here links this pedestal to the physical hardware — it does not change the firmware.
         </p>
-        <Field label="MQTT Client ID (optional override)">
-          <TextInput value={optaClientId} onChange={setOptaClientId} placeholder="auto-detected from MQTT" />
+        <Field label="MQTT Cabinet ID (must match firmware)">
+          <TextInput value={optaClientId} onChange={setOptaClientId} placeholder="e.g. MAR_KRK_ORM_01" />
         </Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="MQTT Username">

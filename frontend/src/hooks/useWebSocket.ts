@@ -268,6 +268,13 @@ export function useWebSocket() {
             door: msg.data.door as string | undefined,
             timestamp: msg.data.timestamp as string,
           })
+          // Heartbeat carries door field — sync marinaDoorState so the
+          // pedestal view always has current state regardless of when the
+          // browser connected (retained door/state message may have been
+          // broadcast before the WS client connected)
+          if (msg.data.door) {
+            setMarinaDoorState(pedestalId, msg.data.door as 'open' | 'closed')
+          }
           break
         }
         case 'marina_ack': {

@@ -71,6 +71,22 @@ export interface UpdateConfigPayload {
   allowed_events: string[]
 }
 
+export interface ExtEndpointHealthEntry {
+  enabled: boolean
+  available: boolean
+  reason: string | null
+}
+
+export interface PedestalExtHealth {
+  ext_berths_occupancy: ExtEndpointHealthEntry
+  ext_camera_frame: ExtEndpointHealthEntry
+  ext_camera_stream: ExtEndpointHealthEntry
+  [key: string]: unknown
+}
+
+/** Keyed by pedestal_id (number). */
+export type ExtPedestalHealthMap = Record<number, PedestalExtHealth>
+
 // ── API calls ─────────────────────────────────────────────────────────────────
 
 export const getCatalog = (): Promise<Catalog> =>
@@ -95,3 +111,7 @@ export const activateConfig = (): Promise<{ active: boolean }> =>
 
 export const deactivateConfig = (): Promise<{ active: boolean }> =>
   api.post<{ active: boolean }>('/admin/ext-api/config/deactivate').then((r) => r.data)
+
+/** Fetch pedestal health including ext-endpoint availability (admin). */
+export const getExtPedestalHealth = (): Promise<ExtPedestalHealthMap> =>
+  api.get<ExtPedestalHealthMap>('/pedestals/health').then((r) => r.data)

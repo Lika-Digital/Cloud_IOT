@@ -1,120 +1,38 @@
-# Implementation Status — Cloud_IOT CV Feature Extension
+# Implementation Status — External Pedestal API Endpoints (v3.3)
 
-Last updated: 2026-04-05 (All sections complete including Tests)
+## Session started: 2026-04-11
+## Previous feature (CV Extension) — all sections complete. See git log for details.
 
-## Sections
+---
 
-- [x] Section 1: Frame Buffer Service
-- [x] Section 2: Model Setup Script
-- [x] Section 3: OpenVINO Inference Layer
-- [x] Section 4: Training Data Pipeline
-- [x] Section 5: Storage Monitor
-- [x] Section 6: Updated Analyze and Match Endpoints
-- [x] Section 7: New Berth DB Columns
-- [x] Section 8: Sector Configuration UI
-- [x] Section 9: Runtime UI Updates
-- [x] Section 10: Storage Warning Banner + Polling
-- [x] Tests: CV berth test suite (19 new tests, 143 total passing)
+## Current Feature: Three New External API Endpoints + Gateway Health Indicators
 
-## What was done
+### Files — Status
 
-### Section 1 — Frame Buffer Service
-- Created `backend/app/services/frame_buffer.py`
-- Singleton `_buffer: dict[int, bytes]` keyed by pedestal_id
-- Background coroutine `run_frame_buffer()` polls every 10s from all reachable cameras
-- Wired into `main.py` lifespan as `asyncio.create_task(run_frame_buffer())`
+| # | File | Status | Notes |
+|---|------|--------|-------|
+| 1 | `backend/app/services/api_catalog.py` | COMPLETE | Added 3 catalog entries |
+| 2 | `backend/app/routers/ext_pedestal_endpoints.py` | COMPLETE | New file — 3 direct ext routes |
+| 3 | `backend/app/routers/pedestal_config.py` | COMPLETE | Extended health endpoint + UserSessionLocal module-level import |
+| 4 | `backend/app/main.py` | COMPLETE | ext_pedestal_router included before gateway catch-all |
+| 5 | `frontend/src/api/externalApi.ts` | COMPLETE | ExtPedestalHealth type + getExtPedestalHealth() added |
+| 6 | `frontend/src/pages/ApiGateway.tsx` | COMPLETE | Health dots + "not enabled" labels + health state |
+| 7 | `tests/backend/test_ext_pedestal_endpoints.py` | COMPLETE | 17 tests (TC-EP-01..11 + auth + grab_failure) — 212/212 total |
 
-### Section 2 — Model Setup Script
-- Created `backend/setup_openvino_models.py` (NUC-only, idempotent)
-  - Step 1: YOLOv8n → OpenVINO IR via ultralytics export
-  - Step 2: MobileNetV3-Small Re-ID head → ONNX → OpenVINO IR
-- Created `backend/app/services/model_paths.py` — platform-aware model directory resolver
+## Test run result: 212 passed, 0 failed (2026-04-11)
 
-### Section 3 — OpenVINO Inference Layer
-- Created `backend/app/services/yolo_openvino.py` — `YoloOVDetector` class
-  - All OpenVINO/numpy imports lazy inside `__init__` and `detect()`
-  - Falls back to `{"occupied": None, ...}` when unavailable
-  - Detects COCO class 8 (boat) above confidence threshold
-- Created `backend/app/services/reid_openvino.py` — `ReidOVMatcher` class
-  - 128-dim L2-normalised embedding extraction
-  - `save_embedding()` / `load_embedding()` to .npy files
-  - `cosine_similarity()` via scipy with numpy fallback
-- Created `backend/app/services/cv_services.py` — module-level singletons
+---
 
-### Section 4 — Training Data Pipeline
-- Created `backend/app/services/training_data.py`
-  - `save_crop()` — JPEG + JSON metadata, timestamp-based filenames
-  - `confirm_crop()` — move to confirmed/ or rejected/ subfolder
-  - Directory layout: training_data/{occupied,empty}/{confirmed,rejected}/, match_samples/
+## Design Decisions
 
-### Section 5 — Storage Monitor
-- Created `backend/app/services/storage_monitor.py`
-  - `get_training_storage_status()` → {size_gb, max_gb, percent_used, alarm_active}
-  - `run_storage_monitor()` — 5-min background loop, broadcasts WebSocket alarm on state change
-- Added `GET /api/system/training-storage` to `system_health.py`
-- Wired `run_storage_monitor()` into `main.py` lifespan
-
-### Section 6 — Updated Analyze and Match Endpoints
-- Updated `POST /api/admin/berths/{id}/analyze`:
-  - Tries frame buffer first, falls back to live grab
-  - Crops to detection zone if configured
-  - Tries YOLOv8n OpenVINO, falls back to existing Laplacian
-  - Saves training crop via async fire-and-forget
-  - Returns `confidence` field
-- Added `POST /api/admin/berths/{id}/match`:
-  - Gets frame → crop → Re-ID embedding → cosine similarity vs stored embedding
-  - Returns `{match_score, timestamp}`
-- Added `POST /api/admin/berths/{id}/sample-embedding`:
-  - Accepts multipart file upload, extracts Re-ID embedding, saves .npy, updates DB
-
-### Section 7 — New Berth DB Columns
-- Added `sample_embedding_path: String(500)` and `sample_updated_at: DateTime` to `Berth` model
-- Added migrations to `_migrate_user_schema()` in `user_database.py`
-- Added fields to `BerthOut` schema and `_berth_to_out()` helper
-- Added `confidence: float = 0.0` to `BerthOut`
-
-### Section 8 — Sector Configuration UI
-- Added zone fields to `BerthConfigUpdate` schema (zone_x1/y1/x2/y2, use_detection_zone)
-- Added zone fields to `BerthOut` schema and `_berth_to_out()` helper
-- Added `GET /api/admin/pedestals/{id}/latest-frame` — frame buffer → base64 JPEG
-- Added `POST /api/admin/berths/{id}/confirm-crop` — operator training data feedback
-- Updated `frontend/src/api/berths.ts`: BerthOut extended with zone + embedding + confidence fields; new API functions; StorageStatus type
-- Updated `frontend/src/store/index.ts`: BerthStatus extended with new fields
-- Created `frontend/src/components/berths/SectorConfigModal.tsx`:
-  - Canvas drawing area with image background and drag-to-resize zone rectangle
-  - Right panel: zone coordinate display, use_detection_zone toggle, sample embedding upload
-  - Save/Reset buttons
-
-### Section 9 — Runtime UI Updates
-- `handleAnalyze` shows: `⛵ Occupied (87.3% confidence) — analyzed 14:32:11`
-- `crop_path` from analyze response enables operator confirmation
-- `handleMatchShip` + Match Ship button (disabled when not occupied / no embedding)
-- Match result displayed inline: `Ship match: 94.2% — checked 14:32:15`
-- Thumbs up 👍 / 👎 buttons for operator crop confirmation; disappear after click
-- `handleConfirmCrop` calls `confirmCrop()` (fire-and-forget, non-blocking)
-- "Sectors" button in each berth row opens SectorConfigModal
-
-### Section 10 — Storage Warning Banner + Polling
-- Storage polling every 5 minutes via `getStorageStatus()` in `useEffect`
-- Amber warning banner at page top when `alarm_active` is true
-- Compact storage indicator in page header (size_gb / max_gb) always visible when data loaded
-- Storage state stored in `storageAlarm: StorageStatus | null`
-
-## Notes
-
-- Dev machine: 32-bit Python 3.13 on Windows — all ML imports lazy/try-except
-- Production: Ubuntu 24.04 NUC with 64-bit Python — all ML packages available
-- All commits go to `develop` branch
-- 143/143 backend tests pass (124 pre-existing + 19 new CV tests)
-
-### Tests — CV Berth Test Suite
-- Created `tests/backend/test_berth_cv.py` — 19 tests across 7 classes
-  - `TestSectorConfig`: zone field persistence, admin-only enforcement
-  - `TestLatestFrameEndpoint`: empty buffer returns None, unauthenticated blocked
-  - `TestAnalyzeEndpoint`: schema check, graceful 400 when no pedestal/camera
-  - `TestMatchEndpoint`: 400 when not occupied, admin-only enforcement
-  - `TestSampleEmbeddingEndpoint`: 503 when Re-ID model unavailable, admin-only
-  - `TestConfirmCrop`: 404 on non-existent path, admin-only enforcement
-  - `TestStorageMonitor`: all 4 expected fields, no auth required, alarm=False in CI
-  - `TestTrainingData`: unit tests via `temp_training_dir` fixture — save_crop creates files,
-    JSON has required fields, confirm_crop moves to confirmed/ subfolder
+- New endpoints live at `/api/ext/pedestals/{pedestal_id}/...` as **direct FastAPI routes**
+  (NOT proxied through gateway catch-all `ANY /api/ext/{path:path}`).
+- Router included in `main.py` BEFORE `ext_api_gateway_router` so specific routes win.
+- `pedestal_id` param accepts numeric PK string or opta_client_id string.
+- Per-endpoint enable/disable reuses existing `allowed_endpoints` JSON in ExternalApiConfig.
+- Returns 503 (not 403) for disabled/unavailable feature per spec.
+- Auth failures: 401/403. Gateway globally inactive: 503 "Not enabled".
+- Health endpoint extended: each pedestal entry gets `ext_berths_occupancy`,
+  `ext_camera_frame`, `ext_camera_stream` with `enabled`, `available`, `reason`.
+- Frame grab reuses `berth_analyzer.grab_snapshot()`.
+- Catalog IDs: `berths.occupancy_ext`, `camera.frame_ext`, `camera.stream_ext`

@@ -17,6 +17,10 @@ ENDPOINT_CATALOG = [
     {"id": "camera.detections",      "path": "/api/camera/{id}/detections",          "method": "GET",  "category": "Camera",      "allow_bidirectional": False},
     {"id": "controls.reset",         "path": "/api/controls/pedestal/{id}/reset",    "method": "POST", "category": "Controls",    "allow_bidirectional": True},
     {"id": "controls.led",           "path": "/api/controls/pedestal/{id}/led",      "method": "POST", "category": "Controls",    "allow_bidirectional": True},
+    # Direct ext-pedestal endpoints (not proxied — served by ext_pedestal_endpoints router)
+    {"id": "berths.occupancy_ext",   "path": "/api/ext/pedestals/{id}/berths/occupancy", "method": "GET",  "category": "Berths",    "allow_bidirectional": False},
+    {"id": "camera.frame_ext",       "path": "/api/ext/pedestals/{id}/camera/frame",     "method": "GET",  "category": "Camera",    "allow_bidirectional": False},
+    {"id": "camera.stream_ext",      "path": "/api/ext/pedestals/{id}/camera/stream",    "method": "GET",  "category": "Camera",    "allow_bidirectional": False},
 ]
 
 EVENT_CATALOG = [

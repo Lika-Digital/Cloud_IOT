@@ -33,6 +33,7 @@ from .routers import pedestal_config as pedestal_config_router
 from .routers import hardware_stats as hardware_stats_router
 from .routers import external_api_admin as ext_api_admin_router
 from .routers import external_api_gateway as ext_api_gateway_router
+from .routers import ext_pedestal_endpoints as ext_pedestal_router
 from .routers import settings as settings_router
 from .auth.user_database import init_user_db, UserSessionLocal
 from .auth.models import User
@@ -502,6 +503,7 @@ app.include_router(reviews_router.router)
 app.include_router(berths_router.router)
 app.include_router(ext_api_admin_router.router)
 app.include_router(settings_router.router)
+app.include_router(ext_pedestal_router.router)   # must be before gateway catch-all
 app.include_router(ext_api_gateway_router.router)
 
 

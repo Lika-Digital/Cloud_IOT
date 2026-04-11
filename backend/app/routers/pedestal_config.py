@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db, SessionLocal
 from ..auth.dependencies import require_admin
+from ..auth.user_database import UserSessionLocal
 from ..models.pedestal_config import PedestalConfig, PedestalSensor
 from ..models.pedestal import Pedestal
 
@@ -331,7 +332,14 @@ def get_health(
     db: Session = Depends(get_db),
     _user = Depends(require_admin),
 ):
-    """Returns hardware health status for all pedestals (admin only)."""
+    """Returns hardware health status for all pedestals (admin only).
+
+    Each pedestal entry also includes ext_berths_occupancy, ext_camera_frame,
+    and ext_camera_stream status (enabled + availability) for the API Gateway UI.
+    """
+    from ..models.external_api import ExternalApiConfig
+    from ..auth.berth_models import Berth as BerthModel
+
     configs = db.query(PedestalConfig).all()
     result = {}
     for cfg in configs:
@@ -343,4 +351,58 @@ def get_health(
             "temp_sensor_reachable": bool(cfg.temp_sensor_reachable),
             "last_temp_sensor_check": cfg.last_temp_sensor_check.isoformat() if cfg.last_temp_sensor_check else None,
         }
+
+    # Ext endpoint enable status (global — same value across all pedestals)
+    ext_cfg = db.get(ExternalApiConfig, 1)
+    allowed_eps = json.loads(ext_cfg.allowed_endpoints or "[]") if ext_cfg else []
+    enabled_ids = {e["id"] for e in allowed_eps}
+    berths_enabled     = "berths.occupancy_ext" in enabled_ids
+    cam_frame_enabled  = "camera.frame_ext"     in enabled_ids
+    cam_stream_enabled = "camera.stream_ext"    in enabled_ids
+
+    # Berth count per pedestal (user DB)
+    user_db = UserSessionLocal()
+    try:
+        pedestal_berth_counts: dict[int, int] = {}
+        for b in user_db.query(BerthModel).filter(BerthModel.pedestal_id.isnot(None)).all():
+            pedestal_berth_counts[b.pedestal_id] = (
+                pedestal_berth_counts.get(b.pedestal_id, 0) + 1
+            )
+    finally:
+        user_db.close()
+
+    for cfg in configs:
+        has_berths    = pedestal_berth_counts.get(cfg.pedestal_id, 0) > 0
+        has_camera    = bool(cfg.camera_stream_url)
+        cam_reachable = bool(cfg.camera_reachable)
+
+        result[cfg.pedestal_id]["ext_berths_occupancy"] = {
+            "enabled":   berths_enabled,
+            "available": has_berths,
+            "reason": (
+                None if (berths_enabled and has_berths) else
+                "Not enabled" if not berths_enabled else
+                "No berth definitions found"
+            ),
+        }
+        result[cfg.pedestal_id]["ext_camera_frame"] = {
+            "enabled":   cam_frame_enabled,
+            "available": has_camera and cam_reachable,
+            "reason": (
+                None if (cam_frame_enabled and has_camera and cam_reachable) else
+                "Not enabled" if not cam_frame_enabled else
+                "No camera configured" if not has_camera else
+                "Camera unreachable"
+            ),
+        }
+        result[cfg.pedestal_id]["ext_camera_stream"] = {
+            "enabled":   cam_stream_enabled,
+            "available": has_camera,
+            "reason": (
+                None if (cam_stream_enabled and has_camera) else
+                "Not enabled" if not cam_stream_enabled else
+                "No camera configured"
+            ),
+        }
+
     return result

@@ -7,13 +7,70 @@ import {
   verifyConfig,
   activateConfig,
   deactivateConfig,
+  getExtPedestalHealth,
   type Catalog,
   type ExtApiConfig,
   type EndpointEntry,
   type VerifyResult,
+  type ExtPedestalHealthMap,
+  type ExtEndpointHealthEntry,
 } from '../api/externalApi'
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
+
+/** IDs of endpoints that are direct ext routes with per-endpoint health indicators. */
+const EXT_DIRECT_IDS = new Set(['berths.occupancy_ext', 'camera.frame_ext', 'camera.stream_ext'])
+
+/**
+ * Aggregate ext endpoint health across all pedestals.
+ * Returns 'green'  if enabled AND available for ≥1 pedestal.
+ *         'yellow' if enabled but unavailable for all pedestals.
+ *         'red'    if disabled or no health data.
+ */
+function aggregateExtHealth(
+  epId: string,
+  healthMap: ExtPedestalHealthMap | null,
+): 'green' | 'yellow' | 'red' {
+  if (!healthMap) return 'red'
+  const fieldMap: Record<string, keyof typeof healthMap[number]> = {
+    'berths.occupancy_ext': 'ext_berths_occupancy',
+    'camera.frame_ext':     'ext_camera_frame',
+    'camera.stream_ext':    'ext_camera_stream',
+  }
+  const field = fieldMap[epId]
+  if (!field) return 'red'
+
+  let anyEnabled = false
+  let anyAvailable = false
+  for (const entry of Object.values(healthMap)) {
+    const h = entry[field] as ExtEndpointHealthEntry | undefined
+    if (!h) continue
+    if (h.enabled) anyEnabled = true
+    if (h.enabled && h.available) anyAvailable = true
+  }
+  if (!anyEnabled) return 'red'
+  if (anyAvailable) return 'green'
+  return 'yellow'
+}
+
+function ExtHealthDot({ status }: { status: 'green' | 'yellow' | 'red' }) {
+  const colors = {
+    green:  'bg-green-400',
+    yellow: 'bg-yellow-400',
+    red:    'bg-red-500',
+  }
+  const labels = {
+    green:  'Enabled and available',
+    yellow: 'Enabled but feature degraded',
+    red:    'Disabled or unavailable',
+  }
+  return (
+    <span
+      className={`inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${colors[status]}`}
+      title={labels[status]}
+    />
+  )
+}
 
 function groupBy<T>(items: T[], key: keyof T): Record<string, T[]> {
   return items.reduce((acc, item) => {
@@ -98,6 +155,9 @@ export default function ApiGateway() {
   const [verifyOk, setVerifyOk]             = useState(false)
   const [activating, setActivating]         = useState(false)
 
+  // Ext endpoint health (fetched from /api/pedestals/health)
+  const [extHealth, setExtHealth]           = useState<ExtPedestalHealthMap | null>(null)
+
   // ── Load ──────────────────────────────────────────────────────────────────
 
   const load = useCallback(async () => {
@@ -115,6 +175,8 @@ export default function ApiGateway() {
         setVerifyResults(cfg.verification_results)
         setVerifyOk(cfg.verified)
       }
+      // Load ext endpoint health (best-effort — don't fail page load if unavailable)
+      getExtPedestalHealth().then(setExtHealth).catch(() => {})
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to load config')
     } finally {
@@ -184,6 +246,8 @@ export default function ApiGateway() {
       setEndpointsDirty(false)
       setVerifyResults(null)
       setVerifyOk(false)
+      // Refresh health indicators after endpoint toggle
+      getExtPedestalHealth().then(setExtHealth).catch(() => {})
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Failed to save endpoints')
     } finally {
@@ -365,8 +429,12 @@ export default function ApiGateway() {
               <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{category}</h3>
               <div className="space-y-2">
                 {eps.map((ep) => {
-                  const enabled = isEndpointEnabled(ep.id)
-                  const mode    = getEndpointMode(ep.id)
+                  const enabled   = isEndpointEnabled(ep.id)
+                  const mode      = getEndpointMode(ep.id)
+                  const isExtDirect = EXT_DIRECT_IDS.has(ep.id)
+                  const healthStatus = isExtDirect
+                    ? aggregateExtHealth(ep.id, extHealth)
+                    : null
                   return (
                     <div key={ep.id} className="flex items-center gap-3 py-2 border-b border-gray-800 last:border-0">
                       <input
@@ -378,7 +446,15 @@ export default function ApiGateway() {
                       <div className="flex-1 min-w-0">
                         <span className="text-sm text-gray-300">{ep.id}</span>
                         <span className="ml-2 text-xs text-gray-600 font-mono">{ep.method} {ep.path}</span>
+                        {isExtDirect && !enabled && (
+                          <span className="ml-2 text-xs text-yellow-600/80 italic">
+                            Function not available — not enabled
+                          </span>
+                        )}
                       </div>
+                      {isExtDirect && healthStatus && (
+                        <ExtHealthDot status={healthStatus} />
+                      )}
                       {enabled && ep.allow_bidirectional && (
                         <select
                           value={mode}

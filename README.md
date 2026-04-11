@@ -40,6 +40,7 @@ Mosquitto Broker (:1883)                  │                         │
 - Allow / Deny / Stop session controls
 - Marina cabinet door state indicator
 - Pending session approval cards with customer name
+- **Control Center tab** (per pedestal, admin only) — see below
 
 ### Session Management
 - State machine: `pending → active → completed / denied`
@@ -112,6 +113,40 @@ Mosquitto Broker (:1883)                  │                         │
 - Decodes BER-encoded SNMP v1/v2c traps (pure Python, no external library)
 - Maps OIDs to pedestal sensors; triggers temperature alarm >50°C / moisture >90%
 - Configurable per-OID mapping in Settings
+
+### Pedestal Control Center (v3.2)
+
+Accessible via the **Control Center** tab when a pedestal is open in the Dashboard. Requires admin role.
+
+**Live monitoring (real-time from MQTT via WebSocket):**
+- Cabinet Status: cabinet ID, heartbeat sequence, uptime, OPTA connected indicator
+- Door state: open / closed with visual alarm
+- Sockets Q1–Q4: state badge (`idle / active / fault / blocked`), `hw_status`, session context
+- Water Valves V1–V2: state badge, `hw_status`, total litres, session litres
+- Event Log: rolling last 30 entries from `opta/events` (expandable)
+- Command ACK Log: rolling last 30 entries from `opta/acks` with status (expandable)
+
+**Commands (admin only — publish directly to OPTA via MQTT):**
+- Sockets Q1–Q4: `Activate` / `Stop` / `Maintenance` → `opta/cmd/socket/Q{n}` with `{"action":"activate|stop|maintenance"}`
+- Water Valves V1–V2: `Activate` / `Stop` / `Maintenance` → `opta/cmd/water/V{n}`
+- LED Control: color picker (`green / red / blue / yellow / off`) + state (`on / off / blink`) → `opta/cmd/led`
+- Reset Device: double-click confirmation → `opta/cmd/reset` (interrupts all active sessions)
+
+**New backend endpoints:**
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/controls/pedestal/{id}/socket/{Q1..Q4}/cmd` | Direct socket command |
+| POST | `/api/controls/pedestal/{id}/water/{V1..V2}/cmd` | Direct water valve command |
+| POST | `/api/controls/pedestal/{id}/led` | LED color/state command |
+| POST | `/api/controls/pedestal/{id}/reset` | Pedestal reset command |
+
+**New WebSocket events (backend → frontend):**
+| Event | When fired |
+|---|---|
+| `opta_socket_status` | `opta/sockets/Q*/status` received — full state, hw_status, session |
+| `opta_water_status` | `opta/water/V*/status` received — state, hw_status, total_l, session_l |
+| `opta_status` | Heartbeat — cabinet ID, seq, uptime_ms, door |
+| `marina_ack` | Command ACK from OPTA — now includes `pedestal_id` |
 
 ### External API Gateway
 - 14 documented endpoints + 11 webhook events (static catalog)
@@ -315,6 +350,7 @@ sudo journalctl -u cloud-iot-backend -n 50 --no-pager  # last 50 lines
 
 ## MQTT Topic Map
 
+### Legacy schema (`pedestal/{id}/...`)
 | Topic | Direction | Payload |
 |---|---|---|
 | `pedestal/{id}/socket/{1-4}/status` | Device → Backend | `"connected"` \| `"disconnected"` |
@@ -325,8 +361,33 @@ sudo journalctl -u cloud-iot-backend -n 50 --no-pager  # last 50 lines
 | `pedestal/{id}/register` | Device → Backend | `{"client_id": str}` |
 | `pedestal/{id}/sensors/temperature` | Device → Backend | `{"value": float}` |
 | `pedestal/{id}/sensors/moisture` | Device → Backend | `{"value": float}` |
-| `marina/cabinet/{id}/sockets/{n}/state` | Device → Backend | socket state |
-| `marina/cabinet/{id}/door/state` | Device → Backend | `"open"` \| `"closed"` |
+
+### Marina cabinet schema (`marina/cabinet/{id}/...`)
+| Topic | Direction | Payload |
+|---|---|---|
+| `marina/cabinet/{id}/status` | Device → Backend | `{"cabinetId":"...","seq":N,"uptime_ms":N,"door":"closed"}` |
+| `marina/cabinet/{id}/sockets/{n}/state` | Device → Backend | `{"id":"PWR-1","state":"idle\|active","hw_status":"on\|off","ts":N}` |
+| `marina/cabinet/{id}/water/{n}/state` | Device → Backend | `{"id":"WTR-1","state":"idle","total_l":N,"session_l":N,"ts":N}` |
+| `marina/cabinet/{id}/door/state` | Device → Backend | `{"door":"open\|closed","ts":"..."}` |
+| `marina/cabinet/{id}/events` | Device → Backend | `{"eventId":"...","eventType":"TelemetryUpdate\|AlarmRaised\|SessionEnded"}` |
+| `marina/cabinet/{id}/acks` | Device → Backend | `{"cmd_topic":"...","status":"ok\|err","ts":N}` |
+| `marina/cabinet/{id}/cmd/socket/{n}` | Backend → Device | `{"cmd":"enable\|disable"}` |
+| `marina/cabinet/{id}/outlet/PWR-{n}/cmd/stop` | Backend → Device | `{"cmd":"stop"}` |
+
+### OPTA schema (`opta/...`) — cabinetId carried in JSON payload
+| Topic | Direction | Payload |
+|---|---|---|
+| `opta/status` | Device → Backend | `{"cabinetId":"...","seq":N,"uptime_ms":N,"door":"closed"}` |
+| `opta/sockets/Q{1-4}/status` | Device → Backend | `{"cabinetId":"...","id":"Q1","state":"idle\|active\|fault\|blocked","hw_status":"on\|off","session":{...},"ts":N}` |
+| `opta/sockets/Q{1-4}/power` | Device → Backend | `{"cabinetId":"...","id":"Q1","watts":N,"kwh_total":N,"ts":N}` |
+| `opta/water/V{1-2}/status` | Device → Backend | `{"cabinetId":"...","id":"V1","state":"idle\|active","hw_status":"on\|off","total_l":N,"session_l":N,"ts":N}` |
+| `opta/door/status` | Device → Backend | `{"cabinetId":"...","door":"open\|closed","ts":"..."}` |
+| `opta/events` | Device → Backend | `{"cabinetId":"...","eventId":"...","eventType":"TelemetryUpdate\|AlarmRaised\|SessionEnded",...}` |
+| `opta/acks` | Device → Backend | `{"cabinetId":"...","cmd_topic":"...","status":"ok\|err","ts":N}` |
+| `opta/cmd/socket/Q{1-4}` | Backend → Device | `{"msgId":"...","cabinetId":"...","action":"activate\|stop\|maintenance"}` |
+| `opta/cmd/water/V{1-2}` | Backend → Device | `{"msgId":"...","cabinetId":"...","action":"activate\|stop\|maintenance"}` |
+| `opta/cmd/led` | Backend → Device | `{"cabinetId":"...","color":"green\|red\|blue\|yellow\|off","state":"on\|off\|blink"}` |
+| `opta/cmd/reset` | Backend → Device | `{"cabinetId":"...","cmd":"reset"}` |
 
 ---
 
@@ -336,17 +397,26 @@ sudo journalctl -u cloud-iot-backend -n 50 --no-pager  # last 50 lines
 |---|---|
 | `session_created` | New pending or active session |
 | `session_updated` | Status change (allow/deny/stop) |
+| `session_completed` | Session ended (stop or device disconnect) |
 | `power_reading` | Real-time socket power data |
 | `water_reading` | Real-time water flow |
-| `sensor_reading` | Temperature / moisture update |
-| `alarm_triggered` | New active alarm |
-| `alarm_acknowledged` | Alarm acknowledged by operator |
+| `temperature_reading` | Temperature sensor update |
+| `moisture_reading` | Moisture sensor update |
+| `heartbeat` | Pedestal online/offline |
+| `socket_pending` | Device plugged in — operator approval needed |
+| `socket_rejected` | Operator rejected socket connection |
 | `error_logged` | New entry in error log |
 | `pedestal_health_updated` | Camera or OPTA reachability change |
+| `pedestal_reset_sent` | Reset command dispatched |
 | `berth_occupancy_updated` | Berth analysis result |
-| `training_storage_alarm` | Training data disk >80% |
 | `hardware_alarm` | CPU/memory/disk/temperature Alarm 2 |
 | `marina_door` | Cabinet door open/close |
+| `marina_event` | Generic event from cabinet firmware |
+| `marina_ack` | Command ACK from cabinet (includes `pedestal_id`) |
+| `direct_cmd_sent` | Direct socket/water/LED/reset command dispatched |
+| `opta_socket_status` | `opta/sockets/Q*/status` — state, hw_status, session |
+| `opta_water_status` | `opta/water/V*/status` — state, hw_status, total_l, session_l |
+| `opta_status` | `opta/status` — cabinet ID, seq, uptime_ms, door |
 
 ---
 
@@ -398,7 +468,7 @@ cd Cloud_IOT
 backend/.venv/Scripts/python -m pytest tests/backend/ -q
 ```
 
-**170 tests** covering:
+**195 tests** covering:
 - Session lifecycle and MQTT integration
 - Operator approval flow and timeouts
 - Customer auth and billing
@@ -410,5 +480,7 @@ backend/.venv/Scripts/python -m pytest tests/backend/ -q
 - External API gateway
 - Security (brute-force, SQL injection patterns)
 - SNMP BER decoder
+- **Direct device controls** (socket Q1–Q4, water V1–V2, LED, reset, auth enforcement)
+- **MQTT Control Center broadcasts** (`opta_socket_status`, `opta_water_status`, `opta_status`, `marina_ack` pedestal_id)
 
 Pre-commit and pre-push hooks run the full suite automatically. Pushes to `main` require `CLOUD_IOT_RELEASE=1` and a merged `develop` branch.

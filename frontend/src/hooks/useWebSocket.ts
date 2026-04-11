@@ -26,6 +26,11 @@ export function useWebSocket() {
     removePendingSocket,
     setMarinaDoorState,
     setHwAlarmLevel,
+    setOptaSocketState,
+    setOptaWaterState,
+    setOptaStatusInfo,
+    addOptaEvent,
+    addOptaAck,
   } = useStore()
   const { role } = useAuthStore()
 
@@ -225,10 +230,66 @@ export function useWebSocket() {
           }
           break
         }
-        case 'marina_event': {
-          // Future: show in event log; for now just update health to keep pedestal visible
+        case 'opta_socket_status': {
           const pedestalId = msg.data.pedestal_id as number
-          if (pedestalId) updatePedestalHealthEntry(pedestalId, {})
+          const socketName = msg.data.socket_name as string
+          setOptaSocketState(`${pedestalId}-${socketName}`, {
+            pedestal_id: pedestalId,
+            socket_name: socketName,
+            state: msg.data.state as string,
+            hw_status: msg.data.hw_status as string,
+            session: msg.data.session,
+            ts: msg.data.ts as number | null,
+            timestamp: msg.data.timestamp as string,
+          })
+          break
+        }
+        case 'opta_water_status': {
+          const pedestalId = msg.data.pedestal_id as number
+          const valveName = msg.data.valve_name as string
+          setOptaWaterState(`${pedestalId}-${valveName}`, {
+            pedestal_id: pedestalId,
+            valve_name: valveName,
+            state: msg.data.state as string,
+            hw_status: msg.data.hw_status as string,
+            total_l: msg.data.total_l as number,
+            session_l: msg.data.session_l as number,
+            ts: msg.data.ts as number | null,
+            timestamp: msg.data.timestamp as string,
+          })
+          break
+        }
+        case 'opta_status': {
+          const pedestalId = msg.data.pedestal_id as number
+          setOptaStatusInfo(pedestalId, {
+            cabinet_id: msg.data.cabinet_id as string,
+            seq: msg.data.seq as number,
+            uptime_ms: msg.data.uptime_ms as number,
+            door: msg.data.door as string | undefined,
+            timestamp: msg.data.timestamp as string,
+          })
+          break
+        }
+        case 'marina_ack': {
+          const pedestalId = msg.data.pedestal_id as number
+          if (pedestalId) {
+            addOptaAck(pedestalId, {
+              cabinet_id: msg.data.cabinet_id as string,
+              payload: msg.data.payload,
+              timestamp: msg.data.timestamp as string,
+            })
+          }
+          break
+        }
+        case 'marina_event': {
+          const pedestalId = msg.data.pedestal_id as number
+          if (pedestalId) {
+            updatePedestalHealthEntry(pedestalId, {})
+            addOptaEvent(pedestalId, {
+              payload: msg.data.payload,
+              timestamp: msg.data.timestamp as string,
+            })
+          }
           break
         }
         case 'hardware_alarm': {

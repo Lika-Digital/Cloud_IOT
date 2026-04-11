@@ -101,6 +101,41 @@ export interface PedestalHealth {
   last_camera_check: string | null
 }
 
+export interface OptaSocketState {
+  pedestal_id: number
+  socket_name: string  // Q1, Q2, Q3, Q4
+  state: string        // idle, active, fault, blocked
+  hw_status: string
+  session: unknown
+  ts: number | null
+  timestamp: string
+}
+
+export interface OptaWaterState {
+  pedestal_id: number
+  valve_name: string   // V1, V2
+  state: string        // idle, active, fault
+  hw_status: string
+  total_l: number
+  session_l: number
+  ts: number | null
+  timestamp: string
+}
+
+export interface OptaStatusInfo {
+  cabinet_id: string
+  seq: number
+  uptime_ms: number
+  door?: string
+  timestamp: string
+}
+
+export interface OptaLogEntry {
+  cabinet_id?: string
+  payload: unknown
+  timestamp: string
+}
+
 // --- Store ---
 
 interface AppStore {
@@ -177,6 +212,25 @@ interface AppStore {
   // Marina cabinet door state per pedestal
   marinaDoorState: Record<number, 'open' | 'closed'>
   setMarinaDoorState: (pedestalId: number, state: 'open' | 'closed') => void
+
+  // OPTA live state (keyed by `${pedestal_id}-${socket_name}`)
+  optaSocketStates: Record<string, OptaSocketState>
+  setOptaSocketState: (key: string, data: OptaSocketState) => void
+
+  optaWaterStates: Record<string, OptaWaterState>
+  setOptaWaterState: (key: string, data: OptaWaterState) => void
+
+  // OPTA status info (heartbeat details) per pedestal
+  optaStatusInfo: Record<number, OptaStatusInfo>
+  setOptaStatusInfo: (pedestalId: number, info: OptaStatusInfo) => void
+
+  // Rolling event log per pedestal (last 30 entries)
+  optaEvents: Record<number, OptaLogEntry[]>
+  addOptaEvent: (pedestalId: number, entry: OptaLogEntry) => void
+
+  // Rolling ACK log per pedestal (last 30 entries)
+  optaAcks: Record<number, OptaLogEntry[]>
+  addOptaAck: (pedestalId: number, entry: OptaLogEntry) => void
 }
 
 export const useStore = create<AppStore>((set) => ({
@@ -316,4 +370,30 @@ export const useStore = create<AppStore>((set) => ({
   marinaDoorState: {},
   setMarinaDoorState: (pedestalId, state) =>
     set((s) => ({ marinaDoorState: { ...s.marinaDoorState, [pedestalId]: state } })),
+
+  optaSocketStates: {},
+  setOptaSocketState: (key, data) =>
+    set((s) => ({ optaSocketStates: { ...s.optaSocketStates, [key]: data } })),
+
+  optaWaterStates: {},
+  setOptaWaterState: (key, data) =>
+    set((s) => ({ optaWaterStates: { ...s.optaWaterStates, [key]: data } })),
+
+  optaStatusInfo: {},
+  setOptaStatusInfo: (pedestalId, info) =>
+    set((s) => ({ optaStatusInfo: { ...s.optaStatusInfo, [pedestalId]: info } })),
+
+  optaEvents: {},
+  addOptaEvent: (pedestalId, entry) =>
+    set((s) => {
+      const prev = s.optaEvents[pedestalId] ?? []
+      return { optaEvents: { ...s.optaEvents, [pedestalId]: [entry, ...prev].slice(0, 30) } }
+    }),
+
+  optaAcks: {},
+  addOptaAck: (pedestalId, entry) =>
+    set((s) => {
+      const prev = s.optaAcks[pedestalId] ?? []
+      return { optaAcks: { ...s.optaAcks, [pedestalId]: [entry, ...prev].slice(0, 30) } }
+    }),
 }))

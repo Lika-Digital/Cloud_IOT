@@ -4,6 +4,7 @@ import { useAuthStore } from '../../store/authStore'
 import { stopSession, approveSocket, rejectSocket } from '../../api'
 import pedestalImg from '../../assets/pedestal.jpg'
 import CameraModal from './CameraModal'
+import PedestalControlCenter from './PedestalControlCenter'
 
 // Zone definitions — positions as % of image dimensions
 // Each zone is positioned over the actual socket/pipe on the image
@@ -26,6 +27,7 @@ interface PedestalViewProps {
 export default function PedestalView({ pedestalId }: PedestalViewProps) {
   const [selectedZone, setSelectedZone] = useState<ZoneId | null>(null)
   const [cameraOpen, setCameraOpen] = useState(false)
+  const [activeTab, setActiveTab] = useState<'overview' | 'control'>('overview')
 
   const { pedestals, temperatureData, moistureData, marinaDoorState } = useStore()
   const pedestal = pedestals.find((p) => p.id === pedestalId)
@@ -114,7 +116,37 @@ export default function PedestalView({ pedestalId }: PedestalViewProps) {
           {selectedZone !== null ? (
             <SocketDetailPanel zoneId={selectedZone} pedestalId={pedestalId} onClose={() => setSelectedZone(null)} />
           ) : (
-            <AllSessionsOverview pedestalId={pedestalId} />
+            <div className="space-y-3">
+              {/* Tabs */}
+              <div className="flex gap-1 bg-gray-800/60 rounded-lg p-1 border border-gray-700/60">
+                <button
+                  onClick={() => setActiveTab('overview')}
+                  className={`flex-1 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                    activeTab === 'overview'
+                      ? 'bg-gray-700 text-white shadow-sm'
+                      : 'text-gray-400 hover:text-gray-200'
+                  }`}
+                >
+                  Overview
+                </button>
+                <button
+                  onClick={() => setActiveTab('control')}
+                  className={`flex-1 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                    activeTab === 'control'
+                      ? 'bg-gray-700 text-white shadow-sm'
+                      : 'text-gray-400 hover:text-gray-200'
+                  }`}
+                >
+                  Control Center
+                </button>
+              </div>
+
+              {activeTab === 'overview' ? (
+                <AllSessionsOverview pedestalId={pedestalId} />
+              ) : (
+                <PedestalControlCenter pedestalId={pedestalId} />
+              )}
+            </div>
           )}
         </div>
       </div>

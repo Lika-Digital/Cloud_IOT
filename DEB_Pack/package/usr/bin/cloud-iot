@@ -67,7 +67,7 @@ case "${1:-help}" in
     echo "  sudo cloud-iot restart"
     ;;
 
-  update)
+  update|upgrade)
     _require_root
     echo "Pulling latest code..."
     cd "$APP_DIR"
@@ -75,7 +75,23 @@ case "${1:-help}" in
     echo "Rebuilding frontend..."
     sudo -u cloud-iot bash -c "cd $APP_DIR/frontend && npm ci --silent && npm run build"
     echo "Installing new Python dependencies..."
-    sudo -u cloud-iot bash -c "cd $APP_DIR/backend && .venv/bin/pip install -q -r requirements.txt"
+    VENV_DIR="$APP_DIR/backend/.venv"
+    if [[ ! -f "$VENV_DIR/bin/pip" ]]; then
+        echo "Virtual environment missing — recreating..."
+        PYTHON_BIN=""
+        for v in python3.13 python3.12 python3.11 python3; do
+            if command -v "$v" &>/dev/null; then
+                PYTHON_BIN="$v"; break
+            fi
+        done
+        [[ -z "$PYTHON_BIN" ]] && { echo "ERROR: no python3 found"; exit 1; }
+        sudo -u cloud-iot "$PYTHON_BIN" -m venv "$VENV_DIR"
+        echo "Venv recreated with $PYTHON_BIN"
+    fi
+    sudo -u cloud-iot "$VENV_DIR/bin/pip" install --upgrade pip -q
+    sudo -u cloud-iot "$VENV_DIR/bin/pip" install -q \
+        -r "$APP_DIR/backend/requirements.txt" \
+        email-validator
     echo "Rebuilding ML worker container..."
     docker compose -f "$APP_DIR/docker-compose.yml" build ml_worker
     "$0" restart
@@ -100,7 +116,7 @@ Commands:
   status             Show service status
   logs [target]      Tail logs (backend|mqtt|ml|nginx)
   download-models    Download ML ONNX models (~155 MB)
-  update             Pull latest code and restart
+  update|upgrade     Pull latest code and restart
   config             Edit environment configuration
   help               Show this help
 

@@ -95,6 +95,32 @@ git pull origin main 2>&1 | tee -a "$LOG_FILE" || error "git pull failed"
 NEW_COMMIT=$(git rev-parse --short HEAD)
 info "Updated to: ${NEW_COMMIT}"
 
+# ── Venv health check (always runs, independent of file changes) ──────────────
+VENV_PIP="${APP_DIR}/backend/.venv/bin/pip"
+if [ ! -f "$VENV_PIP" ]; then
+  phase "Recreating Python virtual environment"
+  warn "Virtual environment missing — recreating from scratch"
+  PYTHON_BIN=""
+  for v in python3.13 python3.12 python3.11 python3; do
+    command -v "$v" &>/dev/null && { PYTHON_BIN="$v"; break; }
+  done
+  [ -n "$PYTHON_BIN" ] || error "No python3 found — cannot create venv"
+  "$PYTHON_BIN" -m venv "${APP_DIR}/backend/.venv" \
+    2>&1 | tee -a "$LOG_FILE" || error "venv creation failed"
+  chown -R cloud_iot:cloud_iot "${APP_DIR}/backend/.venv" 2>/dev/null || true
+  info "Venv created with $PYTHON_BIN"
+  info "Installing Python dependencies..."
+  "${APP_DIR}/backend/.venv/bin/pip" install --upgrade pip -q \
+    2>&1 | tee -a "$LOG_FILE"
+  "${APP_DIR}/backend/.venv/bin/pip" install -q \
+    -r "${REPO_DIR}/backend/requirements.txt" \
+    email-validator \
+    2>&1 | tee -a "$LOG_FILE" || error "pip install failed"
+  info "Python dependencies installed"
+  # Force backend restart since venv was just recreated
+  BACKEND_CHANGED=true
+fi
+
 # ── Frontend rebuild ──────────────────────────────────────────────────────────
 if $FRONTEND_CHANGED; then
   phase "Rebuilding frontend"

@@ -445,3 +445,75 @@ async def set_pedestal_led(
             json.dumps({"color": body.color, "state": body.state}),
         )
     return {"status": "led_set", "pedestal_id": pedestal_id, "color": body.color, "state": body.state}
+
+
+# ── Direct socket command (admin, no session required) ────────────────────────
+
+class DirectCmdBody(BaseModel):
+    action: str = Field(..., pattern=r"^(activate|stop|maintenance)$")
+
+
+@router.post("/pedestal/{pedestal_id}/socket/{socket_name}/cmd")
+async def direct_socket_cmd(
+    pedestal_id: int,
+    socket_name: str,
+    body: DirectCmdBody,
+    db: DBSession = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """
+    Send a direct action to a socket outlet (Q1–Q4) via opta/cmd/socket.
+    Valid actions: activate, stop, maintenance.
+    """
+    if socket_name not in ("Q1", "Q2", "Q3", "Q4"):
+        raise HTTPException(status_code=400, detail="socket_name must be one of Q1, Q2, Q3, Q4")
+    cabinet_id = _get_cabinet_id(db, pedestal_id)
+    msg_id = str(int(datetime.utcnow().timestamp() * 1000))
+    if cabinet_id:
+        mqtt_service.publish(
+            f"opta/cmd/socket/{socket_name}",
+            json.dumps({"msgId": msg_id, "cabinetId": cabinet_id, "action": body.action}),
+        )
+    else:
+        mqtt_service.publish(
+            f"pedestal/{pedestal_id}/socket/{socket_name}/command",
+            json.dumps({"msgId": msg_id, "action": body.action}),
+        )
+    await ws_manager.broadcast({
+        "event": "direct_cmd_sent",
+        "data": {"pedestal_id": pedestal_id, "target": socket_name, "action": body.action},
+    })
+    return {"status": "sent", "socket": socket_name, "action": body.action}
+
+
+@router.post("/pedestal/{pedestal_id}/water/{valve_name}/cmd")
+async def direct_water_cmd(
+    pedestal_id: int,
+    valve_name: str,
+    body: DirectCmdBody,
+    db: DBSession = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """
+    Send a direct action to a water valve (V1–V2) via opta/cmd/water.
+    Valid actions: activate, stop, maintenance.
+    """
+    if valve_name not in ("V1", "V2"):
+        raise HTTPException(status_code=400, detail="valve_name must be V1 or V2")
+    cabinet_id = _get_cabinet_id(db, pedestal_id)
+    msg_id = str(int(datetime.utcnow().timestamp() * 1000))
+    if cabinet_id:
+        mqtt_service.publish(
+            f"opta/cmd/water/{valve_name}",
+            json.dumps({"msgId": msg_id, "cabinetId": cabinet_id, "action": body.action}),
+        )
+    else:
+        mqtt_service.publish(
+            f"pedestal/{pedestal_id}/water/{valve_name}/command",
+            json.dumps({"msgId": msg_id, "action": body.action}),
+        )
+    await ws_manager.broadcast({
+        "event": "direct_cmd_sent",
+        "data": {"pedestal_id": pedestal_id, "target": valve_name, "action": body.action},
+    })
+    return {"status": "sent", "valve": valve_name, "action": body.action}

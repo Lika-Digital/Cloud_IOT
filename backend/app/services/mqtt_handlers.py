@@ -214,6 +214,19 @@ async def _handle_marina_socket(cabinet_id: str, socket_name: str, payload: str)
 
     logger.debug("[Marina] cabinet=%s socket=%s(%d) state=%s→%s", cabinet_id, socket_name, socket_id, raw_state, status)
     await _handle_socket_status(pedestal_id, socket_id, status)
+    # Rich broadcast for Control Center UI
+    await ws_manager.broadcast({
+        "event": "opta_socket_status",
+        "data": {
+            "pedestal_id": pedestal_id,
+            "socket_name": socket_name,
+            "state": raw_state,
+            "hw_status": data.get("hw_status", ""),
+            "session": data.get("session"),
+            "ts": data.get("ts"),
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    })
 
 
 async def _handle_marina_water(cabinet_id: str, water_name: str, payload: str):
@@ -245,6 +258,20 @@ async def _handle_marina_water(cabinet_id: str, water_name: str, payload: str):
 
     logger.debug("[Marina] cabinet=%s water=%s total_l=%.3f session_l=%.3f", cabinet_id, water_name, total_l, session_l)
     await _handle_water_flow(pedestal_id, legacy_payload)
+    # Rich broadcast for Control Center UI
+    await ws_manager.broadcast({
+        "event": "opta_water_status",
+        "data": {
+            "pedestal_id": pedestal_id,
+            "valve_name": water_name,
+            "state": data.get("state", "idle"),
+            "hw_status": data.get("hw_status", ""),
+            "total_l": total_l,
+            "session_l": session_l,
+            "ts": data.get("ts"),
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    })
 
 
 async def _handle_marina_door(cabinet_id: str, payload: str):
@@ -313,6 +340,18 @@ async def _handle_marina_status(cabinet_id: str, payload: str):
     })
     logger.debug("[Marina] cabinet=%s status seq=%s → heartbeat pedestal=%d", cabinet_id, data.get("seq"), pedestal_id)
     await _handle_heartbeat(pedestal_id, legacy_payload)
+    # Also broadcast raw opta status details for Control Center UI
+    await ws_manager.broadcast({
+        "event": "opta_status",
+        "data": {
+            "pedestal_id": pedestal_id,
+            "cabinet_id": cabinet_id,
+            "seq": data.get("seq", 0),
+            "uptime_ms": data.get("uptime_ms", 0),
+            "door": data.get("door"),
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    })
 
 
 async def _handle_marina_events(cabinet_id: str, payload: str):
@@ -353,10 +392,16 @@ async def _handle_marina_acks(cabinet_id: str, payload: str):
     except json.JSONDecodeError:
         data = {"raw": payload}
 
+    db = SessionLocal()
+    try:
+        pedestal_id = _cabinet_to_pedestal_id(db, cabinet_id)
+    finally:
+        db.close()
     logger.debug("[Marina] Ack from cabinet %s: %s", cabinet_id, payload[:200])
     await ws_manager.broadcast({
         "event": "marina_ack",
         "data": {
+            "pedestal_id": pedestal_id,
             "cabinet_id": cabinet_id,
             "payload": data,
             "timestamp": datetime.utcnow().isoformat(),

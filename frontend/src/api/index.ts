@@ -63,6 +63,14 @@ export const approveSocket = (pedestalId: number, socketId: number) =>
   api.post<Session>(`/controls/sockets/${pedestalId}/${socketId}/approve`).then((r) => r.data)
 export const rejectSocket = (pedestalId: number, socketId: number, reason?: string) =>
   api.post(`/controls/sockets/${pedestalId}/${socketId}/reject`, { reason: reason ?? null }).then((r) => r.data)
+export const resetPedestal = (pedestalId: number) =>
+  api.post(`/controls/pedestal/${pedestalId}/reset`).then((r) => r.data)
+export const setLed = (pedestalId: number, color: string, state: string) =>
+  api.post(`/controls/pedestal/${pedestalId}/led`, { color, state }).then((r) => r.data)
+export const directSocketCmd = (pedestalId: number, socketName: string, action: string) =>
+  api.post(`/controls/pedestal/${pedestalId}/socket/${socketName}/cmd`, { action }).then((r) => r.data)
+export const directWaterCmd = (pedestalId: number, valveName: string, action: string) =>
+  api.post(`/controls/pedestal/${pedestalId}/water/${valveName}/cmd`, { action }).then((r) => r.data)
 
 // Analytics
 export const getDailyConsumption = (params?: { pedestal_id?: number; days?: number }) =>

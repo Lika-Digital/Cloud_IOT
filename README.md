@@ -292,6 +292,7 @@ sudo bash ~/Cloud_IOT/nuc_image/upgrade.sh
 
 This script:
 - Pulls latest `main` from GitHub into `~/Cloud_IOT`
+- **Always checks venv health first** — if `.venv` is missing for any reason, recreates it and installs all packages before doing anything else
 - Detects what changed (backend / frontend)
 - Copies changed files to `/opt/cloud-iot/`
 - Installs new Python packages if `requirements.txt` changed
@@ -299,6 +300,8 @@ This script:
 - Restarts only the affected services
 - Preserves `.env` and databases — never touches them
 - Logs everything to `/var/log/cloud-iot/upgrade.log`
+
+The `cloud-iot upgrade` CLI command (alias: `cloud-iot update`) does the same but is intended for interactive use from the NUC shell. Both spellings work.
 
 **Never do this instead:**
 ```bash
@@ -468,7 +471,7 @@ cd Cloud_IOT
 backend/.venv/Scripts/python -m pytest tests/backend/ -q
 ```
 
-**195 tests** covering:
+**212 tests** covering:
 - Session lifecycle and MQTT integration
 - Operator approval flow and timeouts
 - Customer auth and billing

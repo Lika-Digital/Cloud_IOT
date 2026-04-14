@@ -361,7 +361,12 @@ async def _handle_marina_status(cabinet_id: str, payload: str):
 async def _handle_marina_events(cabinet_id: str, payload: str):
     """
     marina/cabinet/{cabinetId}/events
-    Generic event log from firmware — broadcast to dashboard for visibility.
+    Processes structured firmware events and broadcasts to dashboard.
+
+    Handled eventTypes:
+      OutletActivated  — create + activate a DB session
+      TelemetryUpdate  — store power/water sensor readings
+      SessionEnded     — complete the DB session with final totals
     """
     try:
         data = json.loads(payload)
@@ -371,6 +376,21 @@ async def _handle_marina_events(cabinet_id: str, payload: str):
     db = SessionLocal()
     try:
         pedestal_id = _cabinet_to_pedestal_id(db, cabinet_id)
+        if pedestal_id is None:
+            logger.warning("[Marina] Could not resolve cabinet '%s' for event", cabinet_id)
+            return
+
+        event_type = data.get("eventType", "")
+        device = data.get("device", {})
+        outlet_id = device.get("outletId", "")  # Q1-Q4 or V1-V2
+        resource = device.get("resource", "")    # POWER or WATER
+
+        if event_type == "OutletActivated":
+            await _handle_event_outlet_activated(db, pedestal_id, outlet_id, resource, data)
+        elif event_type == "TelemetryUpdate":
+            await _handle_event_telemetry_update(db, pedestal_id, outlet_id, resource, data)
+        elif event_type == "SessionEnded":
+            await _handle_event_session_ended(db, pedestal_id, outlet_id, resource, data)
     finally:
         db.close()
 
@@ -382,6 +402,114 @@ async def _handle_marina_events(cabinet_id: str, payload: str):
             "cabinet_id": cabinet_id,
             "payload": data,
             "timestamp": datetime.utcnow().isoformat(),
+        },
+    })
+
+
+async def _handle_event_outlet_activated(db, pedestal_id: int, outlet_id: str, resource: str, data: dict):
+    """OutletActivated — create + activate a session if none exists for this outlet."""
+    is_water = resource == "WATER"
+    socket_id = _water_name_to_id(outlet_id) if is_water else _socket_name_to_id(outlet_id)
+    session_type = "water" if is_water else "electricity"
+    # Use socket_id=None for water sessions to match get_active_for_socket convention
+    lookup_socket = None if is_water else socket_id
+
+    existing = session_service.get_active_for_socket(db, pedestal_id, lookup_socket)
+    if existing:
+        logger.debug("[Event] OutletActivated %s — session %d already exists", outlet_id, existing.id)
+        return
+
+    _ensure_pedestal(db, pedestal_id)
+    session = session_service.create_pending(db, pedestal_id, lookup_socket, session_type)
+    session_service.activate(db, session)
+    logger.info("[Event] OutletActivated %s → created session %d (type=%s)", outlet_id, session.id, session_type)
+
+    await ws_manager.broadcast({
+        "event": "session_created",
+        "data": {
+            "session_id": session.id,
+            "pedestal_id": pedestal_id,
+            "socket_id": lookup_socket,
+            "type": session_type,
+            "status": "active",
+            "started_at": session.started_at.isoformat(),
+            "customer_id": None,
+            "customer_name": None,
+        },
+    })
+
+
+async def _handle_event_telemetry_update(db, pedestal_id: int, outlet_id: str, resource: str, data: dict):
+    """TelemetryUpdate — store power/water readings as SensorReading records."""
+    is_water = resource == "WATER"
+    socket_id = _water_name_to_id(outlet_id) if is_water else _socket_name_to_id(outlet_id)
+    lookup_socket = None if is_water else socket_id
+
+    session = session_service.get_active_for_socket(db, pedestal_id, lookup_socket)
+    session_id = session.id if session and session.status == "active" else None
+
+    metrics = data.get("metrics", {})
+
+    if is_water:
+        total_l = float(metrics.get("volumeLTotal", 0))
+        if total_l > 0 or session_id:
+            session_service.add_reading(db, session_id, pedestal_id, socket_id, "total_liters", total_l, "L")
+            logger.debug("[Event] TelemetryUpdate %s water=%.3fL session=%s", outlet_id, total_l, session_id)
+    else:
+        kwh_total = float(metrics.get("energyKwhTotal", 0))
+        power_kw = float(metrics.get("powerKw", 0))
+        watts = power_kw * 1000
+
+        session_service.add_reading(db, session_id, pedestal_id, socket_id, "kwh_total", kwh_total, "kWh")
+        session_service.add_reading(db, session_id, pedestal_id, socket_id, "power_watts", watts, "W")
+        logger.debug("[Event] TelemetryUpdate %s kwh=%.4f watts=%.1f session=%s", outlet_id, kwh_total, watts, session_id)
+
+        await ws_manager.broadcast({
+            "event": "power_reading",
+            "data": {
+                "pedestal_id": pedestal_id,
+                "socket_id": socket_id,
+                "session_id": session_id,
+                "watts": watts,
+                "kwh_total": kwh_total,
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+        })
+
+
+async def _handle_event_session_ended(db, pedestal_id: int, outlet_id: str, resource: str, data: dict):
+    """SessionEnded — complete the DB session; store final totals from firmware."""
+    is_water = resource == "WATER"
+    socket_id = _water_name_to_id(outlet_id) if is_water else _socket_name_to_id(outlet_id)
+    lookup_socket = None if is_water else socket_id
+
+    session = session_service.get_active_for_socket(db, pedestal_id, lookup_socket)
+    if not session:
+        logger.warning("[Event] SessionEnded %s but no active session found (pedestal=%d)", outlet_id, pedestal_id)
+        return
+
+    # Store final totals from firmware before completing
+    totals = data.get("totals", {})
+    if is_water:
+        final_liters = float(totals.get("volumeL", 0))
+        if final_liters > 0:
+            session_service.add_reading(db, session.id, pedestal_id, socket_id, "total_liters", final_liters, "L")
+    else:
+        final_kwh = float(totals.get("energyKwh", 0))
+        session_service.add_reading(db, session.id, pedestal_id, socket_id, "kwh_total", final_kwh, "kWh")
+
+    session_service.complete(db, session)
+    logger.info("[Event] SessionEnded %s → completed session %d", outlet_id, session.id)
+
+    await ws_manager.broadcast({
+        "event": "session_completed",
+        "data": {
+            "session_id": session.id,
+            "pedestal_id": pedestal_id,
+            "socket_id": lookup_socket,
+            "energy_kwh": session.energy_kwh,
+            "water_liters": session.water_liters,
+            "customer_id": session.customer_id,
         },
     })
 

@@ -34,6 +34,11 @@ phase() { echo -e "\n${CYAN}${BOLD}  ▶ $*${NC}" | tee -a "$LOG_FILE"; }
 [ -d "${REPO_DIR}/.git" ] || error "Git repo not found at ${REPO_DIR} — run: git clone https://github.com/Lika-Digital/Cloud_IOT.git ${REPO_DIR}"
 [ -d "$APP_DIR" ]         || error "App not found at ${APP_DIR} — is Cloud IoT installed?"
 
+# Fix git ownership — running as root but repo belongs to cloud_iot.
+# Without this, git commands fail or leave root-owned objects in .git/
+chown -R cloud_iot:cloud_iot "${REPO_DIR}/.git" 2>/dev/null || true
+export HOME="/home/cloud_iot"
+
 mkdir -p /var/log/cloud-iot
 echo "" >> "$LOG_FILE"
 echo "════════════════════════════════════════════════" >> "$LOG_FILE"
@@ -46,38 +51,73 @@ echo "║         Cloud IoT NUC — Upgrade Script              ║"
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
 
-# ── Show current version ──────────────────────────────────────────────────────
+# ── Ensure we're on main ─────────────────────────────────────────────────────
 phase "Current version"
 cd "$REPO_DIR"
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+if [ "$CURRENT_BRANCH" != "main" ]; then
+  warn "Repo is on branch '${CURRENT_BRANCH}' — switching to main"
+  git stash -q 2>/dev/null || true
+  git checkout main 2>&1 | tee -a "$LOG_FILE" || error "Failed to switch to main"
+fi
 CURRENT_COMMIT=$(git rev-parse --short HEAD)
 CURRENT_DESCR=$(git log -1 --pretty="%s" 2>/dev/null || echo "unknown")
 info "Running: ${CURRENT_COMMIT} — ${CURRENT_DESCR}"
-info "Branch:  $(git rev-parse --abbrev-ref HEAD)"
+info "Branch:  main"
 
 # ── Fetch latest ──────────────────────────────────────────────────────────────
 phase "Fetching latest from GitHub"
 git fetch origin main 2>&1 | tee -a "$LOG_FILE" || error "git fetch failed — check internet connection"
 
 REMOTE_COMMIT=$(git rev-parse --short origin/main)
-if [ "$CURRENT_COMMIT" = "$REMOTE_COMMIT" ]; then
-  info "Already up to date (${CURRENT_COMMIT}). Nothing to do."
+NEEDS_PULL=false
+NEEDS_SYNC=false
+
+if [ "$CURRENT_COMMIT" != "$REMOTE_COMMIT" ]; then
+  NEEDS_PULL=true
+fi
+
+# Check if /opt/cloud-iot/ is out of sync with the repo even if git is up to date.
+# This catches the case where someone ran "git pull" manually before the script.
+if diff -q "${REPO_DIR}/backend/app/main.py" "${APP_DIR}/backend/app/main.py" &>/dev/null; then
+  : # files match — check a broader diff
+fi
+if ! diff -rq "${REPO_DIR}/backend/app/" "${APP_DIR}/backend/app/" &>/dev/null 2>&1; then
+  NEEDS_SYNC=true
+fi
+
+if ! $NEEDS_PULL && ! $NEEDS_SYNC; then
+  info "Already up to date (${CURRENT_COMMIT}) and /opt/cloud-iot/ is in sync. Nothing to do."
   echo ""
   exit 0
 fi
 
-# Show what will be applied
-echo ""
-echo -e "  ${BOLD}Commits to apply:${NC}"
-git log HEAD..origin/main --oneline | sed 's/^/    /' | tee -a "$LOG_FILE"
-echo ""
+if $NEEDS_PULL; then
+  # Show what will be applied
+  echo ""
+  echo -e "  ${BOLD}Commits to apply:${NC}"
+  git log HEAD..origin/main --oneline | sed 's/^/    /' | tee -a "$LOG_FILE"
+  echo ""
+fi
 
-# Detect changed files before pull
-CHANGED_FILES=$(git diff HEAD..origin/main --name-only)
+if $NEEDS_SYNC && ! $NEEDS_PULL; then
+  warn "Git repo is up to date but /opt/cloud-iot/ is out of sync — will re-deploy."
+  echo ""
+fi
+
+# Detect changed files (vs remote if pulling, vs deployed app if just syncing)
 BACKEND_CHANGED=false
 FRONTEND_CHANGED=false
 
-echo "$CHANGED_FILES" | grep -q "^backend/" && BACKEND_CHANGED=true
-echo "$CHANGED_FILES" | grep -qE "^frontend/" && FRONTEND_CHANGED=true
+if $NEEDS_PULL; then
+  CHANGED_FILES=$(git diff HEAD..origin/main --name-only)
+  echo "$CHANGED_FILES" | grep -q "^backend/" && BACKEND_CHANGED=true
+  echo "$CHANGED_FILES" | grep -qE "^frontend/" && FRONTEND_CHANGED=true
+elif $NEEDS_SYNC; then
+  # Can't diff git commits — just force both
+  BACKEND_CHANGED=true
+  FRONTEND_CHANGED=true
+fi
 
 echo -e "  ${BOLD}Changes detected:${NC}"
 $BACKEND_CHANGED  && echo -e "    ${YELLOW}● Backend${NC}" || echo -e "    · Backend (no changes)"
@@ -89,11 +129,15 @@ read -r -p "  Apply upgrade? [y/N]: " CONFIRM
 [[ "${CONFIRM,,}" =~ ^(y|yes)$ ]] || { echo "  Aborted."; exit 0; }
 echo ""
 
-# ── Pull ──────────────────────────────────────────────────────────────────────
-phase "Pulling latest code"
-git pull origin main 2>&1 | tee -a "$LOG_FILE" || error "git pull failed"
+# ── Pull (only if there are new commits) ─────────────────────────────────────
+if $NEEDS_PULL; then
+  phase "Pulling latest code"
+  git pull origin main 2>&1 | tee -a "$LOG_FILE" || error "git pull failed"
+else
+  phase "Syncing (git already up to date)"
+fi
 NEW_COMMIT=$(git rev-parse --short HEAD)
-info "Updated to: ${NEW_COMMIT}"
+info "Version: ${NEW_COMMIT}"
 
 # ── Venv health check (always runs, independent of file changes) ──────────────
 VENV_PIP="${APP_DIR}/backend/.venv/bin/pip"

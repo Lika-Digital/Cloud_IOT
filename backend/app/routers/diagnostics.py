@@ -51,31 +51,46 @@ async def run_diagnostics(pedestal_id: int, db: DBSession = Depends(get_db), _: 
     if not pedestal:
         raise HTTPException(status_code=404, detail="Pedestal not found")
 
-    # ── Marina cabinet: skip MQTT request, derive results from known state ─────
+    # ── Marina cabinet / Opta: send MQTT diagnostic request ─────────────────────
     from ..models.pedestal_config import PedestalConfig, SocketState
     cfg = db.query(PedestalConfig).filter(PedestalConfig.pedestal_id == pedestal_id).first()
     if cfg and getattr(cfg, "opta_client_id", None):
         cabinet_id = cfg.opta_client_id
-        # Connectivity: opta_connected flag set by heartbeat handler
-        connected = bool(cfg.opta_connected)
-        # Socket states from DB
-        socket_states = {
-            ss.socket_id: ss.connected
-            for ss in db.query(SocketState).filter(SocketState.pedestal_id == pedestal_id).all()
-        }
-        sensors = {}
-        for i in range(1, 5):
-            if i in socket_states:
-                sensors[f"socket_{i}"] = "ok" if socket_states[i] else "fail"
-            else:
-                sensors[f"socket_{i}"] = "ok" if connected else "missing"
-        # Marina firmware has no water/temp/moisture/camera sensors via diagnostics
-        sensors["water"]       = "ok" if connected else "missing"
-        sensors["temperature"] = "ok" if connected else "missing"
-        sensors["moisture"]    = "ok" if connected else "missing"
-        sensors["camera"]      = "missing"  # not part of marina cabinet
 
-        all_ok = connected
+        # Send diagnostic request to Opta via MQTT
+        mqtt_service.publish(
+            "opta/cmd/diagnostic",
+            json.dumps({"cabinetId": cabinet_id, "request": "all"}),
+        )
+        logger.info(f"Diagnostics request sent to Opta cabinet {cabinet_id} (pedestal {pedestal_id})")
+
+        # Wait for response on opta/diagnostic topic
+        raw = await diagnostics_manager.wait_for_result(pedestal_id, timeout=12.0)
+
+        if raw is not None:
+            # Opta responded — use its result
+            sensors = {s: raw.get(s, "missing") for s in EXPECTED_SENSORS}
+            all_ok = all(v == "ok" for v in sensors.values())
+        else:
+            # Opta didn't respond — fall back to DB-derived state
+            logger.warning(f"No diagnostic response from Opta {cabinet_id} — falling back to DB state")
+            connected = bool(cfg.opta_connected)
+            socket_states = {
+                ss.socket_id: ss.connected
+                for ss in db.query(SocketState).filter(SocketState.pedestal_id == pedestal_id).all()
+            }
+            sensors = {}
+            for i in range(1, 5):
+                if i in socket_states:
+                    sensors[f"socket_{i}"] = "ok" if socket_states[i] else "fail"
+                else:
+                    sensors[f"socket_{i}"] = "ok" if connected else "missing"
+            sensors["water"]       = "ok" if connected else "missing"
+            sensors["temperature"] = "ok" if connected else "missing"
+            sensors["moisture"]    = "ok" if connected else "missing"
+            sensors["camera"]      = "missing"
+            all_ok = connected
+
         if all_ok and not pedestal.initialized:
             pedestal.initialized = True
             db.commit()
@@ -87,7 +102,7 @@ async def run_diagnostics(pedestal_id: int, db: DBSession = Depends(get_db), _: 
             "sensors": sensors,
             "all_ok": all_ok,
             "initialized": pedestal.initialized,
-            "error": None if connected else f"Cabinet {cabinet_id} not connected — no recent heartbeat.",
+            "error": None if raw is not None else f"No response from Opta {cabinet_id} — showing cached state.",
         }
 
     # ── Legacy pedestal: MQTT diagnostics request/response ────────────────────

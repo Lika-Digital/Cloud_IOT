@@ -32,6 +32,7 @@ TOPICS = [
     "opta/door/status",
     "opta/events",
     "opta/acks",
+    "opta/diagnostic",
 ]
 
 

@@ -60,7 +60,13 @@ export default function PedestalCard({ pedestal, health, onClick }: PedestalCard
 
       {/* Symbolic pedestal icon */}
       <div className="flex justify-center mb-4">
-        <PedestalIcon pending={hasPending} active={hasActive} alarm={hasAlarm} />
+        <PedestalIcon
+          pending={hasPending}
+          active={hasActive}
+          alarm={hasAlarm}
+          pendingSockets={new Set(pending.filter(s => s.socket_id != null).map(s => s.socket_id!))}
+          activeSockets={new Set(active.filter(s => s.socket_id != null).map(s => s.socket_id!))}
+        />
       </div>
 
       {/* Sensor readings */}
@@ -117,7 +123,10 @@ export default function PedestalCard({ pedestal, health, onClick }: PedestalCard
   )
 }
 
-function PedestalIcon({ pending, active, alarm }: { pending: boolean; active: boolean; alarm: boolean }) {
+function PedestalIcon({ pending, active, alarm, pendingSockets, activeSockets }: {
+  pending: boolean; active: boolean; alarm: boolean
+  pendingSockets: Set<number>; activeSockets: Set<number>
+}) {
   const color = alarm ? '#ef4444' : pending ? '#f59e0b' : active ? '#22c55e' : '#4b5563'
   const glow  = alarm
     ? 'drop-shadow(0 0 8px rgba(239,68,68,0.7))'
@@ -126,6 +135,9 @@ function PedestalIcon({ pending, active, alarm }: { pending: boolean; active: bo
     : active
     ? 'drop-shadow(0 0 8px rgba(34,197,94,0.6))'
     : 'none'
+
+  const socketFill = (id: number) =>
+    activeSockets.has(id) ? '#22c55e' : pendingSockets.has(id) ? '#f59e0b' : '#374151'
 
   return (
     <svg
@@ -138,11 +150,11 @@ function PedestalIcon({ pending, active, alarm }: { pending: boolean; active: bo
       <rect x="18" y="4" width="36" height="100" rx="4" fill="#1f2937" stroke={color} strokeWidth="2" />
       {/* Top panel */}
       <rect x="24" y="10" width="24" height="16" rx="2" fill="#374151" stroke={color} strokeWidth="1" />
-      {/* 4 socket indicators */}
-      <circle cx="12" cy="50" r="7" fill={active ? '#22c55e' : pending ? '#f59e0b' : '#374151'} stroke={color} strokeWidth="1.5" />
-      <circle cx="12" cy="68" r="7" fill={active ? '#22c55e' : pending ? '#f59e0b' : '#374151'} stroke={color} strokeWidth="1.5" />
-      <circle cx="60" cy="50" r="7" fill={active ? '#22c55e' : pending ? '#f59e0b' : '#374151'} stroke={color} strokeWidth="1.5" />
-      <circle cx="60" cy="68" r="7" fill={active ? '#22c55e' : pending ? '#f59e0b' : '#374151'} stroke={color} strokeWidth="1.5" />
+      {/* 4 socket indicators — per-socket state */}
+      <circle cx="12" cy="50" r="7" fill={socketFill(1)} stroke={color} strokeWidth="1.5" />
+      <circle cx="12" cy="68" r="7" fill={socketFill(2)} stroke={color} strokeWidth="1.5" />
+      <circle cx="60" cy="50" r="7" fill={socketFill(3)} stroke={color} strokeWidth="1.5" />
+      <circle cx="60" cy="68" r="7" fill={socketFill(4)} stroke={color} strokeWidth="1.5" />
       {/* Water pipes */}
       <rect x="2" y="95" width="16" height="6" rx="3" fill="#374151" stroke="#6b7280" strokeWidth="1" />
       <rect x="54" y="95" width="16" height="6" rx="3" fill="#374151" stroke="#6b7280" strokeWidth="1" />

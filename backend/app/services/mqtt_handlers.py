@@ -42,6 +42,7 @@ OPTA_WATER_RE        = re.compile(r"opta/water/([^/]+)/status")
 OPTA_DOOR_RE         = re.compile(r"opta/door/status")
 OPTA_EVENTS_RE       = re.compile(r"opta/events")
 OPTA_ACKS_RE         = re.compile(r"opta/acks")
+OPTA_DIAGNOSTIC_RE   = re.compile(r"opta/diagnostic")
 
 
 def _hw_warn(source: str, message: str, details: str | None = None):
@@ -155,6 +156,8 @@ async def handle_message(topic: str, payload: str):
             await _handle_opta_events(payload)
         elif OPTA_ACKS_RE.match(topic):
             await _handle_opta_acks(payload)
+        elif OPTA_DIAGNOSTIC_RE.match(topic):
+            await _handle_opta_diagnostic(payload)
         # ── Marina cabinet firmware (real hardware) ──────────────────────────
         elif m := MARINA_SOCKET_RE.match(topic):
             await _handle_marina_socket(m.group(1), m.group(2), payload)
@@ -679,6 +682,39 @@ async def _handle_opta_acks(payload: str):
     cabinet_id = _opta_cabinet_id(payload, "opta/acks")
     if cabinet_id:
         await _handle_marina_acks(cabinet_id, payload)
+
+
+async def _handle_opta_diagnostic(payload: str):
+    """
+    opta/diagnostic
+    Diagnostic response from Opta. Route to diagnostics_manager so the
+    waiting API endpoint receives the result.
+    """
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError as e:
+        logger.warning("[Opta] Bad diagnostic payload: %s", e)
+        return
+
+    cabinet_id = data.get("cabinetId", "") or _opta_cached_cabinet_id
+    if not cabinet_id:
+        logger.warning("[Opta] No cabinetId in diagnostic response")
+        return
+
+    db = SessionLocal()
+    try:
+        pedestal_id = _cabinet_to_pedestal_id(db, cabinet_id)
+    finally:
+        db.close()
+
+    if pedestal_id is None:
+        return
+
+    # Map Opta sensor names to expected format
+    from .diagnostics_manager import diagnostics_manager
+    sensors = data.get("sensors", data)
+    diagnostics_manager.complete_request(pedestal_id, sensors)
+    logger.info("[Opta] Diagnostic response for cabinet %s (pedestal %d)", cabinet_id, pedestal_id)
 
 
 async def _handle_socket_status(pedestal_id: int, socket_id: int, payload: str):

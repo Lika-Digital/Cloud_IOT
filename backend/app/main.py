@@ -130,6 +130,31 @@ async def _socket_pending_watchdog():
             db.close()
 
 
+async def _opta_time_sync():
+    """
+    Publish current UTC time to opta/cmd/time every 60 minutes.
+    Also fires once on startup (after a short delay for MQTT to connect).
+    The Opta has no RTC — it needs this to show correct timestamps.
+    """
+    import json as _json
+    await asyncio.sleep(10)  # wait for MQTT to connect
+    while True:
+        try:
+            now = datetime.utcnow()
+            epoch = int(now.timestamp())
+            payload = _json.dumps({
+                "msgId": f"timesync-{epoch}",
+                "action": "sync",
+                "epoch": epoch,
+                "iso": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            })
+            mqtt_service.publish("opta/cmd/time", payload)
+            logger.info("Time sync published to opta/cmd/time: epoch=%d iso=%s", epoch, now.strftime("%Y-%m-%dT%H:%M:%SZ"))
+        except Exception as e:
+            logger.warning("Time sync failed: %s", e)
+        await asyncio.sleep(3600)  # every 60 minutes
+
+
 async def _camera_health_check():
     """Every 30 s: HTTP HEAD each configured camera URL and update DB + broadcast WS event."""
     from .models.pedestal_config import PedestalConfig
@@ -423,6 +448,7 @@ async def lifespan(app: FastAPI):
     camera_task          = asyncio.create_task(_camera_health_check())
     frame_buffer_task    = asyncio.create_task(run_frame_buffer())
     storage_monitor_task = asyncio.create_task(run_storage_monitor())
+    time_sync_task       = asyncio.create_task(_opta_time_sync())
 
     yield
 
@@ -435,6 +461,7 @@ async def lifespan(app: FastAPI):
     camera_task.cancel()
     frame_buffer_task.cancel()
     storage_monitor_task.cancel()
+    time_sync_task.cancel()
     mqtt_service.stop()
     snmp_trap_service.stop()
     simulator_manager.stop()

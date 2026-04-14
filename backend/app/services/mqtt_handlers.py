@@ -394,6 +394,8 @@ async def _handle_marina_events(cabinet_id: str, payload: str):
             await _handle_event_telemetry_update(db, pedestal_id, outlet_id, resource, data)
         elif event_type == "SessionEnded":
             await _handle_event_session_ended(db, pedestal_id, outlet_id, resource, data)
+        elif event_type == "UserPluggedIn":
+            await _handle_event_user_plugged_in(db, pedestal_id, outlet_id, resource, data)
     finally:
         db.close()
 
@@ -405,6 +407,51 @@ async def _handle_marina_events(cabinet_id: str, payload: str):
             "cabinet_id": cabinet_id,
             "payload": data,
             "timestamp": datetime.utcnow().isoformat(),
+        },
+    })
+
+
+async def _handle_event_user_plugged_in(db, pedestal_id: int, outlet_id: str, resource: str, data: dict):
+    """UserPluggedIn — physical plug detected. Set socket to pending (operator approval flow)."""
+    from ..models.pedestal_config import SocketState
+
+    is_water = resource == "WATER"
+    socket_id = _water_name_to_id(outlet_id) if is_water else _socket_name_to_id(outlet_id)
+
+    _ensure_pedestal(db, pedestal_id)
+    now = datetime.utcnow()
+    state = db.query(SocketState).filter(
+        SocketState.pedestal_id == pedestal_id,
+        SocketState.socket_id == socket_id,
+    ).first()
+    if state:
+        state.connected = True
+        state.operator_status = "pending"
+        state.operator_status_at = now
+        state.updated_at = now
+    else:
+        state = SocketState(
+            pedestal_id=pedestal_id,
+            socket_id=socket_id,
+            connected=True,
+            operator_status="pending",
+            operator_status_at=now,
+        )
+        db.add(state)
+    db.commit()
+
+    berth_id = data.get("device", {}).get("berthId", "")
+    logger.info("[Event] UserPluggedIn %s (berth=%s) → socket %d pending", outlet_id, berth_id, socket_id)
+
+    from .audit_service import log_transition
+    log_transition(db, None, pedestal_id, socket_id, "socket_connected", "system")
+
+    await ws_manager.broadcast({
+        "event": "socket_pending",
+        "data": {
+            "pedestal_id": pedestal_id,
+            "socket_id": socket_id,
+            "berth_id": berth_id,
         },
     })
 
@@ -452,12 +499,13 @@ async def _handle_event_telemetry_update(db, pedestal_id: int, outlet_id: str, r
     session_id = session.id if session and session.status == "active" else None
 
     metrics = data.get("metrics", {})
+    duration_min = metrics.get("durationMinutes", 0)
 
     if is_water:
         total_l = float(metrics.get("volumeLTotal", 0))
         if total_l > 0 or session_id:
             session_service.add_reading(db, session_id, pedestal_id, socket_id, "total_liters", total_l, "L")
-            logger.debug("[Event] TelemetryUpdate %s water=%.3fL session=%s", outlet_id, total_l, session_id)
+        logger.info("[Telemetry] %s WATER total_l=%.3f duration=%dmin session=%s", outlet_id, total_l, duration_min, session_id)
     else:
         kwh_total = float(metrics.get("energyKwhTotal", 0))
         power_kw = float(metrics.get("powerKw", 0))
@@ -465,7 +513,15 @@ async def _handle_event_telemetry_update(db, pedestal_id: int, outlet_id: str, r
 
         session_service.add_reading(db, session_id, pedestal_id, socket_id, "kwh_total", kwh_total, "kWh")
         session_service.add_reading(db, session_id, pedestal_id, socket_id, "power_watts", watts, "W")
-        logger.debug("[Event] TelemetryUpdate %s kwh=%.4f watts=%.1f session=%s", outlet_id, kwh_total, watts, session_id)
+        logger.info("[Telemetry] %s POWER kwh=%.4f watts=%.1f duration=%dmin session=%s", outlet_id, kwh_total, watts, duration_min, session_id)
+
+        # Warn if session has been active >2min with zero energy — possible metering issue
+        if session_id and duration_min >= 2 and kwh_total == 0.0 and watts == 0.0:
+            _hw_warn(
+                f"pedestal_{pedestal_id}",
+                f"Zero energy reading on {outlet_id} after {duration_min}min — check metering hardware",
+            )
+            logger.warning("[Telemetry] ZERO ENERGY WARNING: %s session=%s duration=%dmin — metering may not be functioning", outlet_id, session_id, duration_min)
 
         await ws_manager.broadcast({
             "event": "power_reading",

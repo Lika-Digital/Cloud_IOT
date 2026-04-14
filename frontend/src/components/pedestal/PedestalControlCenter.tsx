@@ -36,7 +36,6 @@ function StateBadge({ state }: { state: string }) {
     idle:        { color: 'bg-gray-800 text-gray-400 border-gray-700', dot: 'bg-gray-600' },
     fault:       { color: 'bg-red-900/40 text-red-300 border-red-700/50', dot: 'bg-red-400 animate-pulse' },
     blocked:     { color: 'bg-amber-900/40 text-amber-300 border-amber-700/50', dot: 'bg-amber-400' },
-    maintenance: { color: 'bg-blue-900/40 text-blue-300 border-blue-700/50', dot: 'bg-blue-400' },
   }
   const c = cfg[state] ?? cfg['idle']
   return (
@@ -142,13 +141,6 @@ function SocketCard({
             loading={loading === 'stop'}
             onClick={() => sendCmd('stop')}
           />
-          <CmdButton
-            label="Maint."
-            color="blue"
-            disabled={loading !== null}
-            loading={loading === 'maintenance'}
-            onClick={() => sendCmd('maintenance')}
-          />
         </div>
       )}
     </div>
@@ -229,13 +221,6 @@ function WaterCard({
             disabled={state === 'idle' || loading !== null}
             loading={loading === 'stop'}
             onClick={() => sendCmd('stop')}
-          />
-          <CmdButton
-            label="Maint."
-            color="blue"
-            disabled={loading !== null}
-            loading={loading === 'maintenance'}
-            onClick={() => sendCmd('maintenance')}
           />
         </div>
       )}

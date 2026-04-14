@@ -9,7 +9,7 @@ LED control, and pedestal reset.
 Test IDs:
   TC-DC-01  Direct socket activate → MQTT published to opta/cmd/socket/Q{n}
   TC-DC-02  Direct socket stop → MQTT published to opta/cmd/socket/Q{n}
-  TC-DC-03  Direct socket maintenance → MQTT published
+  TC-DC-03  (removed — maintenance not supported by Opta firmware)
   TC-DC-04  Invalid socket name → 400 error
   TC-DC-05  Direct water activate → MQTT published to opta/cmd/water/V{n}
   TC-DC-06  Direct water stop → MQTT published
@@ -72,9 +72,9 @@ def _simulate_mqtt(topic: str, payload: str) -> list[dict]:
 # TC-DC-01..04  Direct socket commands
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("action", ["activate", "stop", "maintenance"])
+@pytest.mark.parametrize("action", ["activate", "stop"])
 def test_direct_socket_cmd_publishes_mqtt(client, auth_headers, action):
-    """TC-DC-01/02/03  POST socket cmd → MQTT published to opta/cmd/socket/Q{n}."""
+    """TC-DC-01/02  POST socket cmd → MQTT published to opta/cmd/socket/Q{n}."""
     published: list[tuple] = []
 
     def mock_publish(topic, payload, qos=1):
@@ -127,7 +127,7 @@ def test_direct_socket_invalid_action(client, auth_headers):
 # TC-DC-05..07  Direct water valve commands
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("action", ["activate", "stop", "maintenance"])
+@pytest.mark.parametrize("action", ["activate", "stop"])
 def test_direct_water_cmd_publishes_mqtt(client, auth_headers, action):
     """TC-DC-05/06  POST water cmd → MQTT published to opta/cmd/water/V{n}."""
     published: list[tuple] = []

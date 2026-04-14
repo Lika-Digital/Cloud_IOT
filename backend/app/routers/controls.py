@@ -68,9 +68,13 @@ def _publish_socket_reject(db: DBSession, pedestal_id: int, socket_id: int, reas
 
 
 def _publish_session_control(db: DBSession, session: Session, action: str):
-    """Publish allow/deny/stop command, routing to marina and opta topics (or legacy)."""
+    """Publish allow/deny/stop command, routing to marina and opta topics (or legacy).
+
+    Opta valid actions: activate, stop (no maintenance, no enable/disable).
+    """
     cabinet_id = _get_cabinet_id(db, session.pedestal_id)
     if cabinet_id:
+        msg_id = str(int(datetime.utcnow().timestamp() * 1000))
         if session.type == "electricity":
             sid = session.socket_id or 1
             if action == "allow":
@@ -78,21 +82,22 @@ def _publish_session_control(db: DBSession, session: Session, action: str):
                     f"marina/cabinet/{cabinet_id}/cmd/socket/E{sid}",
                     json.dumps({"cmd": "enable"}),
                 )
+                # Opta expects {"action": "activate"}, not {"cmd": "enable"}
                 mqtt_service.publish(
                     f"opta/cmd/socket/Q{sid}",
-                    json.dumps({"cabinetId": cabinet_id, "cmd": "enable"}),
+                    json.dumps({"msgId": msg_id, "cabinetId": cabinet_id, "action": "activate"}),
                 )
             elif action == "deny":
                 mqtt_service.publish(
                     f"marina/cabinet/{cabinet_id}/cmd/socket/E{sid}",
                     json.dumps({"cmd": "disable"}),
                 )
+                # Opta expects {"action": "stop"}, not {"cmd": "disable"}
                 mqtt_service.publish(
                     f"opta/cmd/socket/Q{sid}",
-                    json.dumps({"cabinetId": cabinet_id, "cmd": "disable"}),
+                    json.dumps({"msgId": msg_id, "cabinetId": cabinet_id, "action": "stop"}),
                 )
             elif action == "stop":
-                msg_id = str(int(datetime.utcnow().timestamp() * 1000))
                 mqtt_service.publish(
                     f"marina/cabinet/{cabinet_id}/outlet/PWR-{sid}/cmd/stop",
                     json.dumps({"cmd": "stop"}),
@@ -104,14 +109,19 @@ def _publish_session_control(db: DBSession, session: Session, action: str):
         elif session.type == "water":
             wid = session.socket_id or 1
             if action in ("deny", "stop"):
-                msg_id = str(int(datetime.utcnow().timestamp() * 1000))
                 mqtt_service.publish(
                     f"marina/cabinet/{cabinet_id}/outlet/WTR-{wid}/cmd/stop",
                     json.dumps({"cmd": "stop"}),
                 )
+                # Opta expects {"action": "stop"}
                 mqtt_service.publish(
                     f"opta/cmd/water/V{wid}",
                     json.dumps({"msgId": msg_id, "cabinetId": cabinet_id, "action": "stop"}),
+                )
+            elif action == "allow":
+                mqtt_service.publish(
+                    f"opta/cmd/water/V{wid}",
+                    json.dumps({"msgId": msg_id, "cabinetId": cabinet_id, "action": "activate"}),
                 )
     else:
         mqtt_service.publish(_control_topic(session), action)
@@ -452,7 +462,8 @@ async def set_pedestal_led(
 # ── Direct socket command (admin, no session required) ────────────────────────
 
 class DirectCmdBody(BaseModel):
-    action: str = Field(..., pattern=r"^(activate|stop|maintenance)$")
+    # Opta valid actions: activate, stop (maintenance is NOT supported by firmware)
+    action: str = Field(..., pattern=r"^(activate|stop)$")
 
 
 @router.post("/pedestal/{pedestal_id}/socket/{socket_name}/cmd")

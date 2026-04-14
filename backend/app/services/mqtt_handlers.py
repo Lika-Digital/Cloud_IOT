@@ -12,6 +12,10 @@ logger = logging.getLogger(__name__)
 # Tracks most-recent heartbeat per pedestal — read by _comm_loss_watchdog in main.py
 last_heartbeat: dict[int, datetime] = {}
 
+# Cached cabinetId from opta/status heartbeats — used as fallback when
+# opta/sockets/… and opta/water/… payloads omit cabinetId.
+_opta_cached_cabinet_id: str | None = None
+
 # Topic patterns — legacy pedestal/... schema
 SOCKET_STATUS_RE  = re.compile(r"pedestal/(\d+)/socket/(\d+)/status")
 SOCKET_POWER_RE   = re.compile(r"pedestal/(\d+)/socket/(\d+)/power")
@@ -414,18 +418,40 @@ async def _handle_marina_acks(cabinet_id: str, payload: str):
 # We extract it and delegate to the equivalent _handle_marina_* function.
 
 def _opta_cabinet_id(payload: str, topic_hint: str) -> str | None:
-    """Parse cabinetId from opta JSON payload. Returns None and logs a warning on failure."""
+    """Parse cabinetId from opta JSON payload.
+
+    Checks (in order):
+      1. Top-level ``cabinetId`` field (opta/status, opta/door/status)
+      2. Nested ``device.cabinetId`` (opta/events)
+      3. Module-level ``_opta_cached_cabinet_id`` (populated by opta/status heartbeats)
+
+    Returns None and logs a warning only if all three fail.
+    """
     try:
-        return json.loads(payload).get("cabinetId", "") or None
+        data = json.loads(payload)
     except json.JSONDecodeError as e:
         logger.warning("[Opta] Cannot parse payload on %s: %s", topic_hint, e)
+        return _opta_cached_cabinet_id  # best-effort fallback
+
+    cid = data.get("cabinetId", "") or ""
+    if not cid:
+        device = data.get("device")
+        if isinstance(device, dict):
+            cid = device.get("cabinetId", "") or ""
+    if not cid:
+        cid = _opta_cached_cabinet_id
+    if not cid:
+        logger.warning("[Opta] No cabinetId in payload on %s and no cached value", topic_hint)
         return None
+    return cid
 
 
 async def _handle_opta_status(payload: str):
     """opta/status — cabinet heartbeat (same as marina status but cabinetId in payload)."""
+    global _opta_cached_cabinet_id
     cabinet_id = _opta_cabinet_id(payload, "opta/status")
     if cabinet_id:
+        _opta_cached_cabinet_id = cabinet_id
         await _handle_marina_status(cabinet_id, payload)
 
 
@@ -442,7 +468,8 @@ async def _handle_opta_socket(socket_name: str, payload: str):
 async def _handle_opta_socket_power(socket_name: str, payload: str):
     """
     opta/sockets/{socketName}/power
-    Payload: {"cabinetId":"...", "id":"Q1", "watts":N, "kwh_total":N, "ts":...}
+    Payload: {"id":"Q1", "watts":N, "kwh_total":N, "ts":...}
+    cabinetId may be absent — resolved via _opta_cabinet_id fallback.
     """
     try:
         data = json.loads(payload)
@@ -450,9 +477,8 @@ async def _handle_opta_socket_power(socket_name: str, payload: str):
         logger.warning("[Opta] Bad power payload on %s: %s", socket_name, e)
         return
 
-    cabinet_id = data.get("cabinetId", "")
+    cabinet_id = _opta_cabinet_id(payload, f"opta/sockets/{socket_name}/power")
     if not cabinet_id:
-        logger.warning("[Opta] Missing cabinetId in power payload: %s", payload[:200])
         return
 
     db = SessionLocal()
@@ -478,17 +504,11 @@ async def _handle_opta_socket_power(socket_name: str, payload: str):
 async def _handle_opta_water(water_name: str, payload: str):
     """
     opta/water/{waterName}/status
-    Payload: {"cabinetId":"...", "id":"V1", "state":"idle", "ts":..., "total_l":N, "session_l":N}
+    Payload: {"id":"V1", "state":"idle", "ts":..., "total_l":N, "session_l":N}
+    cabinetId may be absent — resolved via _opta_cabinet_id fallback.
     """
-    try:
-        data = json.loads(payload)
-    except json.JSONDecodeError as e:
-        logger.warning("[Opta] Bad water payload on %s: %s", water_name, e)
-        return
-
-    cabinet_id = data.get("cabinetId", "")
+    cabinet_id = _opta_cabinet_id(payload, f"opta/water/{water_name}/status")
     if not cabinet_id:
-        logger.warning("[Opta] Missing cabinetId in water payload: %s", payload[:200])
         return
 
     await _handle_marina_water(cabinet_id, water_name, payload)

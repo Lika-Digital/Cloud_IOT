@@ -92,24 +92,26 @@ def _publish_session_control(db: DBSession, session: Session, action: str):
                     json.dumps({"cabinetId": cabinet_id, "cmd": "disable"}),
                 )
             elif action == "stop":
+                msg_id = str(int(datetime.utcnow().timestamp() * 1000))
                 mqtt_service.publish(
                     f"marina/cabinet/{cabinet_id}/outlet/PWR-{sid}/cmd/stop",
                     json.dumps({"cmd": "stop"}),
                 )
                 mqtt_service.publish(
                     f"opta/cmd/socket/Q{sid}",
-                    json.dumps({"cabinetId": cabinet_id, "cmd": "stop"}),
+                    json.dumps({"msgId": msg_id, "cabinetId": cabinet_id, "action": "stop"}),
                 )
         elif session.type == "water":
             wid = session.socket_id or 1
             if action in ("deny", "stop"):
+                msg_id = str(int(datetime.utcnow().timestamp() * 1000))
                 mqtt_service.publish(
                     f"marina/cabinet/{cabinet_id}/outlet/WTR-{wid}/cmd/stop",
                     json.dumps({"cmd": "stop"}),
                 )
                 mqtt_service.publish(
                     f"opta/cmd/water/V{wid}",
-                    json.dumps({"cabinetId": cabinet_id, "cmd": "stop"}),
+                    json.dumps({"msgId": msg_id, "cabinetId": cabinet_id, "action": "stop"}),
                 )
     else:
         mqtt_service.publish(_control_topic(session), action)
@@ -464,6 +466,7 @@ async def direct_socket_cmd(
     """
     Send a direct action to a socket outlet (Q1–Q4) via opta/cmd/socket.
     Valid actions: activate, stop, maintenance.
+    On stop: also completes any active DB session for this socket.
     """
     if socket_name not in ("Q1", "Q2", "Q3", "Q4"):
         raise HTTPException(status_code=400, detail="socket_name must be one of Q1, Q2, Q3, Q4")
@@ -479,6 +482,25 @@ async def direct_socket_cmd(
             f"pedestal/{pedestal_id}/socket/{socket_name}/command",
             json.dumps({"msgId": msg_id, "action": body.action}),
         )
+
+    # Complete active DB session when stopping
+    if body.action == "stop":
+        from ..services.mqtt_handlers import _socket_name_to_id
+        socket_id = _socket_name_to_id(socket_name)
+        active_session = session_service.get_active_for_socket(db, pedestal_id, socket_id)
+        if active_session:
+            session_service.complete(db, active_session)
+            await ws_manager.broadcast({
+                "event": "session_completed",
+                "data": {
+                    "session_id": active_session.id,
+                    "pedestal_id": pedestal_id,
+                    "socket_id": socket_id,
+                    "energy_kwh": active_session.energy_kwh,
+                    "customer_id": active_session.customer_id,
+                },
+            })
+
     await ws_manager.broadcast({
         "event": "direct_cmd_sent",
         "data": {"pedestal_id": pedestal_id, "target": socket_name, "action": body.action},
@@ -497,6 +519,7 @@ async def direct_water_cmd(
     """
     Send a direct action to a water valve (V1–V2) via opta/cmd/water.
     Valid actions: activate, stop, maintenance.
+    On stop: also completes any active DB session for this valve.
     """
     if valve_name not in ("V1", "V2"):
         raise HTTPException(status_code=400, detail="valve_name must be V1 or V2")
@@ -512,6 +535,23 @@ async def direct_water_cmd(
             f"pedestal/{pedestal_id}/water/{valve_name}/command",
             json.dumps({"msgId": msg_id, "action": body.action}),
         )
+
+    # Complete active DB session when stopping
+    if body.action == "stop":
+        active_session = session_service.get_active_for_socket(db, pedestal_id, None)
+        if active_session:
+            session_service.complete(db, active_session)
+            await ws_manager.broadcast({
+                "event": "session_completed",
+                "data": {
+                    "session_id": active_session.id,
+                    "pedestal_id": pedestal_id,
+                    "socket_id": None,
+                    "water_liters": active_session.water_liters,
+                    "customer_id": active_session.customer_id,
+                },
+            })
+
     await ws_manager.broadcast({
         "event": "direct_cmd_sent",
         "data": {"pedestal_id": pedestal_id, "target": valve_name, "action": body.action},

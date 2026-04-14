@@ -228,6 +228,55 @@ OTP prints to the backend console (SMTP not configured by default).
 
 ---
 
+## Git Workflow — Pushing Code
+
+**Branch strategy:** `develop` = daily work, `main` = releases only.
+
+### Step-by-step: commit → push → deploy
+
+```bash
+# 1. Switch to develop and commit
+git checkout develop
+git add <files>
+git commit -m "type(scope): description"
+#    Pre-commit hook runs: 212 pytest + bandit + semgrep + gap checks
+#    Commit fails if any check fails — fix and retry
+
+# 2. Push develop
+git push origin develop
+
+# 3. Merge develop into main
+git checkout main
+git merge develop
+
+# 4. Push main (release)
+CLOUD_IOT_RELEASE=1 git push origin main
+#    Pre-push hook runs: full test suite again + Playwright (if backend running)
+#    Requires CLOUD_IOT_RELEASE=1 env var (no interactive terminal in Claude Code)
+#    From an interactive terminal, you can type "release" when prompted instead
+
+# 5. Deploy to NUC
+ssh cloud_iot@marina-iot
+sudo bash ~/Cloud_IOT/nuc_image/upgrade.sh
+```
+
+### Git hooks summary
+
+| Hook | When | What it does |
+|---|---|---|
+| **pre-commit** | Every `git commit` | pytest (212 tests) + bandit + semgrep + eslint + GAP-1..4 checks |
+| **pre-push to main** | `git push origin main` | Verifies develop is merged, runs full test suite + Playwright, requires release confirmation |
+| **pre-push to develop** | `git push origin develop` | No extra checks (pre-commit already ran) |
+
+### Important rules
+
+- **Never commit directly to main** — always go through develop first
+- **Never skip hooks** (`--no-verify`) — if a test fails, fix it
+- **`CLOUD_IOT_RELEASE=1`** is required when pushing main from non-interactive terminals (Claude Code, CI). From a regular terminal, the hook prompts you to type "release"
+- If pre-commit fails, the commit did NOT happen — fix the issue and commit again (do NOT amend)
+
+---
+
 ## NUC Deployment
 
 The production system runs at `/opt/cloud-iot/` on Ubuntu 24.04.

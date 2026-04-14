@@ -236,11 +236,27 @@ The production system runs at `/opt/cloud-iot/` on Ubuntu 24.04.
 >
 > | Path | Purpose | Managed by |
 > |---|---|---|
-> | `/opt/cloud-iot/` | **Production app** — what is actually running | systemd |
+> | `/opt/cloud-iot/` | **Production app** — what is actually running | systemd + Docker |
 > | `~/Cloud_IOT/` | Git repo — source of truth for updates | git |
 >
 > The git repo is NOT the running app. Do NOT run uvicorn from `~/Cloud_IOT/`.
 > Do NOT install packages into `~/Cloud_IOT/backend/.venv-nuc` for production purposes.
+
+### NUC Services
+
+| Service | Type | What it runs | Check status |
+|---|---|---|---|
+| `cloud-iot-backend` | systemd | Uvicorn (FastAPI) on :8000 | `systemctl status cloud-iot-backend` |
+| `cloud-iot-compose` | systemd (starts Docker) | Docker Compose for MQTT broker | `systemctl status cloud-iot-compose` |
+| `pedestal-mqtt-broker` | Docker container | Eclipse Mosquitto 2.0 on :1883 | `docker ps \| grep mosquitto` |
+| `nginx` | systemd | Reverse proxy + static frontend | `systemctl status nginx` |
+| `cloudflared` | systemd | Cloudflare Tunnel | `systemctl status cloudflared` |
+| `tailscaled` | systemd | Tailscale VPN | `systemctl status tailscaled` |
+
+> **Mosquitto runs in Docker, NOT as a systemd service.** The `cloud-iot-compose` systemd unit
+> starts Docker Compose which in turn starts the `pedestal-mqtt-broker` container.
+> `systemctl status mosquitto` will show "not found" — this is expected.
+> To check MQTT broker status, use `docker ps | grep mosquitto`.
 
 ---
 
@@ -286,26 +302,37 @@ cd /opt/cloud-iot/backend
 **The ONLY correct way to update production code on the NUC:**
 
 ```bash
-# Run on the NUC (via SSH through Tailscale or Cloudflare)
+# SSH into the NUC (via Tailscale or Cloudflare)
+ssh cloud_iot@marina-iot
+
+# Run the upgrade script
 sudo bash ~/Cloud_IOT/nuc_image/upgrade.sh
 ```
 
-This script:
-- Pulls latest `main` from GitHub into `~/Cloud_IOT`
-- **Always checks venv health first** — if `.venv` is missing for any reason, recreates it and installs all packages before doing anything else
-- Detects what changed (backend / frontend)
-- Copies changed files to `/opt/cloud-iot/`
-- Installs new Python packages if `requirements.txt` changed
-- Rebuilds and deploys frontend if needed
-- Restarts only the affected services
-- Preserves `.env` and databases — never touches them
-- Logs everything to `/var/log/cloud-iot/upgrade.log`
+**What the script does (step by step):**
+1. Shows current version (`git rev-parse --short HEAD` in `~/Cloud_IOT`)
+2. `git fetch origin main` — checks GitHub for new commits
+3. If already up to date → exits
+4. Shows list of commits to apply + which areas changed (backend / frontend)
+5. Asks for confirmation (`Apply upgrade? [y/N]`)
+6. `git pull origin main` — pulls latest code into `~/Cloud_IOT`
+7. **Venv health check** — if `/opt/cloud-iot/backend/.venv/bin/pip` is missing, recreates the entire venv and installs all packages
+8. If frontend changed → `npm install` + `npm run build` → copies `dist/` to `/opt/cloud-iot/frontend/dist/` → reloads nginx
+9. If `requirements.txt` changed → `pip install -r requirements.txt`
+10. Copies `~/Cloud_IOT/backend/app/` → `/opt/cloud-iot/backend/app/`
+11. `systemctl restart cloud-iot-backend` → waits up to 15s for it to come up
+12. Shows summary: previous version, new version, service status
+13. Logs everything to `/var/log/cloud-iot/upgrade.log`
 
-The `cloud-iot upgrade` CLI command (alias: `cloud-iot update`) does the same but is intended for interactive use from the NUC shell. Both spellings work.
+**What it preserves (never touched):**
+- `/opt/cloud-iot/backend/.env` — all configuration
+- `/opt/cloud-iot/backend/pedestal.db` — IoT data
+- `/opt/cloud-iot/backend/data/users.db` — auth/customers
+- Docker MQTT broker — not restarted unless Docker config changes
 
 **Never do this instead:**
 ```bash
-# WRONG — do not do this manually before running upgrade.sh
+# WRONG — do not git pull manually before running upgrade.sh
 cd ~/Cloud_IOT && git pull origin main
 ```
 If you `git pull` manually first, `upgrade.sh` will see "already up to date" and skip copying files to `/opt/cloud-iot/`. The production code will remain outdated.
@@ -377,16 +404,22 @@ sudo journalctl -u cloud-iot-backend -n 50 --no-pager  # last 50 lines
 | `marina/cabinet/{id}/cmd/socket/{n}` | Backend → Device | `{"cmd":"enable\|disable"}` |
 | `marina/cabinet/{id}/outlet/PWR-{n}/cmd/stop` | Backend → Device | `{"cmd":"stop"}` |
 
-### OPTA schema (`opta/...`) — cabinetId carried in JSON payload
+### OPTA schema (`opta/...`) — cabinetId resolution
+> **Important:** Only `opta/status` and `opta/door/status` carry `cabinetId` at the top level.
+> Socket, water, power, event, and ack payloads do **NOT** include `cabinetId`.
+> The backend caches `cabinetId` from the periodic `opta/status` heartbeat (every ~60s)
+> and uses it as a fallback. Events carry `cabinetId` nested under `device.cabinetId`.
+> Backend → Device commands always include `cabinetId` in the payload.
+
 | Topic | Direction | Payload |
 |---|---|---|
 | `opta/status` | Device → Backend | `{"cabinetId":"...","seq":N,"uptime_ms":N,"door":"closed"}` |
-| `opta/sockets/Q{1-4}/status` | Device → Backend | `{"cabinetId":"...","id":"Q1","state":"idle\|active\|fault\|blocked","hw_status":"on\|off","session":{...},"ts":N}` |
-| `opta/sockets/Q{1-4}/power` | Device → Backend | `{"cabinetId":"...","id":"Q1","watts":N,"kwh_total":N,"ts":N}` |
-| `opta/water/V{1-2}/status` | Device → Backend | `{"cabinetId":"...","id":"V1","state":"idle\|active","hw_status":"on\|off","total_l":N,"session_l":N,"ts":N}` |
+| `opta/sockets/Q{1-4}/status` | Device → Backend | `{"id":"Q1","state":"idle\|active\|fault\|blocked","hw_status":"on\|off","session":{...},"ts":N}` *(no cabinetId)* |
+| `opta/sockets/Q{1-4}/power` | Device → Backend | `{"id":"Q1","watts":N,"kwh_total":N,"ts":N}` *(no cabinetId)* |
+| `opta/water/V{1-2}/status` | Device → Backend | `{"id":"V1","state":"idle\|active","hw_status":"on\|off","total_l":N,"session_l":N,"ts":N}` *(no cabinetId)* |
 | `opta/door/status` | Device → Backend | `{"cabinetId":"...","door":"open\|closed","ts":"..."}` |
-| `opta/events` | Device → Backend | `{"cabinetId":"...","eventId":"...","eventType":"TelemetryUpdate\|AlarmRaised\|SessionEnded",...}` |
-| `opta/acks` | Device → Backend | `{"cabinetId":"...","cmd_topic":"...","status":"ok\|err","ts":N}` |
+| `opta/events` | Device → Backend | `{"eventId":"...","eventType":"...","device":{"cabinetId":"...","outletId":"Q2",...},...}` *(cabinetId nested in device)* |
+| `opta/acks` | Device → Backend | `{"cmd_topic":"...","status":"ok\|err","ts":N}` *(no cabinetId)* |
 | `opta/cmd/socket/Q{1-4}` | Backend → Device | `{"msgId":"...","cabinetId":"...","action":"activate\|stop\|maintenance"}` |
 | `opta/cmd/water/V{1-2}` | Backend → Device | `{"msgId":"...","cabinetId":"...","action":"activate\|stop\|maintenance"}` |
 | `opta/cmd/led` | Backend → Device | `{"cabinetId":"...","color":"green\|red\|blue\|yellow\|off","state":"on\|off\|blink"}` |

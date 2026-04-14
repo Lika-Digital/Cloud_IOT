@@ -192,7 +192,7 @@ info "Previous: ${CURRENT_COMMIT} — ${CURRENT_DESCR}"
 info "Now:      ${NEW_COMMIT} — $(git log -1 --pretty='%s')"
 echo ""
 echo -e "  ${BOLD}Service status:${NC}"
-for svc in cloud-iot-backend mosquitto nginx; do
+for svc in cloud-iot-backend nginx; do
   STATE=$(systemctl is-active "$svc" 2>/dev/null || echo "not installed")
   if [ "$STATE" = "active" ]; then
     echo -e "    ${GREEN}●${NC} ${svc}: ${STATE}"
@@ -200,6 +200,12 @@ for svc in cloud-iot-backend mosquitto nginx; do
     echo -e "    ${YELLOW}●${NC} ${svc}: ${STATE}"
   fi
 done
+# Mosquitto runs in Docker, not as a systemd service
+if command -v docker &>/dev/null && docker ps --format '{{.Names}}' 2>/dev/null | grep -q "pedestal-mqtt-broker"; then
+  echo -e "    ${GREEN}●${NC} mosquitto (docker): running"
+else
+  echo -e "    ${YELLOW}●${NC} mosquitto (docker): not running"
+fi
 echo ""
 info "Log: ${LOG_FILE}"
 echo ""

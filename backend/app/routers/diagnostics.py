@@ -5,7 +5,7 @@ POST /api/pedestals/{id}/diagnostics/run
   → Publishes MQTT diagnostic request
   → Waits up to 12s for pedestal response
   → Returns per-sensor pass/fail + overall status
-  → Marks pedestal.initialized=True if all sensors pass
+  → Marks pedestal.initialized=True if all sensors respond (status known)
 """
 import json
 import logging
@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from ..database import get_db
 from ..models.pedestal import Pedestal
-from ..services.diagnostics_manager import diagnostics_manager, EXPECTED_SENSORS
+from ..services.diagnostics_manager import diagnostics_manager, EXPECTED_SENSORS, LEGACY_SENSORS
 from ..services.mqtt_client import mqtt_service
 from ..auth.dependencies import require_admin
 from ..auth.models import User
@@ -39,8 +39,7 @@ async def run_diagnostics(pedestal_id: int, db: DBSession = Depends(get_db), _: 
           "socket_4": ...,
           "water":       ...,
           "temperature": ...,
-          "moisture":    ...,
-          "camera":      ...
+          "moisture":    ...
       },
       "all_ok": bool,
       "initialized": bool,
@@ -118,15 +117,16 @@ async def run_diagnostics(pedestal_id: int, db: DBSession = Depends(get_db), _: 
     if raw is None:
         return {
             "pedestal_id": pedestal_id,
-            "sensors": {s: "missing" for s in EXPECTED_SENSORS},
+            "sensors": {s: "missing" for s in LEGACY_SENSORS},
             "all_ok": False,
             "initialized": pedestal.initialized,
             "error": "No response from pedestal — check that it is powered on and connected to the MQTT broker.",
         }
 
-    # Normalise: fill in any missing sensors as "missing"
-    sensors = {s: raw.get(s, "missing") for s in EXPECTED_SENSORS}
-    all_ok = all(v == "ok" for v in sensors.values())
+    # Normalise: fill in any missing sensors as "missing" (no camera for legacy pedestals)
+    sensors = {s: raw.get(s, "missing") for s in LEGACY_SENSORS}
+    # Initialized = all sensors responded (status known), regardless of ok/fail
+    all_ok = all(v != "missing" for v in sensors.values())
 
     # Persist initialization status
     if all_ok and not pedestal.initialized:

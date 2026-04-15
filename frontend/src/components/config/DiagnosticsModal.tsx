@@ -20,12 +20,11 @@ const SENSOR_LABELS: Record<string, string> = {
   water:       'Water Meter',
   temperature: 'Temperature Sensor',
   moisture:    'Moisture Sensor',
-  camera:      'Camera',
 }
 
 const SENSOR_ICONS: Record<string, string> = {
   socket_1: '🔌', socket_2: '🔌', socket_3: '🔌', socket_4: '🔌',
-  water: '💧', temperature: '🌡️', moisture: '💦', camera: '📷',
+  water: '💧', temperature: '🌡️', moisture: '💦',
 }
 
 interface DiagnosticsModalProps {
@@ -62,7 +61,7 @@ export default function DiagnosticsModal({ pedestalId, pedestalName, onClose }: 
   useEffect(() => { run() }, [])
 
   const passCount = result
-    ? Object.values(result.sensors).filter((v) => v === 'ok').length
+    ? Object.values(result.sensors).filter((v) => v !== 'missing').length
     : 0
   const totalCount = Object.keys(SENSOR_LABELS).length
 
@@ -114,7 +113,7 @@ export default function DiagnosticsModal({ pedestalId, pedestalName, onClose }: 
                 <div className="bg-green-900/20 border border-green-700/40 rounded-lg px-4 py-3 flex items-center gap-3">
                   <span className="text-3xl">✅</span>
                   <div>
-                    <p className="text-green-300 font-medium text-sm">All sensors OK</p>
+                    <p className="text-green-300 font-medium text-sm">All sensors responding</p>
                     <p className="text-green-400 text-xs mt-0.5">Pedestal is initialized and ready to use</p>
                   </div>
                 </div>

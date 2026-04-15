@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 EXPECTED_SENSORS = ["socket_1", "socket_2", "socket_3", "socket_4",
                     "water", "temperature", "moisture", "camera"]
 
+# Legacy pedestal sensors (no camera — it's not part of Arduino hardware)
+LEGACY_SENSORS = ["socket_1", "socket_2", "socket_3", "socket_4",
+                  "water", "temperature", "moisture"]
+
 
 class DiagnosticsManager:
     def __init__(self):

@@ -57,6 +57,12 @@ async def run_diagnostics(pedestal_id: int, db: DBSession = Depends(get_db), _: 
     if cfg and getattr(cfg, "opta_client_id", None):
         cabinet_id = cfg.opta_client_id
 
+        # Register the waiter BEFORE publishing to avoid race condition
+        # (Opta can respond within milliseconds)
+        import asyncio
+        event = asyncio.Event()
+        diagnostics_manager._events[pedestal_id] = event
+
         # Send diagnostic request to Opta via MQTT
         mqtt_service.publish(
             "opta/cmd/diagnostic",
@@ -65,12 +71,22 @@ async def run_diagnostics(pedestal_id: int, db: DBSession = Depends(get_db), _: 
         logger.info(f"Diagnostics request sent to Opta cabinet {cabinet_id} (pedestal {pedestal_id})")
 
         # Wait for response on opta/diagnostic topic
-        raw = await diagnostics_manager.wait_for_result(pedestal_id, timeout=12.0)
+        try:
+            await asyncio.wait_for(event.wait(), timeout=12.0)
+            raw = diagnostics_manager._results.get(pedestal_id)
+        except asyncio.TimeoutError:
+            logger.warning(f"Diagnostics timeout for Opta {cabinet_id} (pedestal {pedestal_id})")
+            raw = None
+        finally:
+            diagnostics_manager._events.pop(pedestal_id, None)
+            diagnostics_manager._results.pop(pedestal_id, None)
 
         if raw is not None:
-            # Opta responded — use its result
+            # Opta responded — use its mapped result
             sensors = {s: raw.get(s, "missing") for s in EXPECTED_SENSORS}
-            all_ok = all(v == "ok" for v in sensors.values())
+            # For Opta cabinets: camera is not part of the cabinet, don't fail on it
+            opta_sensors = {k: v for k, v in sensors.items() if k != "camera"}
+            all_ok = all(v == "ok" for v in opta_sensors.values())
         else:
             # Opta didn't respond — fall back to DB-derived state
             logger.warning(f"No diagnostic response from Opta {cabinet_id} — falling back to DB state")

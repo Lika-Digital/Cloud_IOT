@@ -134,22 +134,13 @@ async def _opta_time_sync():
     """
     Publish current UTC time to opta/cmd/time every 60 minutes.
     Also fires once on startup (after a short delay for MQTT to connect).
-    The Opta has no RTC — it needs this to show correct timestamps.
+    Additionally triggered on Opta restart (seq:0) via mqtt_handlers._publish_time_sync.
     """
-    import json as _json
+    from .services.mqtt_handlers import _publish_time_sync
     await asyncio.sleep(10)  # wait for MQTT to connect
     while True:
         try:
-            now = datetime.utcnow()
-            epoch = int(now.timestamp())
-            payload = _json.dumps({
-                "msgId": f"timesync-{epoch}",
-                "action": "sync",
-                "epoch": epoch,
-                "iso": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            })
-            mqtt_service.publish("opta/cmd/time", payload)
-            logger.info("Time sync published to opta/cmd/time: epoch=%d iso=%s", epoch, now.strftime("%Y-%m-%dT%H:%M:%SZ"))
+            _publish_time_sync()
         except Exception as e:
             logger.warning("Time sync failed: %s", e)
         await asyncio.sleep(3600)  # every 60 minutes
@@ -420,6 +411,23 @@ async def lifespan(app: FastAPI):
     # Start MQTT
     loop = asyncio.get_event_loop()
     mqtt_service.start(loop)
+
+    # Clear stale marina/cabinet retained messages (from a dead MQTT client).
+    # Publishing empty payload to a retained topic deletes the retained message.
+    async def _clear_stale_retained():
+        await asyncio.sleep(5)  # wait for MQTT to connect
+        stale_topics = [
+            "marina/cabinet/MAR_KRK_ORM_01/status",
+            "marina/cabinet/MAR_KRK_ORM_01/door/state",
+        ]
+        for topic in stale_topics:
+            try:
+                mqtt_service._client.publish(topic, payload=b"", qos=0, retain=True)
+                logger.info("Cleared stale retained message on %s", topic)
+            except Exception as e:
+                logger.warning("Failed to clear retained message on %s: %s", topic, e)
+
+    asyncio.create_task(_clear_stale_retained())
 
     # Start SNMP trap receiver (IP temperature sensors)
     from .services import snmp_trap_service

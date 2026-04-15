@@ -31,16 +31,18 @@ def _get_cabinet_id(db: DBSession, pedestal_id: int) -> str | None:
 
 
 def _publish_socket_approve(db: DBSession, pedestal_id: int, socket_id: int):
+    """Approve socket — Opta valid actions: activate, stop only."""
     cabinet_id = _get_cabinet_id(db, pedestal_id)
+    msg_id = str(int(datetime.utcnow().timestamp() * 1000))
     if cabinet_id:
-        # Publish to both marina and opta schemas — device responds to whichever it subscribes to
         mqtt_service.publish(
             f"marina/cabinet/{cabinet_id}/cmd/socket/E{socket_id}",
             json.dumps({"cmd": "enable"}),
         )
+        # Opta expects {"action": "activate"}, not {"cmd": "enable"}
         mqtt_service.publish(
             f"opta/cmd/socket/Q{socket_id}",
-            json.dumps({"cabinetId": cabinet_id, "cmd": "enable"}),
+            json.dumps({"msgId": msg_id, "cabinetId": cabinet_id, "action": "activate"}),
         )
     else:
         mqtt_service.publish(
@@ -50,15 +52,18 @@ def _publish_socket_approve(db: DBSession, pedestal_id: int, socket_id: int):
 
 
 def _publish_socket_reject(db: DBSession, pedestal_id: int, socket_id: int, reason: str):
+    """Reject socket — Opta valid actions: activate, stop only."""
     cabinet_id = _get_cabinet_id(db, pedestal_id)
+    msg_id = str(int(datetime.utcnow().timestamp() * 1000))
     if cabinet_id:
         mqtt_service.publish(
             f"marina/cabinet/{cabinet_id}/cmd/socket/E{socket_id}",
             json.dumps({"cmd": "disable"}),
         )
+        # Opta expects {"action": "stop"}, not {"cmd": "disable"}
         mqtt_service.publish(
             f"opta/cmd/socket/Q{socket_id}",
-            json.dumps({"cabinetId": cabinet_id, "cmd": "disable"}),
+            json.dumps({"msgId": msg_id, "cabinetId": cabinet_id, "action": "stop"}),
         )
     else:
         mqtt_service.publish(

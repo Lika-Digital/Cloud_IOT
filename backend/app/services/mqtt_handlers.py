@@ -205,22 +205,37 @@ async def _handle_marina_socket(cabinet_id: str, socket_name: str, payload: str)
         return
 
     raw_state = data.get("state", "")
-    # Map firmware states → legacy schema expected by _handle_socket_status
-    status = "connected" if raw_state == "active" else "disconnected"
     socket_id = _socket_name_to_id(socket_name)
 
     db = SessionLocal()
     try:
         pedestal_id = _cabinet_to_pedestal_id(db, cabinet_id)
+        if pedestal_id is None:
+            logger.warning("[Marina] Could not resolve cabinet '%s' to pedestal_id", cabinet_id)
+            return
+
+        # Update SocketState connected flag (informational) without triggering
+        # the legacy pending approval flow. Sessions are managed by OutletActivated
+        # events and Control Center commands, not by socket status changes.
+        from ..models.pedestal_config import SocketState
+        _ensure_pedestal(db, pedestal_id)
+        now = datetime.utcnow()
+        is_connected = raw_state in ("active", "idle")  # anything not fault/blocked
+        state_row = db.query(SocketState).filter(
+            SocketState.pedestal_id == pedestal_id,
+            SocketState.socket_id == socket_id,
+        ).first()
+        if state_row:
+            state_row.connected = is_connected
+            state_row.updated_at = now
+        else:
+            state_row = SocketState(pedestal_id=pedestal_id, socket_id=socket_id, connected=is_connected)
+            db.add(state_row)
+        db.commit()
     finally:
         db.close()
 
-    if pedestal_id is None:
-        logger.warning("[Marina] Could not resolve cabinet '%s' to pedestal_id", cabinet_id)
-        return
-
-    logger.debug("[Marina] cabinet=%s socket=%s(%d) state=%s→%s", cabinet_id, socket_name, socket_id, raw_state, status)
-    await _handle_socket_status(pedestal_id, socket_id, status)
+    logger.debug("[Marina] cabinet=%s socket=%s(%d) state=%s", cabinet_id, socket_name, socket_id, raw_state)
     # Rich broadcast for Control Center UI
     await ws_manager.broadcast({
         "event": "opta_socket_status",
@@ -396,6 +411,16 @@ async def _handle_marina_events(cabinet_id: str, payload: str):
             await _handle_event_session_ended(db, pedestal_id, outlet_id, resource, data)
         elif event_type == "UserPluggedIn":
             await _handle_event_user_plugged_in(db, pedestal_id, outlet_id, resource, data)
+        elif event_type == "AlarmRaised":
+            alarm = data.get("alarm", {})
+            code = alarm.get("code", "UNKNOWN")
+            severity = alarm.get("severity", "MEDIUM")
+            _hw_error(
+                f"pedestal_{pedestal_id}",
+                f"Opta alarm: {code} (severity={severity})",
+                details=json.dumps(data),
+            )
+            logger.warning("[Event] AlarmRaised pedestal=%d code=%s severity=%s", pedestal_id, code, severity)
     finally:
         db.close()
 
@@ -412,7 +437,11 @@ async def _handle_marina_events(cabinet_id: str, payload: str):
 
 
 async def _handle_event_user_plugged_in(db, pedestal_id: int, outlet_id: str, resource: str, data: dict):
-    """UserPluggedIn — physical plug detected. Set socket to pending (operator approval flow)."""
+    """UserPluggedIn — informational only. Marks socket as physically connected.
+
+    No approval flow: operator can activate from Control Center or customer
+    from mobile app. Session is created on OutletActivated, not here.
+    """
     from ..models.pedestal_config import SocketState
 
     is_water = resource == "WATER"
@@ -426,32 +455,27 @@ async def _handle_event_user_plugged_in(db, pedestal_id: int, outlet_id: str, re
     ).first()
     if state:
         state.connected = True
-        state.operator_status = "pending"
-        state.operator_status_at = now
         state.updated_at = now
     else:
         state = SocketState(
             pedestal_id=pedestal_id,
             socket_id=socket_id,
             connected=True,
-            operator_status="pending",
-            operator_status_at=now,
         )
         db.add(state)
     db.commit()
 
     berth_id = data.get("device", {}).get("berthId", "")
-    logger.info("[Event] UserPluggedIn %s (berth=%s) → socket %d pending", outlet_id, berth_id, socket_id)
-
-    from .audit_service import log_transition
-    log_transition(db, None, pedestal_id, socket_id, "socket_connected", "system")
+    logger.info("[Event] UserPluggedIn %s (berth=%s, socket=%d) — plug detected, awaiting activate", outlet_id, berth_id, socket_id)
 
     await ws_manager.broadcast({
-        "event": "socket_pending",
+        "event": "user_plugged_in",
         "data": {
             "pedestal_id": pedestal_id,
             "socket_id": socket_id,
+            "outlet_id": outlet_id,
             "berth_id": berth_id,
+            "resource": resource,
         },
     })
 
@@ -634,12 +658,38 @@ def _opta_cabinet_id(payload: str, topic_hint: str) -> str | None:
 
 
 async def _handle_opta_status(payload: str):
-    """opta/status — cabinet heartbeat (same as marina status but cabinetId in payload)."""
+    """opta/status — cabinet heartbeat (same as marina status but cabinetId in payload).
+
+    When seq=0 (Opta just restarted), publish a time sync immediately.
+    """
     global _opta_cached_cabinet_id
     cabinet_id = _opta_cabinet_id(payload, "opta/status")
     if cabinet_id:
         _opta_cached_cabinet_id = cabinet_id
         await _handle_marina_status(cabinet_id, payload)
+
+        # Detect Opta restart and send time sync
+        try:
+            data = json.loads(payload)
+            if data.get("seq") == 0:
+                _publish_time_sync()
+        except (json.JSONDecodeError, Exception):
+            pass
+
+
+def _publish_time_sync():
+    """Publish current UTC time to opta/cmd/time for Opta RTC sync."""
+    from .mqtt_client import mqtt_service
+    now = datetime.utcnow()
+    epoch = int(now.timestamp())
+    payload = json.dumps({
+        "msgId": f"timesync-{int(now.timestamp() * 1000)}",
+        "action": "sync",
+        "epoch": epoch,
+        "iso": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    })
+    mqtt_service.publish("opta/cmd/time", payload)
+    logger.info("Time sync → opta/cmd/time: epoch=%d iso=%s", epoch, now.strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
 async def _handle_opta_socket(socket_name: str, payload: str):
@@ -766,11 +816,40 @@ async def _handle_opta_diagnostic(payload: str):
     if pedestal_id is None:
         return
 
-    # Map Opta sensor names to expected format
+    # Map Opta diagnostic response to expected sensor format.
+    # Opta sends: {"power":[{"id":"Q1","state":"idle","hw":"off"},...], "water":[...]}
+    # Backend expects: {"socket_1":"ok"|"fail"|"missing", "water":"ok", ...}
     from .diagnostics_manager import diagnostics_manager
-    sensors = data.get("sensors", data)
+
+    sensors = {}
+    power_arr = data.get("power", [])
+    for item in power_arr:
+        idx = _socket_name_to_id(item.get("id", "Q1"))
+        hw = item.get("hw", "off")
+        state = item.get("state", "idle")
+        if hw == "fault" or state == "fault":
+            sensors[f"socket_{idx}"] = "fail"
+        else:
+            sensors[f"socket_{idx}"] = "ok"
+
+    water_arr = data.get("water", [])
+    water_ok = all(w.get("hw", "off") != "fault" for w in water_arr) if water_arr else False
+    sensors["water"] = "ok" if water_ok else ("fail" if water_arr else "missing")
+
+    # Opta doesn't have separate temp/moisture/camera sensors
+    sensors["temperature"] = "ok" if data.get("mqtt") == "connected" else "missing"
+    sensors["moisture"] = "ok" if data.get("mqtt") == "connected" else "missing"
+    sensors["camera"] = "missing"
+
+    # Also pass the full raw response for rich display
+    sensors["_raw"] = data
+
     diagnostics_manager.complete_request(pedestal_id, sensors)
-    logger.info("[Opta] Diagnostic response for cabinet %s (pedestal %d)", cabinet_id, pedestal_id)
+    logger.info("[Opta] Diagnostic response for cabinet %s (pedestal %d): power=%s water=%s time=%s",
+                cabinet_id, pedestal_id,
+                [f"{p['id']}:{p.get('hw','?')}" for p in power_arr],
+                [f"{w['id']}:{w.get('hw','?')}" for w in water_arr],
+                data.get("time", "?"))
 
 
 async def _handle_socket_status(pedestal_id: int, socket_id: int, payload: str):

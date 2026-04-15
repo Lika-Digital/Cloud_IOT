@@ -127,10 +127,18 @@ Accessible via the **Control Center** tab when a pedestal is open in the Dashboa
 - Command ACK Log: rolling last 30 entries from `opta/acks` with status (expandable)
 
 **Commands (admin only — publish directly to OPTA via MQTT):**
-- Sockets Q1–Q4: `Activate` / `Stop` / `Maintenance` → `opta/cmd/socket/Q{n}` with `{"action":"activate|stop|maintenance"}`
-- Water Valves V1–V2: `Activate` / `Stop` / `Maintenance` → `opta/cmd/water/V{n}`
+- Sockets Q1–Q4: `Activate` / `Stop` → `opta/cmd/socket/Q{n}` with `{"action":"activate|stop"}` (only two valid actions)
+- Water Valves V1–V2: `Activate` / `Stop` → `opta/cmd/water/V{n}` with `{"action":"activate|stop"}`
 - LED Control: color picker (`green / red / blue / yellow / off`) + state (`on / off / blink`) → `opta/cmd/led`
 - Reset Device: double-click confirmation → `opta/cmd/reset` (interrupts all active sessions)
+- Time Sync: auto-published to `opta/cmd/time` on Opta restart (seq:0) and every 60 minutes
+
+**Session workflow (no manual approval needed):**
+- `UserPluggedIn` event = informational only (plug detected, socket marked connected)
+- Operator activates from Control Center → Opta responds with `OutletActivated` → session auto-created
+- Customer activates from mobile app → same flow
+- Operator stops from Control Center → session auto-completed
+- No approve/reject flow for Opta sockets — sessions managed entirely via Control Center or mobile app
 
 **New backend endpoints:**
 | Method | Path | Description |
@@ -147,6 +155,7 @@ Accessible via the **Control Center** tab when a pedestal is open in the Dashboa
 | `opta_water_status` | `opta/water/V*/status` received — state, hw_status, total_l, session_l |
 | `opta_status` | Heartbeat — cabinet ID, seq, uptime_ms, door |
 | `marina_ack` | Command ACK from OPTA — now includes `pedestal_id` |
+| `user_plugged_in` | Physical plug detected — informational, no approval needed |
 
 ### External API Gateway
 - 14 documented endpoints + 11 webhook events (static catalog)
@@ -469,10 +478,13 @@ sudo journalctl -u cloud-iot-backend -n 50 --no-pager  # last 50 lines
 | `opta/door/status` | Device → Backend | `{"cabinetId":"...","door":"open\|closed","ts":"..."}` |
 | `opta/events` | Device → Backend | `{"eventId":"...","eventType":"...","device":{"cabinetId":"...","outletId":"Q2",...},...}` *(cabinetId nested in device)* |
 | `opta/acks` | Device → Backend | `{"cmd_topic":"...","status":"ok\|err","ts":N}` *(no cabinetId)* |
-| `opta/cmd/socket/Q{1-4}` | Backend → Device | `{"msgId":"...","cabinetId":"...","action":"activate\|stop\|maintenance"}` |
-| `opta/cmd/water/V{1-2}` | Backend → Device | `{"msgId":"...","cabinetId":"...","action":"activate\|stop\|maintenance"}` |
+| `opta/cmd/socket/Q{1-4}` | Backend → Device | `{"msgId":"...","cabinetId":"...","action":"activate\|stop"}` |
+| `opta/cmd/water/V{1-2}` | Backend → Device | `{"msgId":"...","cabinetId":"...","action":"activate\|stop"}` |
 | `opta/cmd/led` | Backend → Device | `{"cabinetId":"...","color":"green\|red\|blue\|yellow\|off","state":"on\|off\|blink"}` |
 | `opta/cmd/reset` | Backend → Device | `{"cabinetId":"...","cmd":"reset"}` |
+| `opta/cmd/time` | Backend → Device | `{"msgId":"timesync-...","action":"sync","epoch":N,"iso":"..."}` *(auto: on seq:0 + every 60min)* |
+| `opta/cmd/diagnostic` | Backend → Device | `{"cabinetId":"...","request":"all"}` |
+| `opta/diagnostic` | Device → Backend | `{"cabinetId":"...","power":[...],"water":[...],"time":"...","door":"..."}` |
 
 ---
 

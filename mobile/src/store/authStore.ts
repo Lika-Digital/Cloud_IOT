@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import AsyncStorage from '@react-native-async-storage/async-storage'
+import { readToken, writeToken, clearToken } from './secureTokenStorage'
 
 interface CustomerProfile {
   id: number
@@ -18,7 +18,9 @@ interface AuthState {
   loadFromStorage: () => Promise<void>
 }
 
-// Synchronous token getter for axios interceptor
+// Synchronous token getter for the axios interceptor. Mirrors the in-memory
+// Zustand value; the SecureStore read is async so we cannot call it from
+// every request interceptor, hence the cached variable.
 let _token: string | null = null
 export const getToken = () => _token
 
@@ -31,9 +33,10 @@ export const useAuthStore = create<AuthState>((set) => ({
     _token = token
     set({ token })
     if (token) {
-      AsyncStorage.setItem('customer_token', token)
+      // Fire-and-forget; failures are non-fatal (user re-logs in on next launch).
+      void writeToken(token)
     } else {
-      AsyncStorage.removeItem('customer_token')
+      void clearToken()
     }
   },
 
@@ -42,11 +45,13 @@ export const useAuthStore = create<AuthState>((set) => ({
   logout: () => {
     _token = null
     set({ token: null, profile: null })
-    AsyncStorage.removeItem('customer_token')
+    void clearToken()
   },
 
   loadFromStorage: async () => {
-    const stored = await AsyncStorage.getItem('customer_token')
+    // readToken() transparently migrates AsyncStorage → SecureStore on first
+    // run after the upgrade, so existing logged-in users keep their session.
+    const stored = await readToken()
     if (stored) {
       _token = stored
       set({ token: stored, loaded: true })

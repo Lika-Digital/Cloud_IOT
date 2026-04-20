@@ -45,10 +45,22 @@ async def create_invoice_for_session(
         paid=0,
         created_at=datetime.utcnow(),
     )
+    from sqlalchemy.exc import IntegrityError
     try:
         user_db.add(invoice)
         user_db.commit()
         user_db.refresh(invoice)
+    except IntegrityError:
+        # Another code path (operator stop + customer stop + MQTT disconnect
+        # can race) already inserted an invoice for this session. Return the
+        # winning row so callers stay idempotent.
+        user_db.rollback()
+        existing = user_db.query(Invoice).filter(Invoice.session_id == session.id).first()
+        if existing:
+            logger.info(f"Invoice for session {session.id} already existed (race); returning id={existing.id}")
+            return existing
+        # UNIQUE violation with no row visible — propagate, this is genuinely broken.
+        raise
     except Exception as e:
         user_db.rollback()
         try:

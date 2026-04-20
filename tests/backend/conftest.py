@@ -113,13 +113,16 @@ def setup_test_databases():
 
     yield
 
-    # Teardown: drop test DB files
+    # Teardown: drop test DB files. On Windows, sqlite + SQLAlchemy pool can
+    # keep file handles for a beat after dispose(); ignore that rather than
+    # failing the session with PermissionError — the files get clobbered on
+    # the next run anyway.
     test_engine.dispose()
     test_user_engine.dispose()
     for path in ["tests/test_pedestal.db", "tests/test_users.db"]:
         try:
             os.remove(path)
-        except FileNotFoundError:
+        except (FileNotFoundError, PermissionError):
             pass
 
 

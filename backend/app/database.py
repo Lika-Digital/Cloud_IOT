@@ -109,49 +109,68 @@ def _migrate_schema():
     _backfill_session_totals(log)
 
 
-def _backfill_session_totals(log):
+# Sanity bounds so a firmware glitch (e.g. garbage packet reading 9999 kWh)
+# cannot be adopted as truth by the backfill. A single-session upper bound is
+# what we protect against, not a legitimate long-running session.
+_MAX_SANE_KWH_PER_SESSION = 1000.0   # 3.5 kW × 286 h; real sessions never hit this.
+_MAX_SANE_LITERS_PER_SESSION = 10000.0
+
+
+def _backfill_session_totals(log, db_engine=None):
     """
     Recompute energy_kwh / water_liters for completed sessions that report 0
     but have non-zero sensor readings. Fixes rows written before the
     session_service.complete() max() correction. Idempotent — only touches
     sessions where the current value is 0/NULL and readings prove otherwise.
+
+    Out-of-bound readings (> _MAX_SANE_*) are excluded from the MAX() so a
+    single corrupt packet cannot blow up a real session's total.
+
+    db_engine override is for tests that need to target an isolated engine.
     """
     from sqlalchemy import text
-    with engine.connect() as conn:
-        fix_kwh = text("""
-            UPDATE sessions
-            SET energy_kwh = (
-                SELECT MAX(value) FROM sensor_readings
-                WHERE sensor_readings.session_id = sessions.id
-                  AND sensor_readings.type = 'kwh_total'
-            )
-            WHERE status = 'completed' AND type = 'electricity'
-              AND (energy_kwh IS NULL OR energy_kwh = 0)
-              AND EXISTS (
-                SELECT 1 FROM sensor_readings
-                WHERE sensor_readings.session_id = sessions.id
-                  AND sensor_readings.type = 'kwh_total'
-                  AND sensor_readings.value > 0
-              )
-        """)
-        fix_water = text("""
-            UPDATE sessions
-            SET water_liters = (
-                SELECT MAX(value) FROM sensor_readings
-                WHERE sensor_readings.session_id = sessions.id
-                  AND sensor_readings.type = 'total_liters'
-            )
-            WHERE status = 'completed' AND type = 'water'
-              AND (water_liters IS NULL OR water_liters = 0)
-              AND EXISTS (
-                SELECT 1 FROM sensor_readings
-                WHERE sensor_readings.session_id = sessions.id
-                  AND sensor_readings.type = 'total_liters'
-                  AND sensor_readings.value > 0
-              )
-        """)
-        kwh_rows = conn.execute(fix_kwh).rowcount
-        water_rows = conn.execute(fix_water).rowcount
+    target = db_engine if db_engine is not None else engine
+    # Bound params — the numeric upper bound is treated as data, not SQL, so
+    # semgrep's avoid-sqlalchemy-text rule is happy and we're injection-proof.
+    fix_kwh = text("""
+        UPDATE sessions
+        SET energy_kwh = (
+            SELECT MAX(value) FROM sensor_readings
+            WHERE sensor_readings.session_id = sessions.id
+              AND sensor_readings.type = 'kwh_total'
+              AND sensor_readings.value < :max_kwh
+        )
+        WHERE status = 'completed' AND type = 'electricity'
+          AND (energy_kwh IS NULL OR energy_kwh = 0)
+          AND EXISTS (
+            SELECT 1 FROM sensor_readings
+            WHERE sensor_readings.session_id = sessions.id
+              AND sensor_readings.type = 'kwh_total'
+              AND sensor_readings.value > 0
+              AND sensor_readings.value < :max_kwh
+          )
+    """)
+    fix_water = text("""
+        UPDATE sessions
+        SET water_liters = (
+            SELECT MAX(value) FROM sensor_readings
+            WHERE sensor_readings.session_id = sessions.id
+              AND sensor_readings.type = 'total_liters'
+              AND sensor_readings.value < :max_liters
+        )
+        WHERE status = 'completed' AND type = 'water'
+          AND (water_liters IS NULL OR water_liters = 0)
+          AND EXISTS (
+            SELECT 1 FROM sensor_readings
+            WHERE sensor_readings.session_id = sessions.id
+              AND sensor_readings.type = 'total_liters'
+              AND sensor_readings.value > 0
+              AND sensor_readings.value < :max_liters
+          )
+    """)
+    with target.connect() as conn:
+        kwh_rows = conn.execute(fix_kwh, {"max_kwh": _MAX_SANE_KWH_PER_SESSION}).rowcount
+        water_rows = conn.execute(fix_water, {"max_liters": _MAX_SANE_LITERS_PER_SESSION}).rowcount
         conn.commit()
         if kwh_rows or water_rows:
             log.info(f"Backfilled session totals: {kwh_rows} electricity, {water_rows} water sessions")

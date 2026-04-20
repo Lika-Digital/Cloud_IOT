@@ -483,6 +483,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Smart Pedestal IoT API", version="1.0.0", lifespan=lifespan)
 
+# Rate limiter — must be wired BEFORE any router that uses @limiter.limit().
+# See app/ratelimit.py for the key function (honours X-Forwarded-For).
+from .ratelimit import limiter, rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins.split(","),

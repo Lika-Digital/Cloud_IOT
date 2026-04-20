@@ -21,6 +21,8 @@ from ..auth.schemas import (
     RegisterRequest,
     UserPatch,
 )
+from ..config import settings
+from ..ratelimit import limiter
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -51,6 +53,7 @@ def service_token(body: LoginRequest, db: Session = Depends(get_user_db)):
 
 
 @router.post("/login")
+@limiter.limit("10/minute")
 def login(request: Request, body: LoginRequest, db: Session = Depends(get_user_db)):
     """Step 1: validate credentials and send OTP to email."""
     from ..services.security_monitor import record_login_failure, record_login_success, check_brute_force
@@ -97,7 +100,8 @@ def login(request: Request, body: LoginRequest, db: Session = Depends(get_user_d
 
 
 @router.post("/verify-otp", response_model=TokenResponse)
-def verify_otp_endpoint(body: VerifyOtpRequest, db: Session = Depends(get_user_db)):
+@limiter.limit("5/minute")
+def verify_otp_endpoint(request: Request, body: VerifyOtpRequest, db: Session = Depends(get_user_db)):
     """Step 2: verify OTP code and return JWT token."""
     user = db.query(User).filter(User.email == body.email).first()
     if not user:
@@ -114,8 +118,17 @@ def verify_otp_endpoint(body: VerifyOtpRequest, db: Session = Depends(get_user_d
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
-def register(body: RegisterRequest, db: Session = Depends(get_user_db)):
-    """Public self-registration. Creates a monitor-role account; admin can promote later."""
+@limiter.limit("3/hour")
+def register(request: Request, body: RegisterRequest, db: Session = Depends(get_user_db)):
+    """Public self-registration. Creates a monitor-role account; admin can promote later.
+
+    Gated by ALLOW_SELF_REGISTRATION — off by default so production deployments
+    do not expose the dashboard to anyone reaching the public URL. Flip the flag
+    in .env only if you want open sign-up (dev / admin-invite flows).
+    """
+    if not settings.allow_self_registration:
+        # 404 not 403: do not advertise the route exists at all to callers.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     if db.query(User).filter(User.email == body.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
     user = User(

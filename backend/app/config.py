@@ -18,7 +18,19 @@ class Settings(BaseSettings):
 
     # JWT — must be set via JWT_SECRET env var in production
     jwt_secret: Optional[str] = None
-    jwt_expire_minutes: int = 480  # 8 hours
+    jwt_expire_minutes: int = 120  # 2 hours (shortened from 8h for XSS-exposure resilience)
+    jwt_refresh_threshold_minutes: int = 30  # re-issue token if <30 min left on active request
+
+    # Deployment marker. When set to "production", startup guards (e.g. refuse
+    # to boot with an unset JWT_SECRET) become strict. Leave unset/"dev" for
+    # local development where a random secret per restart is acceptable.
+    app_env: str = "dev"
+
+    # Public self-registration toggle (POST /api/auth/register creating monitor
+    # accounts). Off by default so production deployments do not expose the
+    # dashboard to any visitor of the public URL; flip to true only in dev or
+    # behind an admin invite workflow.
+    allow_self_registration: bool = False
 
     # OTP
     otp_expire_minutes: int = 10
@@ -70,13 +82,32 @@ class Settings(BaseSettings):
 settings = Settings()
 
 # ── JWT secret resolution ─────────────────────────────────────────────────────
-if settings.jwt_secret is None:
-    settings.jwt_secret = secrets.token_hex(32)
-    _config_logger.critical(
-        "SECURITY WARNING: JWT_SECRET is not set. A random secret was generated — "
-        "all sessions will be invalidated on every restart. "
-        "Set JWT_SECRET in your .env file."
-    )
+# In production (APP_ENV=production) we refuse to start with an unset or short
+# secret — a per-restart random key would silently invalidate every session
+# whenever systemd restarts the backend, and short keys are trivially
+# brute-forceable. In dev we accept whatever is provided; if it is missing we
+# auto-generate so local runs keep working.
+_MIN_SECRET_LEN = 32
+_is_prod = settings.app_env.lower() == "production"
+if settings.jwt_secret is None or len(settings.jwt_secret) < _MIN_SECRET_LEN:
+    if _is_prod:
+        raise RuntimeError(
+            f"JWT_SECRET must be set to a value of at least {_MIN_SECRET_LEN} characters "
+            f"when APP_ENV=production. Generate one with `python -c \"import secrets; "
+            f"print(secrets.token_hex(32))\"` and write it to backend/.env."
+        )
+    if settings.jwt_secret is None:
+        settings.jwt_secret = secrets.token_hex(32)
+        _config_logger.critical(
+            "SECURITY WARNING: JWT_SECRET is not set. A random secret was generated — "
+            "all sessions will be invalidated on every restart. Set JWT_SECRET in your .env file."
+        )
+    else:
+        _config_logger.warning(
+            "JWT_SECRET is shorter than %d chars — tolerated in dev, REJECTED in production. "
+            "Set a longer secret (e.g. secrets.token_hex(32)) before enabling APP_ENV=production.",
+            _MIN_SECRET_LEN,
+        )
 
 # ── Admin password check ──────────────────────────────────────────────────────
 if settings.default_admin_password is None:

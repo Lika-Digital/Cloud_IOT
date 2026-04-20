@@ -9,12 +9,14 @@ from ..auth.customer_dependencies import require_customer
 from ..auth.tokens import create_customer_token
 from ..auth.password import hash_password, verify_password
 from ..schemas.customer import RegisterRequest, LoginRequest, TokenResponse, CustomerProfileResponse
+from ..ratelimit import limiter
 
 router = APIRouter(prefix="/api/customer/auth", tags=["customer-auth"])
 
 
 @router.post("/register", response_model=TokenResponse)
-def register(body: RegisterRequest, user_db: DBSession = Depends(get_user_db)):
+@limiter.limit("3/hour")
+def register(request: Request, body: RegisterRequest, user_db: DBSession = Depends(get_user_db)):
     existing = user_db.query(Customer).filter(Customer.email == body.email).first()
     if existing:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
@@ -35,6 +37,7 @@ def register(body: RegisterRequest, user_db: DBSession = Depends(get_user_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
+@limiter.limit("10/minute")
 def login(request: Request, body: LoginRequest, user_db: DBSession = Depends(get_user_db)):
     from ..services.security_monitor import record_login_failure, record_login_success, check_brute_force
     from ..services.error_log_service import log_warning, log_error

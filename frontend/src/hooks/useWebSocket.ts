@@ -88,6 +88,17 @@ export function useWebSocket() {
           removePendingSocket(msg.data.pedestal_id as number, msg.data.socket_id as number)
           break
         }
+        case 'user_plugged_in': {
+          // Informational: firmware reports a physical plug-in. Treat the
+          // socket as connected so the ZoneButton shows amber until the
+          // operator / customer activates it.
+          const pedId = msg.data.pedestal_id as number
+          const sockId = msg.data.socket_id as number | null | undefined
+          if (sockId != null) {
+            addPendingSocket(pedId, sockId)
+          }
+          break
+        }
         case 'session_created': {
           // When a session becomes active, clear the socket-level pending flag
           if (msg.data.status === 'active') {

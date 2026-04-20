@@ -40,7 +40,7 @@ async def get_hardware_stats(_: User = Depends(require_admin)):
         alarm = next((a for a in alarms if a["param"] == action["param"]), None)
         if alarm:
             await ws_manager.broadcast({
-                "type": "hardware_alarm",
+                "event": "hardware_alarm",
                 "data": {
                     "alarm_level": alarm["level"],
                     "param":       alarm["param"],

@@ -50,6 +50,7 @@ def consumption_by_socket(
             Session.socket_id,
             Session.type,
             func.sum(Session.energy_kwh).label("total_energy_kwh"),
+            func.sum(Session.water_liters).label("total_water_liters"),
             func.count(Session.id).label("session_count"),
         )
         .filter(Session.status == "completed")
@@ -63,6 +64,7 @@ def consumption_by_socket(
             "socket_id": row.socket_id,
             "type": row.type,
             "total_energy_kwh": row.total_energy_kwh or 0.0,
+            "total_water_liters": row.total_water_liters or 0.0,
             "session_count": row.session_count,
         }
         for row in rows

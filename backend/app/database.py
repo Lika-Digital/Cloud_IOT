@@ -105,3 +105,53 @@ def _migrate_schema():
                 )
                 conn.commit()
                 log.info(f"DB migration: added column '{column}' to '{table}'")
+
+    _backfill_session_totals(log)
+
+
+def _backfill_session_totals(log):
+    """
+    Recompute energy_kwh / water_liters for completed sessions that report 0
+    but have non-zero sensor readings. Fixes rows written before the
+    session_service.complete() max() correction. Idempotent — only touches
+    sessions where the current value is 0/NULL and readings prove otherwise.
+    """
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        fix_kwh = text("""
+            UPDATE sessions
+            SET energy_kwh = (
+                SELECT MAX(value) FROM sensor_readings
+                WHERE sensor_readings.session_id = sessions.id
+                  AND sensor_readings.type = 'kwh_total'
+            )
+            WHERE status = 'completed' AND type = 'electricity'
+              AND (energy_kwh IS NULL OR energy_kwh = 0)
+              AND EXISTS (
+                SELECT 1 FROM sensor_readings
+                WHERE sensor_readings.session_id = sessions.id
+                  AND sensor_readings.type = 'kwh_total'
+                  AND sensor_readings.value > 0
+              )
+        """)
+        fix_water = text("""
+            UPDATE sessions
+            SET water_liters = (
+                SELECT MAX(value) FROM sensor_readings
+                WHERE sensor_readings.session_id = sessions.id
+                  AND sensor_readings.type = 'total_liters'
+            )
+            WHERE status = 'completed' AND type = 'water'
+              AND (water_liters IS NULL OR water_liters = 0)
+              AND EXISTS (
+                SELECT 1 FROM sensor_readings
+                WHERE sensor_readings.session_id = sessions.id
+                  AND sensor_readings.type = 'total_liters'
+                  AND sensor_readings.value > 0
+              )
+        """)
+        kwh_rows = conn.execute(fix_kwh).rowcount
+        water_rows = conn.execute(fix_water).rowcount
+        conn.commit()
+        if kwh_rows or water_rows:
+            log.info(f"Backfilled session totals: {kwh_rows} electricity, {water_rows} water sessions")

@@ -84,11 +84,14 @@ class SessionService:
         if session.type == "electricity":
             kwh_readings = [r.value for r in readings if r.type == "kwh_total"]
             if kwh_readings:
-                session.energy_kwh = max(kwh_readings) - min(kwh_readings)
+                # Firmware sends session-cumulative energy (resets to 0 at session
+                # start, rises to session total). Final value = max, which also
+                # covers short sessions where only the SessionEnded reading exists.
+                session.energy_kwh = max(kwh_readings)
         elif session.type == "water":
             liter_readings = [r.value for r in readings if r.type == "total_liters"]
             if liter_readings:
-                session.water_liters = max(liter_readings) - min(liter_readings)
+                session.water_liters = max(liter_readings)
 
         try:
             db.commit()

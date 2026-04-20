@@ -9,12 +9,20 @@ import {
   CartesianGrid, Tooltip, Legend,
 } from 'recharts'
 
+interface SocketBreakdownRow {
+  socket_id: number | null
+  type: string
+  total_energy_kwh: number
+  total_water_liters?: number
+  session_count: number
+}
+
 export default function Analytics() {
   const [pedestals, setPedestals]       = useState<Pedestal[]>([])
   const [selectedId, setSelectedId]     = useState<number | undefined>(undefined)
   const [dailyData, setDailyData]       = useState<DailyConsumption[]>([])
   const [summary, setSummary]           = useState<SessionSummary | null>(null)
-  const [socketData, setSocketData]     = useState<unknown[]>([])
+  const [socketData, setSocketData]     = useState<SocketBreakdownRow[]>([])
   const [comparison, setComparison]     = useState<PedestalConsumption[]>([])
   const [days, setDays]                 = useState(30)
 
@@ -131,22 +139,40 @@ export default function Analytics() {
         <ConsumptionChart data={dailyData} />
       </div>
 
-      {/* Socket breakdown */}
-      {(socketData as { socket_id: number | null; type: string; total_energy_kwh: number; session_count: number }[]).length > 0 && (
+      {/* Socket breakdown — electricity sockets + water meters */}
+      {(socketData as SocketBreakdownRow[]).length > 0 && (
         <div className="card mb-6">
           <h3 className="text-lg font-semibold text-white mb-4">Consumption by Socket</h3>
           <div className="space-y-2">
-            {(socketData as { socket_id: number | null; type: string; total_energy_kwh: number; session_count: number }[]).map((row, i) => (
-              <div key={i} className="flex items-center justify-between py-2 border-b border-gray-800 last:border-0">
-                <span className="text-gray-300">
-                  {row.type === 'electricity' ? `Socket ${row.socket_id}` : 'Water Meter'}
-                </span>
-                <div className="flex gap-6 text-sm">
-                  <span className="text-gray-400">{row.session_count} sessions</span>
-                  <span className="text-white font-mono">{row.total_energy_kwh.toFixed(3)} kWh</span>
-                </div>
-              </div>
-            ))}
+            {(socketData as SocketBreakdownRow[])
+              .slice()
+              .sort((a, b) => {
+                if (a.type !== b.type) return a.type === 'electricity' ? -1 : 1
+                return (a.socket_id ?? 0) - (b.socket_id ?? 0)
+              })
+              .map((row, i) => {
+                const isWater = row.type === 'water'
+                const label = isWater
+                  ? `Water Meter${row.socket_id ? ` ${row.socket_id}` : ''}`
+                  : `Socket ${row.socket_id}`
+                const value = isWater
+                  ? `${(row.total_water_liters ?? 0).toFixed(1)} L`
+                  : `${(row.total_energy_kwh ?? 0).toFixed(3)} kWh`
+                return (
+                  <div key={i} className="flex items-center justify-between py-2 border-b border-gray-800 last:border-0">
+                    <span className="text-gray-300 flex items-center gap-2">
+                      <span className={isWater ? 'text-cyan-400' : 'text-blue-400'}>
+                        {isWater ? '💧' : '⚡'}
+                      </span>
+                      {label}
+                    </span>
+                    <div className="flex gap-6 text-sm">
+                      <span className="text-gray-400">{row.session_count} sessions</span>
+                      <span className="text-white font-mono">{value}</span>
+                    </div>
+                  </div>
+                )
+              })}
           </div>
         </div>
       )}

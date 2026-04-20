@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useStore } from '../../store'
 import { useAuthStore } from '../../store/authStore'
-import { stopSession, approveSocket, rejectSocket } from '../../api'
+import { stopSession, approveSocket, rejectSocket, directWaterCmd } from '../../api'
 import pedestalImg from '../../assets/pedestal.jpg'
 import CameraModal from './CameraModal'
 import PedestalControlCenter from './PedestalControlCenter'
@@ -13,8 +13,8 @@ const SOCKET_ZONES = [
   { id: 2,             label: 'Socket 2', type: 'electricity' as const, color: 'red',   left: '3%',   top: '52%', size: 52 },
   { id: 3,             label: 'Socket 3', type: 'electricity' as const, color: 'blue',  right: '3%',  top: '37%', size: 52 },
   { id: 4,             label: 'Socket 4', type: 'electricity' as const, color: 'red',   right: '3%',  top: '52%', size: 52 },
-  { id: 'water-left',  label: 'Water L',  type: 'water'       as const, color: 'gray',  left: '4%',   top: '87%', size: 40 },
-  { id: 'water-right', label: 'Water R',  type: 'water'       as const, color: 'gray',  right: '4%',  top: '87%', size: 40 },
+  { id: 'water-left',  label: 'Water V1', type: 'water'       as const, color: 'gray',  left: '4%',   top: '87%', size: 40, valve: 'V1' as const },
+  { id: 'water-right', label: 'Water V2', type: 'water'       as const, color: 'gray',  right: '4%',  top: '87%', size: 40, valve: 'V2' as const },
   { id: 'camera',      label: 'Camera',   type: 'camera'      as const, color: 'black', right: '3%',  top: '10%', size: 38 },
 ]
 
@@ -167,19 +167,27 @@ function ZoneButton({
   isSelected: boolean
   onClick: () => void
 }) {
-  const { pendingSessions, activeSessions, pendingSockets } = useStore()
+  const { pendingSessions, activeSessions, pendingSockets, optaWaterStates } = useStore()
 
   const socketId = typeof zone.id === 'number' ? zone.id : null
   const isWater = zone.type === 'water'
   const isCamera = zone.type === 'camera'
+  const valveName = isWater && 'valve' in zone ? zone.valve : null
 
-  const pending = isCamera || isWater
-    ? (!isCamera ? pendingSessions.find((s) => s.pedestal_id === pedestalId && s.type === 'water') : undefined)
-    : pendingSessions.find((s) => s.pedestal_id === pedestalId && s.socket_id === socketId && s.type === 'electricity')
+  // Per-valve firmware state (V1 / V2 tracked independently via opta/water/V*/status)
+  const valveState = valveName ? optaWaterStates[`${pedestalId}-${valveName}`] : null
 
-  const active = isCamera || isWater
-    ? (!isCamera ? activeSessions.find((s) => s.pedestal_id === pedestalId && s.type === 'water') : undefined)
-    : activeSessions.find((s) => s.pedestal_id === pedestalId && s.socket_id === socketId && s.type === 'electricity')
+  const pending = isCamera
+    ? undefined
+    : isWater
+      ? undefined
+      : pendingSessions.find((s) => s.pedestal_id === pedestalId && s.socket_id === socketId && s.type === 'electricity')
+
+  const active = isCamera
+    ? undefined
+    : isWater
+      ? (valveState?.state === 'active' ? valveState : undefined)
+      : activeSessions.find((s) => s.pedestal_id === pedestalId && s.socket_id === socketId && s.type === 'electricity')
 
   // Socket-level pending: MQTT connected, no session yet, waiting for operator/mobile
   const socketPending = !isCamera && !isWater && socketId !== null
@@ -263,7 +271,7 @@ function ZoneButton({
 // ─── Socket Detail Panel ─────────────────────────────────────────────────────
 
 function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pedestalId: number; onClose: () => void }) {
-  const { pendingSessions, activeSessions, socketLiveData, waterLiveData, updateSession, pendingSockets, addSession, removePendingSocket } = useStore()
+  const { pendingSessions, activeSessions, socketLiveData, updateSession, pendingSockets, addSession, removePendingSocket, optaWaterStates } = useStore()
   const { role } = useAuthStore()
   const isAdmin = role === 'admin'
   const [actionError, setActionError] = useState<string | null>(null)
@@ -273,6 +281,8 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
   const isWater = zoneId === 'water-left' || zoneId === 'water-right'
   const isCamera = zoneId === 'camera'
   const socketId = typeof zoneId === 'number' ? zoneId : null
+  const valveName = zoneId === 'water-left' ? 'V1' : zoneId === 'water-right' ? 'V2' : null
+  const valveState = valveName ? optaWaterStates[`${pedestalId}-${valveName}`] : null
   const socketPending = !isWater && !isCamera && socketId !== null
     ? !!pendingSockets[`${pedestalId}-${socketId}`]
     : false
@@ -281,22 +291,31 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
   if (isCamera) return null
   const zone = SOCKET_ZONES.find((z) => z.id === zoneId)!
 
+  // Water sessions are tracked per-valve via firmware state. Since backend
+  // session rows use socket_id=None for water (shared V1/V2), use the live
+  // opta_water_status stream to distinguish which valve is active.
   const pendingSession = isWater
-    ? pendingSessions.find((s) => s.pedestal_id === pedestalId && s.type === 'water')
+    ? undefined
     : pendingSessions.find((s) => s.pedestal_id === pedestalId && s.socket_id === socketId && s.type === 'electricity')
 
   const activeSession = isWater
-    ? activeSessions.find((s) => s.pedestal_id === pedestalId && s.type === 'water')
+    ? undefined
     : activeSessions.find((s) => s.pedestal_id === pedestalId && s.socket_id === socketId && s.type === 'electricity')
+
+  const waterActive = isWater && valveState?.state === 'active'
+  const isActive = !!activeSession || waterActive
 
   const liveData = !isWater && socketId ? socketLiveData[socketId] : null
 
   const handleStop = async () => {
-    if (!activeSession) return
     setActionError(null)
     try {
-      const updated = await stopSession(activeSession.id)
-      updateSession({ id: updated.id, status: 'completed' })
+      if (isWater && valveName) {
+        await directWaterCmd(pedestalId, valveName, 'stop')
+      } else if (activeSession) {
+        const updated = await stopSession(activeSession.id)
+        updateSession({ id: updated.id, status: 'completed' })
+      }
     } catch {
       setActionError('Stop failed — check connection and try again.')
     }
@@ -338,16 +357,16 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className={`w-4 h-4 rounded-full ${
-            activeSession ? 'bg-green-400 animate-pulse' :
+            isActive ? 'bg-green-400 animate-pulse' :
             pendingSession ? 'bg-amber-400 animate-pulse' : 'bg-gray-600'
           }`} />
           <h3 className="text-lg font-bold text-white">{zone.label}</h3>
           <span className={
-            activeSession ? 'badge-active' :
+            isActive ? 'badge-active' :
             pendingSession ? 'badge-pending' :
             'badge bg-gray-800 text-gray-500'
           }>
-            {activeSession ? 'Active' : pendingSession ? 'Starting…' : 'Idle'}
+            {isActive ? 'Active' : pendingSession ? 'Starting…' : 'Idle'}
           </span>
         </div>
         <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-xl leading-none">✕</button>
@@ -361,7 +380,7 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
       )}
 
       {/* Socket-level pending: MQTT connected, waiting for operator/mobile approval */}
-      {socketPending && !pendingSession && !activeSession && (
+      {socketPending && !pendingSession && !isActive && (
         <div className="bg-amber-900/20 border border-amber-700/40 rounded-lg p-4 space-y-3">
           <p className="text-amber-300 font-medium">Device Connected — Awaiting Approval</p>
           <p className="text-xs text-gray-400">A device was plugged in. Approve to start the session or reject to deny.</p>
@@ -396,7 +415,7 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
       )}
 
       {/* Pending state (transient — session is activating via DB pending) */}
-      {pendingSession && !activeSession && (
+      {pendingSession && !isActive && (
         <div className="bg-amber-900/20 border border-amber-700/40 rounded-lg p-4 space-y-2">
           <p className="text-amber-300 font-medium">Session starting…</p>
           {pendingSession.customer_name && (
@@ -406,7 +425,7 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
       )}
 
       {/* Active state */}
-      {activeSession && (
+      {isActive && (
         <div className="space-y-3">
           <div className="bg-green-900/20 border border-green-700/40 rounded-lg p-4 space-y-3">
             {!isWater && liveData && (
@@ -415,13 +434,13 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
                 <LiveMetric label="Total Energy" value={`${liveData.kwh_total.toFixed(4)} kWh`} />
               </>
             )}
-            {isWater && waterLiveData && (
+            {isWater && valveState && (
               <>
-                <LiveMetric label="Flow Rate" value={`${waterLiveData.lpm.toFixed(1)} L/min`} big />
-                <LiveMetric label="Total" value={`${waterLiveData.total_liters.toFixed(2)} L`} />
+                <LiveMetric label="Session Volume" value={`${(valveState.session_l ?? 0).toFixed(2)} L`} big />
+                <LiveMetric label="Total" value={`${(valveState.total_l ?? 0).toFixed(2)} L`} />
               </>
             )}
-            <SessionTimer startedAt={activeSession.started_at} />
+            {activeSession && <SessionTimer startedAt={activeSession.started_at} />}
           </div>
           {isAdmin && (
             <button className="btn-warning w-full" onClick={handleStop}>Stop Session</button>
@@ -430,7 +449,7 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
       )}
 
       {/* Idle state */}
-      {!socketPending && !pendingSession && !activeSession && (
+      {!socketPending && !pendingSession && !isActive && (
         <div className="text-center py-8 text-gray-500">
           <p className="text-4xl mb-3">{isWater ? '💧' : '🔌'}</p>
           <p>{isWater ? 'No water flow detected' : 'No device connected'}</p>

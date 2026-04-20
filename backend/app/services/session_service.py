@@ -27,6 +27,12 @@ class SessionService:
         session_type: str,
         customer_id: int | None = None,
     ) -> Session:
+        """Create a pending session. If a partial unique index has already
+        accepted another thread's insert for the same (pedestal, socket, type)
+        with status in (pending, active), return that row instead of raising —
+        MQTT firmware retries must not create duplicates.
+        """
+        from sqlalchemy.exc import IntegrityError
         session = Session(
             pedestal_id=pedestal_id,
             socket_id=socket_id,
@@ -39,6 +45,19 @@ class SessionService:
             db.add(session)
             db.commit()
             db.refresh(session)
+        except IntegrityError:
+            db.rollback()
+            existing = self.get_active_for_socket(db, pedestal_id, socket_id, session_type=session_type)
+            if existing:
+                logger.info(
+                    f"create_pending: active session {existing.id} already exists for "
+                    f"pedestal={pedestal_id} socket={socket_id} type={session_type}; returning it"
+                )
+                return existing
+            _log("system", "session_service",
+                 f"IntegrityError on create_pending (pedestal={pedestal_id}, socket={socket_id}) "
+                 f"but no active row found — race without winner?")
+            raise
         except Exception as e:
             db.rollback()
             _log("system", "session_service", f"Failed to create pending session (pedestal={pedestal_id}): {e}", e)
@@ -103,17 +122,29 @@ class SessionService:
         return session
 
     def get_active_for_socket(
-        self, db: DBSession, pedestal_id: int, socket_id: int | None
+        self,
+        db: DBSession,
+        pedestal_id: int,
+        socket_id: int | None,
+        session_type: str | None = None,
     ) -> Session | None:
-        return (
+        """Find the active session for (pedestal, socket).
+
+        `session_type` filter is used by MQTT handlers so a water session on V1
+        does not accidentally collide with an electricity session carrying the
+        same numeric socket_id from a legacy row.
+        """
+        q = (
             db.query(Session)
             .filter(
                 Session.pedestal_id == pedestal_id,
                 Session.socket_id == socket_id,
                 Session.status.in_(["pending", "active"]),
             )
-            .first()
         )
+        if session_type is not None:
+            q = q.filter(Session.type == session_type)
+        return q.first()
 
     def add_reading(
         self,

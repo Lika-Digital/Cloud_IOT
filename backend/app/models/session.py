@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import String, Integer, Float, DateTime, ForeignKey
+from sqlalchemy import String, Integer, Float, DateTime, ForeignKey, Index, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ..database import Base
 
@@ -9,7 +9,10 @@ class Session(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     pedestal_id: Mapped[int] = mapped_column(Integer, ForeignKey("pedestals.id"), nullable=False)
-    socket_id: Mapped[int] = mapped_column(Integer, nullable=True)  # null = water
+    # socket_id is 1-4 for electricity sockets and 1-2 for water valves (V1, V2).
+    # Legacy completed rows may still have NULL for water; SQLite treats NULL as
+    # distinct under UNIQUE so the partial index below does not conflict.
+    socket_id: Mapped[int] = mapped_column(Integer, nullable=True)
     type: Mapped[str] = mapped_column(String(20), nullable=False)   # "electricity" | "water"
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending|active|completed|denied
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -22,4 +25,16 @@ class Session(Base):
     pedestal: Mapped["Pedestal"] = relationship("Pedestal", back_populates="sessions")  # noqa: F821
     sensor_readings: Mapped[list["SensorReading"]] = relationship(  # noqa: F821
         "SensorReading", back_populates="session"
+    )
+
+    __table_args__ = (
+        # One active (pending|active) session per (pedestal, socket, type).
+        # Firmware retries on ack loss used to duplicate; this index makes
+        # duplicate INSERT fail at the DB layer so create_pending can recover.
+        Index(
+            "ux_session_one_active_per_socket",
+            "pedestal_id", "socket_id", "type",
+            unique=True,
+            sqlite_where=text("status IN ('pending', 'active')"),
+        ),
     )

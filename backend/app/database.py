@@ -106,6 +106,19 @@ def _migrate_schema():
                 conn.commit()
                 log.info(f"DB migration: added column '{column}' to '{table}'")
 
+        # Partial unique index: only ONE session in pending|active may exist
+        # per (pedestal_id, socket_id, type). SQLite treats NULL as distinct in
+        # unique constraints, so legacy water rows with socket_id=NULL are not
+        # affected; but any future water session will have socket_id=1|2 and
+        # the index blocks firmware-retry duplicates.
+        from sqlalchemy import text
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_session_one_active_per_socket "
+            "ON sessions(pedestal_id, socket_id, type) "
+            "WHERE status IN ('pending', 'active')"
+        ))
+        conn.commit()
+
     _backfill_session_totals(log)
 
 

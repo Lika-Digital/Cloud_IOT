@@ -481,29 +481,36 @@ async def _handle_event_user_plugged_in(db, pedestal_id: int, outlet_id: str, re
 
 
 async def _handle_event_outlet_activated(db, pedestal_id: int, outlet_id: str, resource: str, data: dict):
-    """OutletActivated — create + activate a session if none exists for this outlet."""
+    """OutletActivated — create + activate a session if none exists for this outlet.
+
+    Both water valves (V1, V2) and electricity sockets (Q1–Q4) use their numeric
+    id so V1 and V2 can run independent sessions. If firmware retries the event
+    on ack loss, create_pending catches the DB-level UNIQUE violation and
+    returns the existing session instead of inserting a duplicate.
+    """
     is_water = resource == "WATER"
     socket_id = _water_name_to_id(outlet_id) if is_water else _socket_name_to_id(outlet_id)
     session_type = "water" if is_water else "electricity"
-    # Use socket_id=None for water sessions to match get_active_for_socket convention
-    lookup_socket = None if is_water else socket_id
 
-    existing = session_service.get_active_for_socket(db, pedestal_id, lookup_socket)
+    existing = session_service.get_active_for_socket(db, pedestal_id, socket_id, session_type=session_type)
     if existing:
         logger.debug("[Event] OutletActivated %s — session %d already exists", outlet_id, existing.id)
         return
 
     _ensure_pedestal(db, pedestal_id)
-    session = session_service.create_pending(db, pedestal_id, lookup_socket, session_type)
+    session = session_service.create_pending(db, pedestal_id, socket_id, session_type)
+    # If another thread won the race and create_pending returned the existing
+    # row, activate() is still safe (idempotent on 'active' status).
     session_service.activate(db, session)
-    logger.info("[Event] OutletActivated %s → created session %d (type=%s)", outlet_id, session.id, session_type)
+    logger.info("[Event] OutletActivated %s → session %d (type=%s, socket_id=%s)",
+                outlet_id, session.id, session_type, socket_id)
 
     await ws_manager.broadcast({
         "event": "session_created",
         "data": {
             "session_id": session.id,
             "pedestal_id": pedestal_id,
-            "socket_id": lookup_socket,
+            "socket_id": socket_id,
             "type": session_type,
             "status": "active",
             "started_at": session.started_at.isoformat(),
@@ -517,9 +524,9 @@ async def _handle_event_telemetry_update(db, pedestal_id: int, outlet_id: str, r
     """TelemetryUpdate — store power/water readings as SensorReading records."""
     is_water = resource == "WATER"
     socket_id = _water_name_to_id(outlet_id) if is_water else _socket_name_to_id(outlet_id)
-    lookup_socket = None if is_water else socket_id
+    session_type = "water" if is_water else "electricity"
 
-    session = session_service.get_active_for_socket(db, pedestal_id, lookup_socket)
+    session = session_service.get_active_for_socket(db, pedestal_id, socket_id, session_type=session_type)
     session_id = session.id if session and session.status == "active" else None
 
     metrics = data.get("metrics", {})
@@ -564,9 +571,9 @@ async def _handle_event_session_ended(db, pedestal_id: int, outlet_id: str, reso
     """SessionEnded — complete the DB session; store final totals from firmware."""
     is_water = resource == "WATER"
     socket_id = _water_name_to_id(outlet_id) if is_water else _socket_name_to_id(outlet_id)
-    lookup_socket = None if is_water else socket_id
+    session_type = "water" if is_water else "electricity"
 
-    session = session_service.get_active_for_socket(db, pedestal_id, lookup_socket)
+    session = session_service.get_active_for_socket(db, pedestal_id, socket_id, session_type=session_type)
     if not session:
         logger.warning("[Event] SessionEnded %s but no active session found (pedestal=%d)", outlet_id, pedestal_id)
         return
@@ -589,7 +596,7 @@ async def _handle_event_session_ended(db, pedestal_id: int, outlet_id: str, reso
         "data": {
             "session_id": session.id,
             "pedestal_id": pedestal_id,
-            "socket_id": lookup_socket,
+            "socket_id": socket_id,
             "energy_kwh": session.energy_kwh,
             "water_liters": session.water_liters,
             "customer_id": session.customer_id,

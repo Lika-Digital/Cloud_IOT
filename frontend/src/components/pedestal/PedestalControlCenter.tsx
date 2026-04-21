@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useStore } from '../../store'
 import { useAuthStore } from '../../store/authStore'
 import {
@@ -6,6 +6,8 @@ import {
   directWaterCmd,
   setLed,
   resetPedestal,
+  getSocketConfigs,
+  setSocketConfig,
 } from '../../api'
 import type { OptaSocketState, OptaWaterState, OptaLogEntry } from '../../store'
 
@@ -78,6 +80,9 @@ function SocketCard({
   socketState,
   pedestalId,
   computedState,
+  autoActivate,
+  autoSkipReason,
+  onAutoActivateChange,
   isAdmin,
   onFeedback,
 }: {
@@ -85,10 +90,17 @@ function SocketCard({
   socketState: OptaSocketState | null
   pedestalId: number
   computedState: 'idle' | 'pending' | 'active' | 'fault' | undefined
+  autoActivate: boolean
+  autoSkipReason: string | undefined
+  onAutoActivateChange: (socketId: number, value: boolean) => Promise<void>
   isAdmin: boolean
   onFeedback: (key: string, type: 'success' | 'error', text: string) => void
 }) {
   const [loading, setLoading] = useState<string | null>(null)
+  const [autoBusy, setAutoBusy] = useState(false)
+  const [autoJustSaved, setAutoJustSaved] = useState(false)
+
+  const socketId = Number(socketName.replace('Q', ''))
   // Prefer the unified socket_state_changed broadcast when we have it —
   // otherwise fall back to the raw Opta firmware state string.
   const firmwareState = socketState?.state ?? 'idle'
@@ -97,7 +109,9 @@ function SocketCard({
   const isPending = state === 'pending'
   const isActive = state === 'active'
   const isIdle = state === 'idle'
-  const pendingTip = 'Plug inserted — awaiting activation'
+  const pendingTip = autoActivate
+    ? 'Plug inserted — auto-activating in 2s'
+    : 'Plug inserted — awaiting activation'
 
   const sendCmd = async (action: string) => {
     setLoading(action)
@@ -111,6 +125,21 @@ function SocketCard({
     }
   }
 
+  const handleAutoToggle = async () => {
+    if (autoBusy) return
+    const next = !autoActivate
+    setAutoBusy(true)
+    try {
+      await onAutoActivateChange(socketId, next)
+      setAutoJustSaved(true)
+      setTimeout(() => setAutoJustSaved(false), 1500)
+    } catch {
+      onFeedback(`${socketName}-auto`, 'error', `Failed to update auto-activate for ${socketName}`)
+    } finally {
+      setAutoBusy(false)
+    }
+  }
+
   return (
     <div className="rounded-lg border border-gray-700 bg-gray-800/40 p-3 space-y-2">
       <div className="flex items-center justify-between">
@@ -121,6 +150,14 @@ function SocketCard({
           <span className="text-base">🔌</span>
           <span className="text-sm font-medium text-white">{label}</span>
           <span className="text-xs text-gray-500 font-mono">{socketName}</span>
+          {autoActivate && (
+            <span
+              className="text-[10px] font-bold text-green-400 border border-green-500/50 rounded px-1 py-px"
+              title="Auto-activate enabled — plug-in fires activate after 2s with preconditions"
+            >
+              AUTO
+            </span>
+          )}
         </div>
         <StateBadge state={state} title={isPending ? pendingTip : undefined} />
       </div>
@@ -143,29 +180,55 @@ function SocketCard({
         <p className="text-xs text-gray-600">No data received yet</p>
       )}
 
-      {isAdmin && (
-        <div className="flex gap-1.5 pt-1">
-          {/* Only show Stop when the socket is actually active. Otherwise show
-              Activate, which is only enabled for pending (plug inserted). */}
-          {isActive ? (
-            <CmdButton
-              label="Stop"
-              color="red"
-              disabled={loading !== null}
-              loading={loading === 'stop'}
-              onClick={() => sendCmd('stop')}
-            />
-          ) : (
-            <CmdButton
-              label="Activate"
-              color="green"
-              disabled={!isPending || loading !== null}
-              loading={loading === 'activate'}
-              onClick={() => sendCmd('activate')}
-              title={isIdle ? 'No plug inserted' : (isPending ? pendingTip : undefined)}
-            />
-          )}
+      {autoSkipReason && (
+        <div className="text-[11px] text-amber-300 bg-amber-900/30 border border-amber-700/40 rounded px-2 py-1">
+          Auto-activate skipped: {autoSkipReason}
         </div>
+      )}
+
+      {isAdmin && (
+        <>
+          <label className="flex items-center justify-between gap-2 pt-1 text-xs text-gray-300 select-none cursor-pointer">
+            <span className="flex items-center gap-1.5">
+              Auto-activate
+              {autoJustSaved && <span className="text-green-400">✓</span>}
+            </span>
+            <input
+              type="checkbox"
+              checked={autoActivate}
+              onChange={handleAutoToggle}
+              disabled={autoBusy}
+              className="h-3 w-3 accent-green-500 cursor-pointer"
+              aria-label={`Auto-activate ${socketName}`}
+            />
+          </label>
+
+          <div className="flex gap-1.5 pt-1">
+            {/* Only show Stop when the socket is actually active. Otherwise show
+                Activate, which is only enabled for pending (plug inserted).
+                Note: even when auto-activate is on we keep Activate visible as
+                a manual fallback while the 2-second window runs or after a
+                skip — the operator can always fire it by hand. */}
+            {isActive ? (
+              <CmdButton
+                label="Stop"
+                color="red"
+                disabled={loading !== null}
+                loading={loading === 'stop'}
+                onClick={() => sendCmd('stop')}
+              />
+            ) : (
+              <CmdButton
+                label="Activate"
+                color="green"
+                disabled={!isPending || loading !== null}
+                loading={loading === 'activate'}
+                onClick={() => sendCmd('activate')}
+                title={isIdle ? 'No plug inserted' : (isPending ? pendingTip : undefined)}
+              />
+            )}
+          </div>
+        </>
       )}
     </div>
   )
@@ -447,7 +510,34 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
     marinaDoorState,
     pedestals,
     socketComputedStates,
+    socketAutoActivate,
+    setSocketAutoActivate,
+    socketAutoSkipReasons,
   } = useStore()
+
+  // v3.5 — load per-socket auto-activate config whenever the Control Center
+  // opens for this pedestal. Tiny payload (4 booleans); no caching needed.
+  useEffect(() => {
+    let cancelled = false
+    getSocketConfigs(pedestalId).then((rows) => {
+      if (cancelled) return
+      for (const row of rows) {
+        setSocketAutoActivate(pedestalId, row.socket_id, row.auto_activate)
+      }
+    }).catch(() => { /* non-fatal — defaults to false */ })
+    return () => { cancelled = true }
+  }, [pedestalId, setSocketAutoActivate])
+
+  const onAutoActivateChange = async (socketId: number, value: boolean) => {
+    // Optimistic update — if the PATCH fails we roll back.
+    setSocketAutoActivate(pedestalId, socketId, value)
+    try {
+      await setSocketConfig(pedestalId, socketId, value)
+    } catch (e) {
+      setSocketAutoActivate(pedestalId, socketId, !value)
+      throw e
+    }
+  }
 
   const { feedbacks, show } = useCmdFeedback()
   const [resetConfirm, setResetConfirm] = useState(false)
@@ -551,13 +641,17 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
             // Socket numeric id is the digit in Q1..Q4 (matches backend
             // broadcast key `${pedestal_id}-${socket_id}`).
             const socketId = Number(name.replace('Q', ''))
+            const key = `${pedestalId}-${socketId}`
             return (
               <SocketCard
                 key={name}
                 socketName={name}
                 socketState={optaSocketStates[`${pedestalId}-${name}`] ?? null}
                 pedestalId={pedestalId}
-                computedState={socketComputedStates[`${pedestalId}-${socketId}`]}
+                computedState={socketComputedStates[key]}
+                autoActivate={!!socketAutoActivate[key]}
+                autoSkipReason={socketAutoSkipReasons[key]?.reason}
+                onAutoActivateChange={onAutoActivateChange}
                 isAdmin={isAdmin}
                 onFeedback={show}
               />

@@ -62,6 +62,12 @@ async def run_diagnostics(pedestal_id: int, db: DBSession = Depends(get_db), _: 
         event = asyncio.Event()
         diagnostics_manager._events[pedestal_id] = event
 
+        # Stamp the diagnostic-in-progress window so auto-activation knows to
+        # skip for the next 60 seconds (v3.5 precondition check).
+        from datetime import datetime as _dt
+        from ..services.mqtt_handlers import last_diagnostic_at
+        last_diagnostic_at[pedestal_id] = _dt.utcnow()
+
         # Send diagnostic request to Opta via MQTT
         mqtt_service.publish(
             "opta/cmd/diagnostic",

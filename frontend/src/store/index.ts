@@ -188,6 +188,19 @@ interface AppStore {
   socketComputedStates: Record<string, 'idle' | 'pending' | 'active' | 'fault'>
   setSocketComputedState: (pedestal_id: number, socket_id: number, state: 'idle' | 'pending' | 'active' | 'fault') => void
 
+  // v3.5 — per-socket auto-activation config, keyed by `${pedestal_id}-${socket_id}`.
+  // Populated when the Control Center opens (`getSocketConfigs`) and by the PATCH
+  // optimistic update. Consumed by SocketCard (AUTO badge, toggle state) and
+  // ZoneButton tooltip.
+  socketAutoActivate: Record<string, boolean>
+  setSocketAutoActivate: (pedestal_id: number, socket_id: number, value: boolean) => void
+
+  // v3.5 — transient "auto-activate skipped" warning per socket. Populated by
+  // the `socket_auto_activate_skipped` WS event and auto-cleared after 30 s.
+  socketAutoSkipReasons: Record<string, { reason: string; ts: number }>
+  setSocketAutoSkipReason: (pedestal_id: number, socket_id: number, reason: string) => void
+  clearSocketAutoSkipReason: (pedestal_id: number, socket_id: number) => void
+
   // Chat unread count
   unreadChatCount: number
   setUnreadChatCount: (count: number) => void
@@ -349,6 +362,30 @@ export const useStore = create<AppStore>((set) => ({
         [`${pedestal_id}-${socket_id}`]: state,
       },
     })),
+
+  socketAutoActivate: {},
+  setSocketAutoActivate: (pedestal_id, socket_id, value) =>
+    set((s) => ({
+      socketAutoActivate: {
+        ...s.socketAutoActivate,
+        [`${pedestal_id}-${socket_id}`]: value,
+      },
+    })),
+
+  socketAutoSkipReasons: {},
+  setSocketAutoSkipReason: (pedestal_id, socket_id, reason) =>
+    set((s) => ({
+      socketAutoSkipReasons: {
+        ...s.socketAutoSkipReasons,
+        [`${pedestal_id}-${socket_id}`]: { reason, ts: Date.now() },
+      },
+    })),
+  clearSocketAutoSkipReason: (pedestal_id, socket_id) =>
+    set((s) => {
+      const next = { ...s.socketAutoSkipReasons }
+      delete next[`${pedestal_id}-${socket_id}`]
+      return { socketAutoSkipReasons: next }
+    }),
 
   unreadChatCount: 0,
   setUnreadChatCount: (count) => set({ unreadChatCount: count }),

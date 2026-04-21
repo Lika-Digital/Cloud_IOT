@@ -82,6 +82,34 @@ export const getConsumptionBySocket = (pedestal_id?: number) =>
 export const getConsumptionByPedestal = () =>
   api.get<PedestalConsumption[]>('/analytics/consumption/by-pedestal').then((r) => r.data)
 
+// Per-socket auto-activation (v3.5)
+export interface SocketAutoActivateConfig {
+  socket_id: number
+  auto_activate: boolean
+}
+
+export interface AutoActivateLogEntry {
+  id: number
+  timestamp: string
+  result: 'success' | 'skipped'
+  reason: string | null
+  session_id: number | null
+}
+
+export const getSocketConfigs = (pedestalId: number) =>
+  api.get<SocketAutoActivateConfig[]>(`/pedestals/${pedestalId}/sockets/config`).then((r) => r.data)
+
+export const setSocketConfig = (pedestalId: number, socketId: number, auto_activate: boolean) =>
+  api.patch<SocketAutoActivateConfig>(
+    `/pedestals/${pedestalId}/sockets/${socketId}/config`,
+    { auto_activate },
+  ).then((r) => r.data)
+
+export const getAutoActivateLog = (pedestalId: number, socketId: number) =>
+  api.get<AutoActivateLogEntry[]>(
+    `/pedestals/${pedestalId}/sockets/${socketId}/auto-activate-log`,
+  ).then((r) => r.data)
+
 // Diagnostics
 export const runDiagnostics = (pedestalId: number) =>
   api.post<DiagnosticsResult>(`/pedestals/${pedestalId}/diagnostics/run`).then((r) => r.data)

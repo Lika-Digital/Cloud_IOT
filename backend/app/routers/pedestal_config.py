@@ -406,3 +406,99 @@ def get_health(
         }
 
     return result
+
+
+# ─── Per-socket auto-activation config (v3.5) ────────────────────────────────
+
+class SocketConfigUpdate(BaseModel):
+    auto_activate: bool
+
+
+@router.get("/api/pedestals/{pedestal_id}/sockets/config")
+def list_socket_configs(pedestal_id: int, db: Session = Depends(get_db)):
+    """Return the auto-activate setting for all 4 electricity sockets on a pedestal.
+
+    Sockets that have never been configured yet are returned as
+    `{socket_id, auto_activate: false}` — matches the model default.
+    """
+    if not db.get(Pedestal, pedestal_id):
+        raise HTTPException(status_code=404, detail="Pedestal not found")
+
+    from ..models.socket_config import SocketConfig
+    rows = db.query(SocketConfig).filter(SocketConfig.pedestal_id == pedestal_id).all()
+    by_socket = {r.socket_id: r for r in rows}
+    return [
+        {
+            "socket_id": sid,
+            "auto_activate": bool(by_socket[sid].auto_activate) if sid in by_socket else False,
+        }
+        for sid in (1, 2, 3, 4)
+    ]
+
+
+@router.patch("/api/pedestals/{pedestal_id}/sockets/{socket_id}/config")
+def update_socket_config(
+    pedestal_id: int,
+    socket_id: int,
+    body: SocketConfigUpdate,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin),
+):
+    """Update the auto-activate flag for a single socket. Admin only.
+
+    Takes effect immediately — the next UserPluggedIn event for this socket
+    reads the new value directly from SocketConfig.
+    """
+    if socket_id not in (1, 2, 3, 4):
+        raise HTTPException(status_code=400, detail="socket_id must be in 1..4")
+    if not db.get(Pedestal, pedestal_id):
+        raise HTTPException(status_code=404, detail="Pedestal not found")
+
+    from ..models.socket_config import SocketConfig
+    cfg = db.query(SocketConfig).filter(
+        SocketConfig.pedestal_id == pedestal_id,
+        SocketConfig.socket_id == socket_id,
+    ).first()
+    if cfg:
+        cfg.auto_activate = body.auto_activate
+    else:
+        cfg = SocketConfig(
+            pedestal_id=pedestal_id,
+            socket_id=socket_id,
+            auto_activate=body.auto_activate,
+        )
+        db.add(cfg)
+    db.commit()
+    db.refresh(cfg)
+    return {"socket_id": socket_id, "auto_activate": bool(cfg.auto_activate)}
+
+
+@router.get("/api/pedestals/{pedestal_id}/sockets/{socket_id}/auto-activate-log")
+def get_auto_activate_log(pedestal_id: int, socket_id: int, db: Session = Depends(get_db)):
+    """Return the last 20 auto-activation attempts for this socket, newest first."""
+    if socket_id not in (1, 2, 3, 4):
+        raise HTTPException(status_code=400, detail="socket_id must be in 1..4")
+    if not db.get(Pedestal, pedestal_id):
+        raise HTTPException(status_code=404, detail="Pedestal not found")
+
+    from ..models.auto_activation_log import AutoActivationLog
+    rows = (
+        db.query(AutoActivationLog)
+        .filter(
+            AutoActivationLog.pedestal_id == pedestal_id,
+            AutoActivationLog.socket_id == socket_id,
+        )
+        .order_by(AutoActivationLog.timestamp.desc())
+        .limit(20)
+        .all()
+    )
+    return [
+        {
+            "id": r.id,
+            "timestamp": r.timestamp.isoformat(),
+            "result": r.result,
+            "reason": r.reason,
+            "session_id": r.session_id,
+        }
+        for r in rows
+    ]

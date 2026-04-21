@@ -34,6 +34,16 @@ Mosquitto Broker (:1883)                  │                         │
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-04-21 — Per-socket auto-activation (v3.5)
+- New per-socket `auto_activate` flag (default off) — operator toggles it from the Control Center socket card. When enabled, the backend auto-fires the activate command after `UserPluggedIn`, with a 2-second firmware stabilisation delay.
+- 5 precondition checks gate the auto-fire (all must pass, in order): door closed (unknown ≡ open), no active fault on the pedestal, heartbeat within 300 s, socket not already active, no diagnostic in the last 60 s. Any failure produces a `socket_auto_activate_skipped` WebSocket event with the reason string and logs a row to the new `auto_activation_log` table.
+- Post-sleep re-check before publish — aborts if the operator manually activated during the 2 s window or the plug was yanked.
+- Door state now persisted on `PedestalConfig.door_state` (`open | closed | unknown`) so auto-activate survives a service restart.
+- 3 new admin endpoints: `GET /api/pedestals/{pid}/sockets/config`, `PATCH /api/pedestals/{pid}/sockets/{sid}/config` (admin-only), `GET /api/pedestals/{pid}/sockets/{sid}/auto-activate-log`.
+- Frontend: green `AUTO` badge next to the socket id, optimistic toggle with rollback, amber skip-reason banner below the status block (auto-clears after 30 s or when state leaves pending), dynamic tooltip `"Plug inserted — auto-activating in 2s"` vs. `"awaiting activation"` on the pedestal picture overlay.
+- 10 new tests (`test_socket_auto_activate.py`) covering default-false, PATCH admin auth, every skip path, happy path with 2 s delay, and the 20-row log endpoint. 238 → 248 total.
+- Existing socket plug state machine (v3.4) preserved as-is; auto-activate layers on top and is a no-op for sockets where the flag is false.
+
 ### 2026-04-21 — `4123e8b`  Socket plug state machine (v3.4)
 - New `pending` socket state (yellow) in the state flow
   `idle → UserPluggedIn → pending → activate → active → stop → pending|idle`.

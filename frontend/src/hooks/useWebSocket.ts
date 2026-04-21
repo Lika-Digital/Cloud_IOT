@@ -32,6 +32,8 @@ export function useWebSocket() {
     addOptaEvent,
     addOptaAck,
     setSocketComputedState,
+    setSocketAutoSkipReason,
+    clearSocketAutoSkipReason,
   } = useStore()
   const { role } = useAuthStore()
 
@@ -110,10 +112,29 @@ export function useWebSocket() {
           const state = msg.data.state as 'idle' | 'pending' | 'active' | 'fault' | undefined
           if (sockId != null && state) {
             setSocketComputedState(pedId, sockId, state)
+            // Any state transition other than pending also clears the
+            // transient "auto-activate skipped" warning — it only makes
+            // sense while the socket is still sitting pending.
+            if (state !== 'pending') {
+              clearSocketAutoSkipReason(pedId, sockId)
+            }
             // Keep pendingSockets in sync so ZoneButton logic (which already
             // reads pendingSockets for amber) produces matching visuals.
             if (state === 'pending') addPendingSocket(pedId, sockId)
             else removePendingSocket(pedId, sockId)
+          }
+          break
+        }
+        case 'socket_auto_activate_skipped': {
+          // v3.5 — backend rejected an auto-activation. Show the amber warning
+          // on the socket card; it auto-clears after 30 s or when the next
+          // `socket_state_changed` transitions away from pending.
+          const pedId = msg.data.pedestal_id as number
+          const sockId = msg.data.socket_id as number | null | undefined
+          const reason = msg.data.reason as string | undefined
+          if (sockId != null && reason) {
+            setSocketAutoSkipReason(pedId, sockId, reason)
+            setTimeout(() => clearSocketAutoSkipReason(pedId, sockId), 30_000)
           }
           break
         }

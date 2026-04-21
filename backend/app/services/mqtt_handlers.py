@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -15,6 +16,22 @@ last_heartbeat: dict[int, datetime] = {}
 # Cached cabinetId from opta/status heartbeats — used as fallback when
 # opta/sockets/… and opta/water/… payloads omit cabinetId.
 _opta_cached_cabinet_id: str | None = None
+
+# ── Auto-activation precondition inputs (v3.5) ───────────────────────────────
+# Module-level dicts are fine for process-local state — the backend is a
+# single uvicorn worker and all callers run inside the same event loop.
+# A DB column was explicitly rejected for these two (see implementation_status
+# v3.5 design decisions).
+#
+# Key: (pedestal_id, socket_id); Value: most-recent UTC datetime we saw the
+# firmware report `state="fault"` for that outlet. Cleared when state goes
+# back to anything non-fault.
+socket_fault_state: dict[tuple[int, int], datetime] = {}
+#
+# Key: pedestal_id; Value: UTC datetime when the diagnostics router last
+# published `opta/cmd/diagnostic` for this pedestal. Auto-activate refuses
+# to fire within 60 s of that timestamp.
+last_diagnostic_at: dict[int, datetime] = {}
 
 # Topic patterns — legacy pedestal/... schema
 SOCKET_STATUS_RE  = re.compile(r"pedestal/(\d+)/socket/(\d+)/status")
@@ -235,6 +252,15 @@ async def _handle_marina_socket(cabinet_id: str, socket_name: str, payload: str)
     finally:
         db.close()
 
+    # Track fault state for the auto-activate precondition (v3.5). A pedestal
+    # with ANY socket reported as `fault` is ineligible until the firmware
+    # clears it.
+    fault_key = (pedestal_id, socket_id)
+    if raw_state == "fault":
+        socket_fault_state[fault_key] = datetime.utcnow()
+    else:
+        socket_fault_state.pop(fault_key, None)
+
     logger.debug("[Marina] cabinet=%s socket=%s(%d) state=%s", cabinet_id, socket_name, socket_id, raw_state)
     # Rich broadcast for Control Center UI
     await ws_manager.broadcast({
@@ -308,13 +334,21 @@ async def _handle_marina_door(cabinet_id: str, payload: str):
         logger.warning("[Marina] Bad door payload from cabinet %s: %s", cabinet_id, e)
         return
 
+    door_state = data.get("door", "unknown")
     db = SessionLocal()
     try:
         pedestal_id = _cabinet_to_pedestal_id(db, cabinet_id)
+        # Persist door state so the auto-activate precondition check has a
+        # source of truth independent of live WebSocket subscribers.
+        if pedestal_id is not None and door_state in ("open", "closed"):
+            from ..models.pedestal_config import PedestalConfig
+            cfg = db.query(PedestalConfig).filter(PedestalConfig.pedestal_id == pedestal_id).first()
+            if cfg and getattr(cfg, "door_state", None) != door_state:
+                cfg.door_state = door_state
+                db.commit()
     finally:
         db.close()
 
-    door_state = data.get("door", "unknown")
     logger.info("[Marina] cabinet=%s door=%s", cabinet_id, door_state)
 
     await ws_manager.broadcast({
@@ -480,6 +514,11 @@ async def _handle_event_user_plugged_in(db, pedestal_id: int, outlet_id: str, re
     computed socket state to `pending` when no session is running. A session
     already in flight keeps `active` — plug re-assertions during a session
     must not flip the operator-visible state.
+
+    If the operator has enabled `SocketConfig.auto_activate` for this socket
+    we additionally kick off `_maybe_auto_activate` — a fire-and-forget task
+    that runs the 5 preconditions, waits 2 s, re-checks the socket state,
+    and publishes the activate command if everything still looks right.
     """
     is_water = resource == "WATER"
     socket_id = _water_name_to_id(outlet_id) if is_water else _socket_name_to_id(outlet_id)
@@ -507,6 +546,184 @@ async def _handle_event_user_plugged_in(db, pedestal_id: int, outlet_id: str, re
         },
     })
     await _broadcast_socket_state(pedestal_id, socket_id, computed, resource=resource)
+
+    # Auto-activation is electricity-only (spec v3.5). We always invoke
+    # `_maybe_auto_activate` when the operator has enabled it, even when the
+    # socket is already in an active session — the precondition check surfaces
+    # the "socket already active" skip reason in the broadcast + log so the
+    # operator sees an audit trail instead of silence.
+    if not is_water:
+        from ..models.socket_config import SocketConfig
+        cfg = db.query(SocketConfig).filter(
+            SocketConfig.pedestal_id == pedestal_id,
+            SocketConfig.socket_id == socket_id,
+        ).first()
+        if cfg and cfg.auto_activate:
+            asyncio.create_task(_maybe_auto_activate(pedestal_id, socket_id, outlet_id))
+
+
+# ── Auto-activation implementation (v3.5) ────────────────────────────────────
+
+_HEARTBEAT_MAX_AGE_S = 300
+_DIAGNOSTIC_LOCKOUT_S = 60
+_AUTO_ACTIVATE_DELAY_S = 2.0
+
+
+def _log_auto_activation(pedestal_id: int, socket_id: int, result: str,
+                         reason: str | None = None, session_id: int | None = None) -> None:
+    """Append a row to auto_activation_log. Uses its own Session so the caller
+    does not have to manage DB scope across the 2-second sleep window."""
+    from ..models.auto_activation_log import AutoActivationLog
+    db = SessionLocal()
+    try:
+        db.add(AutoActivationLog(
+            pedestal_id=pedestal_id,
+            socket_id=socket_id,
+            timestamp=datetime.utcnow(),
+            result=result,
+            reason=reason,
+            session_id=session_id,
+        ))
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning("Failed to record auto_activation_log row: %s", e)
+    finally:
+        db.close()
+
+
+async def _broadcast_auto_activate_skipped(pedestal_id: int, socket_id: int, reason: str) -> None:
+    await ws_manager.broadcast({
+        "event": "socket_auto_activate_skipped",
+        "data": {
+            "pedestal_id": pedestal_id,
+            "socket_id": socket_id,
+            "reason": reason,
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    })
+
+
+def _auto_activate_precondition_check(db, pedestal_id: int, socket_id: int) -> str | None:
+    """Return None if all checks pass, otherwise the skip reason string.
+
+    Check order matches the spec so the reason the operator sees is the
+    first failure, not an arbitrary one.
+    """
+    from ..models.pedestal_config import PedestalConfig
+    from ..models.session import Session as SessionModel
+
+    # 1. Door closed (unknown ≡ open per design decision).
+    cfg = db.query(PedestalConfig).filter(PedestalConfig.pedestal_id == pedestal_id).first()
+    door = getattr(cfg, "door_state", "unknown") if cfg else "unknown"
+    if door != "closed":
+        if door == "unknown":
+            return "door state unknown"
+        return "door open"
+
+    # 2. No active faults anywhere on this pedestal.
+    for (pid, _sid), _ts in socket_fault_state.items():
+        if pid == pedestal_id:
+            return "active fault on pedestal"
+
+    # 3. Heartbeat recent.
+    last = last_heartbeat.get(pedestal_id)
+    if last is None or (datetime.utcnow() - last).total_seconds() > _HEARTBEAT_MAX_AGE_S:
+        return "pedestal heartbeat timeout"
+
+    # 4. Socket not already active.
+    existing = db.query(SessionModel).filter(
+        SessionModel.pedestal_id == pedestal_id,
+        SessionModel.socket_id == socket_id,
+        SessionModel.type == "electricity",
+        SessionModel.status == "active",
+    ).first()
+    if existing:
+        return "socket already active"
+
+    # 5. No diagnostic running.
+    last_diag = last_diagnostic_at.get(pedestal_id)
+    if last_diag and (datetime.utcnow() - last_diag).total_seconds() < _DIAGNOSTIC_LOCKOUT_S:
+        return "diagnostic in progress"
+
+    return None
+
+
+async def _maybe_auto_activate(pedestal_id: int, socket_id: int, outlet_id: str) -> None:
+    """Fire-and-forget coroutine kicked off by _handle_event_user_plugged_in
+    when SocketConfig.auto_activate is True.
+
+    Runs the 5 precondition checks, waits 2 seconds (firmware stabilisation
+    window per spec), re-checks the socket is still `pending`, then publishes
+    the activate command. Every outcome is persisted to auto_activation_log.
+    """
+    from ..models.pedestal_config import PedestalConfig, SocketState
+    # Precondition pass 1 — fail fast before the sleep so the operator gets
+    # a skip reason without waiting 2 seconds.
+    db = SessionLocal()
+    try:
+        reason = _auto_activate_precondition_check(db, pedestal_id, socket_id)
+    finally:
+        db.close()
+
+    if reason:
+        logger.info("[AutoActivate] pedestal=%d socket=%d SKIPPED (pre-sleep): %s",
+                    pedestal_id, socket_id, reason)
+        _log_auto_activation(pedestal_id, socket_id, "skipped", reason=reason)
+        await _broadcast_auto_activate_skipped(pedestal_id, socket_id, reason)
+        return
+
+    # 2-second firmware stabilisation delay.
+    await asyncio.sleep(_AUTO_ACTIVATE_DELAY_S)
+
+    # Re-check everything after the sleep. During those 2 s the operator
+    # could have manually activated, the plug could have been yanked, the
+    # door could have opened, etc.
+    db = SessionLocal()
+    try:
+        # Abort if the socket is no longer connected (plug yanked) or is
+        # already active (operator beat us to it / race with OutletActivated).
+        sock_state = db.query(SocketState).filter(
+            SocketState.pedestal_id == pedestal_id,
+            SocketState.socket_id == socket_id,
+        ).first()
+        if not sock_state or not sock_state.connected:
+            logger.info("[AutoActivate] pedestal=%d socket=%d SKIPPED: plug no longer inserted", pedestal_id, socket_id)
+            _log_auto_activation(pedestal_id, socket_id, "skipped", reason="plug no longer inserted")
+            await _broadcast_auto_activate_skipped(pedestal_id, socket_id, "plug no longer inserted")
+            return
+
+        reason = _auto_activate_precondition_check(db, pedestal_id, socket_id)
+        if reason:
+            logger.info("[AutoActivate] pedestal=%d socket=%d SKIPPED (post-sleep): %s",
+                        pedestal_id, socket_id, reason)
+            _log_auto_activation(pedestal_id, socket_id, "skipped", reason=reason)
+            await _broadcast_auto_activate_skipped(pedestal_id, socket_id, reason)
+            return
+
+        cfg = db.query(PedestalConfig).filter(PedestalConfig.pedestal_id == pedestal_id).first()
+        cabinet_id = getattr(cfg, "opta_client_id", None) if cfg else None
+    finally:
+        db.close()
+
+    # Publish. Format matches direct_socket_cmd so the firmware sees an
+    # identical command shape whether it came from the operator or auto.
+    from .mqtt_client import mqtt_service
+    msg_id = str(int(datetime.utcnow().timestamp() * 1000))
+    if cabinet_id:
+        mqtt_service.publish(
+            f"opta/cmd/socket/{outlet_id}",
+            json.dumps({"msgId": msg_id, "cabinetId": cabinet_id, "action": "activate"}),
+        )
+    else:
+        mqtt_service.publish(
+            f"pedestal/{pedestal_id}/socket/{outlet_id}/command",
+            json.dumps({"msgId": msg_id, "action": "activate"}),
+        )
+    logger.info("[AutoActivate] pedestal=%d socket=%d published activate (msg_id=%s)",
+                pedestal_id, socket_id, msg_id)
+    # Session id isn't known yet — OutletActivated will create it shortly.
+    _log_auto_activation(pedestal_id, socket_id, "success")
 
 
 async def _handle_event_user_plugged_out(db, pedestal_id: int, outlet_id: str, resource: str, data: dict):

@@ -20,6 +20,10 @@ ENDPOINT_CATALOG = [
     {"id": "diagnostics.run",        "path": "/api/pedestals/{id}/diagnostics/run",  "method": "POST", "category": "Diagnostics", "allow_bidirectional": True},
     {"id": "camera.snapshot",        "path": "/api/camera/{pedestal_id}/snapshot",   "method": "GET",  "category": "Camera",      "allow_bidirectional": False},
     {"id": "camera.stream",          "path": "/api/camera/{pedestal_id}/stream",     "method": "GET",  "category": "Camera",      "allow_bidirectional": False},
+    # Per-socket auto-activation (v3.5)
+    {"id": "sockets.config_list",    "path": "/api/pedestals/{pedestal_id}/sockets/config",                     "method": "GET",   "category": "Controls", "allow_bidirectional": False},
+    {"id": "sockets.config_patch",   "path": "/api/pedestals/{pedestal_id}/sockets/{socket_id}/config",          "method": "PATCH", "category": "Controls", "allow_bidirectional": True},
+    {"id": "sockets.auto_log",       "path": "/api/pedestals/{pedestal_id}/sockets/{socket_id}/auto-activate-log","method": "GET",   "category": "Controls", "allow_bidirectional": False},
     {"id": "controls.reset",         "path": "/api/controls/pedestal/{id}/reset",    "method": "POST", "category": "Controls",    "allow_bidirectional": True},
     {"id": "controls.led",           "path": "/api/controls/pedestal/{id}/led",      "method": "POST", "category": "Controls",    "allow_bidirectional": True},
     # Direct ext-pedestal endpoints (not proxied — served by ext_pedestal_endpoints router)
@@ -42,6 +46,7 @@ EVENT_CATALOG = [
     {"id": "socket_pending",           "name": "Socket Pending",      "category": "Sessions"},
     {"id": "socket_rejected",          "name": "Socket Rejected",     "category": "Sessions"},
     {"id": "socket_state_changed",     "name": "Socket State Changed","category": "Sessions"},
+    {"id": "socket_auto_activate_skipped", "name": "Auto-Activate Skipped", "category": "Sessions"},
     {"id": "user_plugged_in",          "name": "User Plugged In",     "category": "Sessions"},
     {"id": "invoice_created",          "name": "Invoice Created",     "category": "Billing"},
     {"id": "berth_occupancy_updated",  "name": "Berth Occupancy",     "category": "Berths"},

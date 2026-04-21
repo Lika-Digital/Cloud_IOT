@@ -47,6 +47,12 @@ class PedestalConfig(Base):
     temp_sensor_reachable = Column(Integer, default=0)
     last_temp_sensor_check = Column(DateTime, nullable=True)
 
+    # Cabinet door state, persisted from opta/door/status + marina/cabinet door events.
+    # Used by the auto-activation precondition check; `unknown` is treated the same
+    # as `open` (safe-by-default after a backend restart, before the firmware has
+    # sent its next heartbeat confirming the real door state).
+    door_state = Column(String, default="unknown")  # "open" | "closed" | "unknown"
+
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

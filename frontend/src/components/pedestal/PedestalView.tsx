@@ -167,7 +167,7 @@ function ZoneButton({
   isSelected: boolean
   onClick: () => void
 }) {
-  const { pendingSessions, activeSessions, pendingSockets, optaWaterStates, socketComputedStates } = useStore()
+  const { pendingSessions, activeSessions, pendingSockets, optaWaterStates, socketComputedStates, socketAutoActivate } = useStore()
 
   const socketId = typeof zone.id === 'number' ? zone.id : null
   const isWater = zone.type === 'water'
@@ -241,12 +241,20 @@ function ZoneButton({
     posStyle.transform = 'translate(50%, -50%)'
   }
 
+  // Tooltip for the pending state depends on whether auto-activate is enabled
+  // for this specific socket — operator sees the configured behaviour.
+  const autoEnabled = !isCamera && !isWater && socketId !== null
+    ? !!socketAutoActivate[`${pedestalId}-${socketId}`]
+    : false
+
   const tooltipText = isCamera
     ? 'Camera'
     : status === 'active'
       ? 'Stop Session'
       : status === 'pending'
-        ? 'Plug inserted — awaiting activation'
+        ? (autoEnabled
+          ? 'Plug inserted — auto-activating in 2s'
+          : 'Plug inserted — awaiting activation')
         : zone.label
 
   return (

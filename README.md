@@ -30,10 +30,62 @@ Mosquitto Broker (:1883)                  │                         │
 
 ---
 
+## Changelog
+
+Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
+
+### 2026-04-21 — `4123e8b`  Socket plug state machine (v3.4)
+- New `pending` socket state (yellow) in the state flow
+  `idle → UserPluggedIn → pending → activate → active → stop → pending|idle`.
+- Firmware event `UserPluggedOut` is now handled: active session is stopped cleanly before the socket goes idle.
+- Unified `socket_state_changed` WebSocket event — single source of truth for dashboard + Control Center circle colours.
+- Operator `activate` rejected with **HTTP 409 "Socket has no plug inserted"** when no plug is reported — prevents the firmware from energising an empty outlet.
+- UI: yellow circle on the pedestal picture and yellow `PENDING` badge in the Control Center, both with tooltip "Plug inserted — awaiting activation". Activate button is disabled unless `pending`; Stop button replaces Activate when `active`.
+- 8 new tests (`test_socket_plug_state_machine.py`) covering every transition + the 409 guard.
+
+### 2026-04-20 — `72f91ff`  Mobile JWT moved to OS keychain
+- Customer JWT migrated from plaintext `AsyncStorage` to `expo-secure-store` (iOS Keychain / Android Keystore).
+- Automatic one-shot migration on first launch: existing AsyncStorage tokens are promoted to SecureStore and removed.
+- Mobile dependency added: `expo-secure-store ~15.0.7` → run `cd mobile && npm install` once before the next build.
+
+### 2026-04-20 — `c72e389`  Auth hardening
+- Rate limiting via `slowapi` on login, OTP verify, register:
+  `/api/auth/login` + `/api/customer/auth/login` = 10/min per IP,
+  `/api/auth/verify-otp` = 5/min, `/api/auth/register` + `/api/customer/auth/register` = 3/hour.
+  Honours `X-Forwarded-For` for nginx/Cloudflare deployments.
+- Production startup guard: backend refuses to start when `APP_ENV=production` and `JWT_SECRET` is unset or shorter than 32 chars.
+- `/api/auth/register` now returns 404 unless `ALLOW_SELF_REGISTRATION=true` (default off). Customer self-registration (`/api/customer/auth/register`) unchanged — it is the intended mobile signup path.
+- Operator JWT expiry shortened **8h → 2h** to reduce the blast radius of a stolen token.
+
+### 2026-04-20 — `18c4de1`  Per-valve water sessions (V1/V2 independent)
+- Water sessions now carry the numeric valve id (1 for V1, 2 for V2) instead of sharing `socket_id=NULL`. V1 and V2 can run concurrent sessions and are billed separately.
+- Firmware retries on lost ACKs no longer create duplicate sessions: a partial UNIQUE index on `(pedestal_id, socket_id, type) WHERE status IN ('pending','active')` enforces one active row per outlet; `session_service.create_pending` catches the IntegrityError and returns the existing row.
+
+### 2026-04-20 — `791c980`  DB integrity
+- `_backfill_session_totals` now clamps at 1 000 kWh / 10 000 L per session so a single corrupt firmware packet cannot become a billable total.
+- `invoices.session_id` enforced UNIQUE (index + pre-dedupe); `create_invoice_for_session` is idempotent across the three completion paths (operator stop, customer stop, MQTT disconnect).
+- Berth zone-detection enablement is now one-shot per berth (`zone_migration_v1_applied` marker) — admin-set `use_detection_zone=0` stops being flipped back to 1 on every restart.
+
+### 2026-04-20 — `1d6a491`  WebSocket / API catalog drift fix
+- `hardware_alarm` broadcast key corrected (`"type"` → `"event"`); the dashboard handler now actually fires on critical hardware alarms.
+- `user_plugged_in` frontend handler added.
+- External API catalog synced: 4 controls endpoints + 7 events that were advertised but missing (or real but not listed) are now consistent with the code.
+- Two AST-walking drift guards added to the test suite so any future divergence between backend broadcasts / frontend cases / catalog fails CI.
+
+### 2026-04-20 — `c479a5e`  Per-valve water indicators on the pedestal picture
+- The two water circles on the pedestal image (`water-left`, `water-right`) are bound to V1 and V2 independently — activating V1 from Control Center no longer lights up both circles.
+
+### 2026-04-20 — `6dc17a7`  Analytics corrections
+- Session `energy_kwh` / `water_liters` now use `max(readings)` (firmware sends session-cumulative, not lifetime). Short sessions that ended before the first telemetry tick are no longer stored as zero.
+- Startup backfill rewrites historical zero rows from existing sensor readings.
+- "Consumption by Socket" section on the Analytics page now includes water meters alongside electricity sockets.
+
+---
+
 ## Feature Summary
 
 ### Dashboard
-- Live socket status (connected / disconnected) per pedestal
+- Live socket status reflects the full state machine: white (idle), **yellow (pending — plug inserted, awaiting activation)**, green (active), red (fault). Colour updates in real time via the `socket_state_changed` WebSocket event — no refresh.
 - Real-time power readings (watts, kWh) via WebSocket
 - Water flow meter (LPM, total litres)
 - Temperature and moisture sensor alarms (SNMP trap receiver)
@@ -52,10 +104,13 @@ Mosquitto Broker (:1883)                  │                         │
 
 ### Authentication
 - Admin and Monitor roles (Monitor = read-only, no controls)
-- Two-factor login: POST /login → OTP email → POST /verify-otp → JWT (8h)
+- Two-factor login: POST /login → OTP email → POST /verify-otp → JWT (2h)
 - Customer registration / login (JWT role=customer, 30-day expiry)
 - PBKDF2-HMAC-SHA256 password hashing (stdlib, no bcrypt dependency)
-- Brute-force protection: 5 failures in 5 min → security alarm
+- Per-IP rate limiting (slowapi): login 10/min, verify-otp 5/min, register 3/hour. Enabled automatically when `APP_ENV=production` or `RATE_LIMIT_ENABLED=true`.
+- Operator self-registration via `/api/auth/register` is gated by `ALLOW_SELF_REGISTRATION` (default off → returns 404 in production). Customer signup via `/api/customer/auth/register` is always open.
+- Startup refuses to boot in production without a JWT_SECRET ≥ 32 chars.
+- Brute-force protection: 5 failures in 5 min → security alarm (complementary to the rate limit).
 
 ### Customer App (Mobile — Expo 54 / expo-router 6)
 - Customer registration, login, profile (name, ship name)
@@ -65,11 +120,12 @@ Mosquitto Broker (:1883)                  │                         │
 - Contract signing with signature pad
 - Service orders
 - Push notifications (Expo) for session allow / deny
+- JWT stored in `expo-secure-store` (OS Keychain / Keystore); web builds fall back to `AsyncStorage`. One-shot migration on first launch after upgrade promotes any legacy AsyncStorage token.
 - `mobile/.env` — set `EXPO_PUBLIC_API_URL` and `EXPO_PUBLIC_WS_URL` to LAN IP
 
 ### Billing & Invoices
 - Configurable kWh and litre pricing
-- Auto-generated invoices on session completion
+- Auto-generated invoices on session completion — idempotent across the three completion paths (operator stop, customer stop, MQTT disconnect). `invoices.session_id` is UNIQUE; concurrent callers receive the same row.
 - Spending reports (per-customer, per-session breakdown)
 - Admin billing dashboard with accordion session detail
 
@@ -121,23 +177,24 @@ Accessible via the **Control Center** tab when a pedestal is open in the Dashboa
 **Live monitoring (real-time from MQTT via WebSocket):**
 - Cabinet Status: cabinet ID, heartbeat sequence, uptime, OPTA connected indicator
 - Door state: open / closed with visual alarm
-- Sockets Q1–Q4: state badge (`idle / active / fault / blocked`), `hw_status`, session context
-- Water Valves V1–V2: state badge, `hw_status`, total litres, session litres
+- Sockets Q1–Q4: state badge (`idle / pending / active / fault`) — `pending` (yellow) = plug inserted, waiting for operator/customer activation. Shows tooltip "Plug inserted — awaiting activation".
+- Water Valves V1–V2: state badge, `hw_status`, total litres, session litres (V1 and V2 are independent sessions since v3.3).
 - Event Log: rolling last 30 entries from `opta/events` (expandable)
 - Command ACK Log: rolling last 30 entries from `opta/acks` with status (expandable)
 
 **Commands (admin only — publish directly to OPTA via MQTT):**
-- Sockets Q1–Q4: `Activate` / `Stop` → `opta/cmd/socket/Q{n}` with `{"action":"activate|stop"}` (only two valid actions)
+- Sockets Q1–Q4: `Activate` / `Stop` → `opta/cmd/socket/Q{n}` with `{"action":"activate|stop"}`. **Activate is gated on plug-in state** — the backend returns `409 "Socket has no plug inserted"` and publishes nothing if `SocketState.connected=False`. In the UI the Activate button is disabled (tooltip "No plug inserted") unless the socket is `pending`; when a session is running it is replaced by a Stop button.
 - Water Valves V1–V2: `Activate` / `Stop` → `opta/cmd/water/V{n}` with `{"action":"activate|stop"}`
 - LED Control: color picker (`green / red / blue / yellow / off`) + state (`on / off / blink`) → `opta/cmd/led`
 - Reset Device: double-click confirmation → `opta/cmd/reset` (interrupts all active sessions)
 - Time Sync: auto-published to `opta/cmd/time` on Opta restart (seq:0) and every 60 minutes
 
 **Session workflow (no manual approval needed):**
-- `UserPluggedIn` event = informational only (plug detected, socket marked connected)
-- Operator activates from Control Center → Opta responds with `OutletActivated` → session auto-created
+- `UserPluggedIn` (firmware) → socket state `pending` (yellow)
+- `UserPluggedOut` (firmware) → socket state `idle`; if a session was active, backend first publishes `{"action":"stop"}` and completes the DB session
+- Operator activates from Control Center → Opta responds with `OutletActivated` → session auto-created → `active` (green)
 - Customer activates from mobile app → same flow
-- Operator stops from Control Center → session auto-completed
+- Operator stops from Control Center → session auto-completed; socket returns to `pending` if plug still inserted, else `idle`
 - No approve/reject flow for Opta sockets — sessions managed entirely via Control Center or mobile app
 
 **New backend endpoints:**
@@ -155,7 +212,8 @@ Accessible via the **Control Center** tab when a pedestal is open in the Dashboa
 | `opta_water_status` | `opta/water/V*/status` received — state, hw_status, total_l, session_l |
 | `opta_status` | Heartbeat — cabinet ID, seq, uptime_ms, door |
 | `marina_ack` | Command ACK from OPTA — now includes `pedestal_id` |
-| `user_plugged_in` | Physical plug detected — informational, no approval needed |
+| `user_plugged_in` | Physical plug detected (legacy informational) |
+| `socket_state_changed` | Unified socket state (`idle / pending / active / fault`) — fired on UserPluggedIn/Out, OutletActivated, SessionEnded. This is the canonical signal for dashboard colour changes. |
 
 ### External API Gateway
 - 14 documented endpoints + 11 webhook events (static catalog)
@@ -283,6 +341,7 @@ sudo bash ~/Cloud_IOT/nuc_image/upgrade.sh
 - **Never skip hooks** (`--no-verify`) — if a test fails, fix it
 - **`CLOUD_IOT_RELEASE=1`** is required when pushing main from non-interactive terminals (Claude Code, CI). From a regular terminal, the hook prompts you to type "release"
 - If pre-commit fails, the commit did NOT happen — fix the issue and commit again (do NOT amend)
+- **Every merge to `main` must update the Changelog section at the top of this README** with the commit hash and a short operator-readable summary. The hook does not enforce this — reviewers do. An undocumented release is not a release.
 
 ---
 
@@ -502,6 +561,9 @@ sudo journalctl -u cloud-iot-backend -n 50 --no-pager  # last 50 lines
 | `heartbeat` | Pedestal online/offline |
 | `socket_pending` | Device plugged in — operator approval needed |
 | `socket_rejected` | Operator rejected socket connection |
+| `socket_state_changed` | Unified socket state (`idle / pending / active / fault`) — canonical feed for UI circle colour |
+| `user_plugged_in` | Physical plug detected (legacy informational) |
+| `invoice_created` | Invoice written after session completion |
 | `error_logged` | New entry in error log |
 | `pedestal_health_updated` | Camera or OPTA reachability change |
 | `pedestal_reset_sent` | Reset command dispatched |
@@ -521,7 +583,11 @@ sudo journalctl -u cloud-iot-backend -n 50 --no-pager  # last 50 lines
 
 | Variable | Default | Description |
 |---|---|---|
-| `JWT_SECRET` | (random) | **Set in production.** Sessions invalidated on restart if unset. |
+| `APP_ENV` | `dev` | Set to `production` on the NUC. Activates strict startup guards (JWT_SECRET length, rate limiting). |
+| `JWT_SECRET` | (random in dev) | **Required and ≥ 32 chars in production** — startup fails if missing. |
+| `JWT_EXPIRE_MINUTES` | `120` | Operator JWT lifetime. Default 2h; customer JWTs use a separate 30-day lifetime. |
+| `ALLOW_SELF_REGISTRATION` | `false` | When false, `/api/auth/register` returns 404. Flip to `true` only for dev or admin-invite flows. Customer `/api/customer/auth/register` is unaffected. |
+| `RATE_LIMIT_ENABLED` | (auto) | Force-enable slowapi limits. Auto-on when `APP_ENV=production`. |
 | `DEFAULT_ADMIN_EMAIL` | `admin@iot-dashboard.local` | Seeded on first run |
 | `DEFAULT_ADMIN_PASSWORD` | — | Required for first-run seed |
 | `MQTT_BROKER_HOST` | `localhost` | Mosquitto host |
@@ -548,11 +614,11 @@ sudo journalctl -u cloud-iot-backend -n 50 --no-pager  # last 50 lines
 | Backend | Python 3.12, FastAPI, Uvicorn, SQLAlchemy 2.0 |
 | Database | SQLite (pedestal.db + data/users.db) |
 | MQTT | paho-mqtt 2.x, Eclipse Mosquitto 2.0 (Docker) |
-| Auth | PyJWT, PBKDF2-HMAC-SHA256, smtplib OTP |
+| Auth | PyJWT, PBKDF2-HMAC-SHA256, smtplib OTP, slowapi (rate limiting) |
 | Computer Vision | OpenVINO 2026, YOLOv8n, MobileNetV2, Pillow, psutil |
 | PDF | ReportLab |
 | Frontend | React 18, TypeScript, Vite, Zustand, Recharts, Tailwind CSS |
-| Mobile | Expo 54, expo-router 6, React Native |
+| Mobile | Expo 54, expo-router 6, React Native, expo-secure-store (JWT keychain) |
 | Push Notifications | Expo Push API (httpx fire-and-forget) |
 | Hardware | Intel Atom x7425E NUC, Ubuntu 24.04 |
 
@@ -565,7 +631,7 @@ cd Cloud_IOT
 backend/.venv/Scripts/python -m pytest tests/backend/ -q
 ```
 
-**212 tests** covering:
+**238 tests** covering:
 - Session lifecycle and MQTT integration
 - Operator approval flow and timeouts
 - Customer auth and billing
@@ -579,5 +645,9 @@ backend/.venv/Scripts/python -m pytest tests/backend/ -q
 - SNMP BER decoder
 - **Direct device controls** (socket Q1–Q4, water V1–V2, LED, reset, auth enforcement)
 - **MQTT Control Center broadcasts** (`opta_socket_status`, `opta_water_status`, `opta_status`, `marina_ack` pedestal_id)
+- **Socket plug state machine** (UserPluggedIn/Out, socket_state_changed transitions, activate-when-no-plug → HTTP 409)
+- **Auth hardening** (rate limiting on login/otp/register, `ALLOW_SELF_REGISTRATION` flag, production JWT_SECRET guard)
+- **DB integrity** (bounded backfill, invoice idempotency, partial unique index on active sessions, per-valve water session split)
+- **Contract drift guards** (AST walk — backend broadcasts vs. frontend cases, route vs. ENDPOINT_CATALOG)
 
 Pre-commit and pre-push hooks run the full suite automatically. Pushes to `main` require `CLOUD_IOT_RELEASE=1` and a merged `develop` branch.

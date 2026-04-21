@@ -24,6 +24,7 @@ from .routers import pedestals, sessions, controls, analytics, predictions, webs
 from .routers import auth as auth_router
 from .routers import customer_auth, customer_sessions, customer_invoices, billing, chat, system_health
 from .routers import mobile as mobile_router
+from .routers import qr as qr_router
 from .routers import alarms as alarms_router
 from .routers import customer_alarms
 from .routers import contracts as contracts_router
@@ -535,6 +536,7 @@ app.include_router(customer_auth.router)
 app.include_router(customer_sessions.router)
 app.include_router(customer_invoices.router)
 app.include_router(mobile_router.router)
+app.include_router(qr_router.router)
 app.include_router(billing.router)
 app.include_router(chat.router)
 app.include_router(system_health.router)

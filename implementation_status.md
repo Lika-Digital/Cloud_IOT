@@ -195,7 +195,58 @@ UserPluggedOut remains the customer's only way to end a session.
 | 15 | `mobile/src/api/mobile.ts` | COMPLETE (NEW) | `qrClaim` + `sessionLive` wrappers + response types |
 | 16 | `docs/mobile_api.md` | COMPLETE (NEW) | Full contract: base URLs, auth model (customer JWT vs ws_session JWT), QR URL format, 3 REST endpoints with request/response schemas + error matrix, WebSocket event catalog (`session_telemetry`, `session_state_changed`, `session_ended`), authority model explaining monitoring-only, `owner_claimed_at` semantics table, Phase-2 marina-access TODO |
 | 17 | `tests/backend/test_mobile_qr_claim.py` | COMPLETE (NEW) | 14 cases covering: auth, 404 pedestal/socket, no_session branch, claimed / already_owner / read_only paths, owner_claimed_at persistence, websocket_token validity + session_id claim, live endpoint owner 200 / non-owner 403, admin QR PNG + customer 403, TelemetryUpdate → `session_telemetry` fan-out, SessionEnded → `session_ended` + channel close. Reuses shared conftest. |
-| 18 | `README.md` | PENDING | Changelog v3.6 entry |
+| 18 | `README.md` | COMPLETE | Changelog v3.6 entry added; test count 262; WS events table updated with `session_telemetry` / `session_ended` mobile-only rows |
+
+## Test run result: 262 passed, 0 failed (2026-04-21) — 248 v3.5 + 14 new mobile QR cases. Released as `c515790` to `origin/main` + `origin/develop`.
+
+---
+---
+
+# Implementation Status — Auto-Discovery + QR Grid (v3.7)
+
+## Session started: 2026-04-21
+
+Feature scope: MQTT messages Opta already publishes should now auto-create
+database rows for new pedestals and sockets (no manual registration), and
+every socket should have a printable QR PNG on disk ready to download. The
+dashboard adds a QR Codes section to Control Center and a QR icon on the
+pedestal cards.
+
+**Approved design decisions (2026-04-21):**
+- Reuse existing `PedestalConfig.last_heartbeat` as `last_seen_at`. Add only `first_seen_at: DateTime` and `status: String` columns.
+- Do NOT add `GET /api/pedestals/{cab}/sockets/{sid}/qr` — v3.6's `GET /api/mobile/socket/{pid}/{sid}/qr` already covers it. Only new endpoints: `GET /api/pedestals/{cab}/qr/all` (ZIP) + `POST /api/pedestals/{cab}/qr/regenerate` (admin).
+- QR PNG text label is embedded only in the new disk-cached PNG. The v3.6 on-demand endpoint stays byte-identical.
+- `pedestal_registered` WS event throttled to one per pedestal per 60 s so reconnect storms don't spam the dashboard.
+- Tiny in-house toast component (no external lib) — single global slice in the store.
+- New QR Codes section lives at the **top** of Control Center, above the cabinet-status card. Does NOT touch event log / ack log / diagnostic / health sections.
+- QR icon on both `PedestalCard.tsx` grid view and the sidebar list item.
+
+### Files — Status
+
+| # | File | Status | Notes |
+|---|------|--------|-------|
+| 1 | `implementation_status.md` | IN PROGRESS | Feature header + per-file log |
+| 2 | `backend/app/models/pedestal_config.py` | COMPLETE | Added `first_seen_at: Column(DateTime, nullable=True)` + `status: Column(String, nullable=True, default="online")`. Comment on `last_heartbeat` clarifies it plays the last_seen_at role per the v3.7 design decision. |
+| 3 | `backend/app/database.py` | COMPLETE | Added two rows to the `_migrate_schema` migrations list: `pedestal_configs.first_seen_at DATETIME` + `pedestal_configs.status TEXT DEFAULT 'online'`. Safe idempotent ALTER per existing pattern. |
+| 4 | `backend/app/services/qr_service.py` | COMPLETE (NEW) | Functions: `generate_socket_qr` (idempotent), `regenerate_socket_qr`, `get_socket_qr_path`, `generate_all_qr_for_pedestal`, `delete_all_qr_for_pedestal`, `qr_dir`. 300×300 PNG with 50px text label beneath (`{cabinet_id_spaced} — {socket_id}`). Target dir `backend/static/qr/` auto-created on import. TTF fallback to Pillow default font. Smoke-tested. |
+| 5 | `backend/app/services/mqtt_handlers.py` | COMPLETE | `_cabinet_to_pedestal_id` now prettifies `name` + sets `first_seen_at`/`status` on new PedestalConfig + schedules `_announce_new_pedestal` (QR pre-gen + `pedestal_registered is_new=True`). New `_announce_pedestal_heartbeat` with 60s throttle called from `_handle_opta_status`. New `_auto_discover_socket_config` idempotently creates SocketConfig from `_handle_marina_socket` and triggers per-socket QR PNG generation on first sight. All QR/DB failures caught + logged; MQTT flow never crashes. |
+| 6 | `backend/app/routers/qr.py` | COMPLETE (NEW) | Two admin-only endpoints: `GET /api/pedestals/{cab}/qr/all` (zip with 4 PNGs, `Content-Disposition: attachment; filename="{cab}_qr_codes.zip"`, auto-generates missing files) and `POST /api/pedestals/{cab}/qr/regenerate` (deletes + rebuilds, returns summary). Resolves by `opta_client_id` string, 404 on unknown cabinet. |
+| 7 | `backend/app/main.py` | COMPLETE | Imports + registers `qr_router.router`. The `qr_service` module auto-creates `backend/static/qr/` on import, so no additional startup hook is needed. |
+| 8 | `backend/app/services/api_catalog.py` | COMPLETE | `qr.pedestal_all` + `qr.pedestal_regenerate` endpoints added; `pedestal_registered` event added to EVENT_CATALOG. |
+| 9 | `frontend/src/api/index.ts` | COMPLETE | `getPedestalQrAll(cabinetId) → Blob` and `regeneratePedestalQrs(cabinetId) → RegenerateResponse` wrappers added alongside the existing v3.6 `getSocketQrBlob`. |
+| 10 | `frontend/src/store/index.ts` | COMPLETE | Global `toasts` slice with `addToast` (dedupes by id) + `removeToast`. Variants: info/success/warning/error. Supports optional `actionLabel` + `actionHref` for the "View" link on new-pedestal notifications. |
+| 11 | `frontend/src/hooks/useWebSocket.ts` | COMPLETE | `case 'pedestal_registered':` adds an info toast only when `is_new=true`; dedupes via id `pedestal-registered-{cab}`. Reconnect heartbeats (`is_new=false`) are no-ops. |
+| 12 | `frontend/src/components/ui/ToastContainer.tsx` | COMPLETE (NEW) | ~40-line self-contained renderer; bottom-right stack; 10 s auto-dismiss; optional action link for "View"; mounted once in `Layout.tsx`. |
+| 13 | `frontend/src/components/pedestal/PedestalControlCenter.tsx` | COMPLETE | New collapsible `QrCodesSection` (+ inner `QrCell`) placed above the existing Cabinet Status card. 2×2 grid reuses v3.6's `getSocketQrBlob` endpoint per socket. Top-right buttons: Download All (calls `getPedestalQrAll`, saves `{cab}_qr_codes.zip`) and Regenerate (admin-only, calls `regeneratePedestalQrs` then bumps a nonce to refetch all 4 PNGs). Each cell has Download + Copy URL buttons. Untouched: event log, ack log, diagnostic panels. |
+| 13a | `frontend/src/api/pedestalConfig.ts` + `src/store/index.ts` | COMPLETE | `PedestalHealth` type extended with `opta_client_id` so the QR section can resolve the cabinet id from the already-loaded health map (no extra fetch). |
+| 13b | `backend/app/routers/pedestal_config.py` | COMPLETE | `/api/pedestals/health` response now includes `opta_client_id` per pedestal. |
+| 14 | `frontend/src/components/pedestal/PedestalCard.tsx` | COMPLETE | Added a 🔖 QR icon button (shown when health has `opta_client_id`) that opens a `PedestalQrGridModal` without triggering the card's onClick. Modal reuses the new shared `SocketQrGrid` and has its own Download All button. Copy-URL feedback goes through the global toast store. |
+| 14a | `frontend/src/components/pedestal/SocketQrGrid.tsx` | COMPLETE (NEW) | Shared 4-socket QR grid extracted so Control Center and the dashboard modal both reuse it (fixes DRY with the earlier inline `QrCell` duplicate). |
+| 15 | `tests/backend/test_pedestal_auto_discovery.py` | COMPLETE (NEW) | 13 cases: pedestal auto-create + name prettification + operator-rename survival + last_heartbeat bump; socket auto-config creation + auto_activate=true preservation; QR PNG write on first socket + idempotency on repeat; `/qr/all` zip structure + content-disposition + PNG magic check; `/qr/regenerate` mtime proof; 404 on unknown cabinet; `pedestal_registered` is_new=true/false + 60 s throttle. `clean_fs` fixture wipes SocketConfig + PNG files to guarantee first-contact semantics across runs. |
+| 16 | `README.md` | COMPLETE | Changelog v3.7 entry at top per the merge-to-main rule; test count bumped 262 → 275; WebSocket events table gains `pedestal_registered`; Test Suite bullet added for auto-discovery coverage. |
+
+## Test run result: 275 passed, 0 failed (2026-04-21) — 262 v3.6 + 13 new auto-discovery cases. Ready for release.
+
 
 
 

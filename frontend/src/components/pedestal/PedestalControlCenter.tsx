@@ -9,7 +9,10 @@ import {
   getSocketConfigs,
   setSocketConfig,
   getSocketQrBlob,
+  getPedestalQrAll,
+  regeneratePedestalQrs,
 } from '../../api'
+import { SocketQrGrid } from './SocketQrGrid'
 import type { OptaSocketState, OptaWaterState, OptaLogEntry } from '../../store'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -734,6 +737,19 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
         </div>
       )}
 
+      {/* ── QR Codes (v3.7) ─────────────────────────────────────────────
+           NEW section added above the existing Cabinet Status card per
+           spec. Displays printable QR labels for all 4 sockets; never
+           touches the diagnostic / event / ack / health sections below. */}
+      {health?.opta_client_id && (
+        <QrCodesSection
+          cabinetId={health.opta_client_id}
+          pedestalId={pedestalId}
+          isAdmin={isAdmin}
+          onFeedback={show}
+        />
+      )}
+
       {/* ── Cabinet Status ──────────────────────────────────────────────── */}
       <div className="rounded-lg border border-gray-700 bg-gray-800/40 p-3">
         <div className="flex items-center gap-2 mb-2">
@@ -881,6 +897,120 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
         icon="✅"
         entries={acks}
       />
+    </div>
+  )
+}
+
+
+// ─── QR Codes section (v3.7) ─────────────────────────────────────────────────
+//
+// Dashboard-side complement of backend/app/routers/qr.py. Renders a 4-cell
+// grid of socket QR PNGs, fetched from the existing v3.6 per-socket endpoint.
+// Admin-only buttons hit /qr/all (ZIP) + /qr/regenerate. Lives at the top of
+// Control Center and is purely additive — the existing Cabinet Status /
+// Event Log / ACK Log sections below are untouched.
+
+function QrCodesSection({
+  cabinetId,
+  pedestalId,
+  isAdmin,
+  onFeedback,
+}: {
+  cabinetId: string
+  pedestalId: number
+  isAdmin: boolean
+  onFeedback: (key: string, type: 'success' | 'error', text: string) => void
+}) {
+  const [expanded, setExpanded] = useState(true)
+  const [regenBusy, setRegenBusy] = useState(false)
+  const [zipBusy, setZipBusy] = useState(false)
+  // Cache-buster — bumped after Regenerate so the <img> src reloads.
+  const [reloadNonce, setReloadNonce] = useState(0)
+
+  const handleDownloadAll = async () => {
+    setZipBusy(true)
+    try {
+      const blob = await getPedestalQrAll(cabinetId)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${cabinetId}_qr_codes.zip`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      onFeedback(`qr-zip-${cabinetId}`, 'success', 'QR bundle downloaded')
+    } catch {
+      onFeedback(`qr-zip-${cabinetId}`, 'error', 'Failed to download QR bundle')
+    } finally {
+      setZipBusy(false)
+    }
+  }
+
+  const handleRegenerate = async () => {
+    setRegenBusy(true)
+    try {
+      const r = await regeneratePedestalQrs(cabinetId)
+      setReloadNonce((n) => n + 1)
+      onFeedback(
+        `qr-regen-${cabinetId}`, 'success',
+        `Regenerated ${r.regenerated.length} QR codes`,
+      )
+    } catch {
+      onFeedback(`qr-regen-${cabinetId}`, 'error', 'Regenerate failed')
+    } finally {
+      setRegenBusy(false)
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-gray-700 bg-gray-800/40 p-3 space-y-3">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="text-base leading-none text-gray-400 hover:text-gray-200 w-4"
+          aria-label={expanded ? 'Collapse' : 'Expand'}
+        >
+          {expanded ? '▾' : '▸'}
+        </button>
+        <span className="text-base">🔖</span>
+        <span className="text-sm font-medium text-white">QR Codes</span>
+        <span className="text-xs text-gray-500 font-mono ml-1">{cabinetId}</span>
+
+        {expanded && (
+          <div className="ml-auto flex gap-1.5">
+            <button
+              type="button"
+              onClick={handleDownloadAll}
+              disabled={zipBusy}
+              className="text-xs px-2 py-1 rounded border border-blue-700/50 bg-blue-900/40 text-blue-200 hover:bg-blue-800/60 disabled:opacity-40"
+            >
+              {zipBusy ? 'Downloading…' : 'Download All'}
+            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={handleRegenerate}
+                disabled={regenBusy}
+                className="text-xs px-2 py-1 rounded border border-amber-700/50 bg-amber-900/30 text-amber-200 hover:bg-amber-800/50 disabled:opacity-40"
+              >
+                {regenBusy ? 'Regenerating…' : 'Regenerate'}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {expanded && (
+        <SocketQrGrid
+          cabinetId={cabinetId}
+          pedestalId={pedestalId}
+          reloadNonce={reloadNonce}
+          onCopied={(sid) => onFeedback(`qr-copy-${cabinetId}-${sid}`, 'success', `Copied ${sid} URL`)}
+          onCopyFailed={(sid) => onFeedback(`qr-copy-${cabinetId}-${sid}`, 'error', 'Clipboard unavailable')}
+        />
+      )}
     </div>
   )
 }

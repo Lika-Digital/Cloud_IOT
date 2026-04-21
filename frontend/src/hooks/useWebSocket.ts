@@ -34,6 +34,7 @@ export function useWebSocket() {
     setSocketComputedState,
     setSocketAutoSkipReason,
     clearSocketAutoSkipReason,
+    addToast,
   } = useStore()
   const { role } = useAuthStore()
 
@@ -122,6 +123,25 @@ export function useWebSocket() {
             // reads pendingSockets for amber) produces matching visuals.
             if (state === 'pending') addPendingSocket(pedId, sockId)
             else removePendingSocket(pedId, sockId)
+          }
+          break
+        }
+        case 'pedestal_registered': {
+          // v3.7 — a cabinet has just been auto-discovered (is_new=true)
+          // or is re-announcing itself after a reconnect (is_new=false,
+          // throttled to 60s per pedestal). Only the first-contact case
+          // raises an operator-facing toast.
+          if (msg.data.is_new === true) {
+            const name = (msg.data.name as string | undefined) ?? 'Unknown'
+            const cab = (msg.data.cabinet_id as string | undefined) ?? ''
+            const pid = msg.data.pedestal_id as number | undefined
+            addToast({
+              id: `pedestal-registered-${cab}`,
+              message: `New pedestal discovered: ${name} (${cab})`,
+              variant: 'info',
+              actionLabel: 'View',
+              actionHref: pid ? `/dashboard?pedestal=${pid}` : '/dashboard',
+            })
           }
           break
         }

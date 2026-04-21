@@ -102,6 +102,11 @@ def _cabinet_to_pedestal_id(db, cabinet_id: str) -> int | None:
     Resolve a marina cabinet string ID (e.g. 'MAR_KRK_ORM_01') to a numeric pedestal_id.
     Looks up PedestalConfig.opta_client_id; auto-creates the Pedestal + PedestalConfig
     on first contact so a new cabinet becomes visible in the dashboard immediately.
+
+    v3.7 — on first creation: prettify the display name, stamp first_seen_at and
+    status="online", and schedule a `pedestal_registered is_new=True` broadcast
+    + per-socket QR PNG generation so the operator sees the new cabinet in real
+    time and printable QR labels are ready immediately.
     """
     from ..models.pedestal_config import PedestalConfig
     from ..models.pedestal import Pedestal
@@ -116,9 +121,14 @@ def _cabinet_to_pedestal_id(db, cabinet_id: str) -> int | None:
     existing_ids = [p.id for p in db.query(Pedestal).all()]
     new_id = max(existing_ids, default=0) + 1
 
+    # Prettify the display name on first creation only — operators can still
+    # rename later via the settings page and the new name sticks.
+    pretty_name = cabinet_id.replace("_", " ")
+    now = datetime.utcnow()
+
     db.add(Pedestal(
         id=new_id,
-        name=cabinet_id,
+        name=pretty_name,
         location="",
         data_mode="real",
         initialized=False,
@@ -130,11 +140,105 @@ def _cabinet_to_pedestal_id(db, cabinet_id: str) -> int | None:
         pedestal_id=new_id,
         opta_client_id=cabinet_id,
         opta_connected=0,
+        first_seen_at=now,
+        status="online",
     )
     db.add(new_cfg)
     db.commit()
     logger.info("Auto-created Pedestal %d for marina cabinet '%s'", new_id, cabinet_id)
+
+    # Fire-and-forget: announce the new pedestal + pre-generate QR PNGs for
+    # the four electricity sockets so the dashboard "QR Codes" section can
+    # load them instantly. Wrapped so a QR-gen failure never crashes MQTT.
+    try:
+        asyncio.create_task(_announce_new_pedestal(new_id, cabinet_id, pretty_name))
+    except Exception as e:
+        logger.warning("[Discovery] could not schedule announce for %s: %s", cabinet_id, e)
+
     return new_id
+
+
+# ── Auto-discovery broadcasts (v3.7) ─────────────────────────────────────────
+#
+# `pedestal_registered` fires once on first contact with `is_new=True` and
+# again on every subsequent opta/status heartbeat with `is_new=False`,
+# throttled to one event per pedestal per 60 seconds so reconnect storms
+# cannot drown the operator dashboard.
+
+_PEDESTAL_REGISTERED_THROTTLE_S = 60.0
+_pedestal_registered_last_at: dict[int, datetime] = {}
+
+
+async def _announce_new_pedestal(pedestal_id: int, cabinet_id: str, name: str) -> None:
+    """Broadcast `pedestal_registered is_new=True` + generate printable QR PNGs."""
+    _pedestal_registered_last_at[pedestal_id] = datetime.utcnow()
+    try:
+        from .qr_service import generate_all_qr_for_pedestal
+        generate_all_qr_for_pedestal(cabinet_id, ["Q1", "Q2", "Q3", "Q4"])
+    except Exception as e:
+        logger.warning("[Discovery] QR pre-generation failed for %s: %s", cabinet_id, e)
+    await ws_manager.broadcast({
+        "event": "pedestal_registered",
+        "data": {
+            "pedestal_id": pedestal_id,
+            "cabinet_id": cabinet_id,
+            "name": name,
+            "is_new": True,
+            "socket_ids": ["Q1", "Q2", "Q3", "Q4"],
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    })
+
+
+async def _announce_pedestal_heartbeat(pedestal_id: int, cabinet_id: str, name: str) -> None:
+    """Throttled `pedestal_registered is_new=False`. Swallows the heartbeat if
+    we broadcast within the last 60 seconds."""
+    last = _pedestal_registered_last_at.get(pedestal_id)
+    now = datetime.utcnow()
+    if last and (now - last).total_seconds() < _PEDESTAL_REGISTERED_THROTTLE_S:
+        return
+    _pedestal_registered_last_at[pedestal_id] = now
+    await ws_manager.broadcast({
+        "event": "pedestal_registered",
+        "data": {
+            "pedestal_id": pedestal_id,
+            "cabinet_id": cabinet_id,
+            "name": name,
+            "is_new": False,
+            "socket_ids": ["Q1", "Q2", "Q3", "Q4"],
+            "timestamp": now.isoformat(),
+        },
+    })
+
+
+def _auto_discover_socket_config(db, pedestal_id: int, socket_id: int) -> bool:
+    """Idempotently create a SocketConfig row for (pedestal_id, socket_id).
+    Returns True if a new row was inserted, False if one already existed.
+    Safe for MQTT handler context — catches and logs every exception."""
+    try:
+        from ..models.socket_config import SocketConfig
+        row = db.query(SocketConfig).filter(
+            SocketConfig.pedestal_id == pedestal_id,
+            SocketConfig.socket_id == socket_id,
+        ).first()
+        if row:
+            return False
+        db.add(SocketConfig(
+            pedestal_id=pedestal_id,
+            socket_id=socket_id,
+            auto_activate=False,
+        ))
+        db.commit()
+        logger.info("[Discovery] SocketConfig created pedestal=%d socket=%d", pedestal_id, socket_id)
+        return True
+    except Exception as e:
+        logger.warning("[Discovery] socket config create failed (pedestal=%d socket=%d): %s",
+                       pedestal_id, socket_id, e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return False
 
 
 def _socket_name_to_id(name: str) -> int:
@@ -249,6 +353,19 @@ async def _handle_marina_socket(cabinet_id: str, socket_name: str, payload: str)
             state_row = SocketState(pedestal_id=pedestal_id, socket_id=socket_id, connected=is_connected)
             db.add(state_row)
         db.commit()
+
+        # v3.7 — auto-discovery side-effect: ensure a SocketConfig exists for
+        # this socket and render its printable QR PNG on first sight. Both
+        # steps are idempotent; both catch+log all exceptions so MQTT flow
+        # continues even if the filesystem or DB hiccups.
+        newly_created = _auto_discover_socket_config(db, pedestal_id, socket_id)
+        if newly_created:
+            try:
+                from .qr_service import generate_socket_qr
+                generate_socket_qr(cabinet_id, socket_name)
+            except Exception as e:
+                logger.warning("[Discovery] QR gen for socket %s on %s failed: %s",
+                               socket_name, cabinet_id, e)
     finally:
         db.close()
 
@@ -1063,6 +1180,28 @@ async def _handle_opta_status(payload: str):
                 _publish_time_sync()
         except (json.JSONDecodeError, Exception):
             pass
+
+        # v3.7 — heartbeat-side `pedestal_registered is_new=False` broadcast.
+        # `_cabinet_to_pedestal_id` already handled first-contact creation +
+        # the `is_new=True` announce; here we just nudge connected dashboards
+        # that this pedestal is alive, throttled to once per 60 s.
+        try:
+            db = SessionLocal()
+            try:
+                pid = _cabinet_to_pedestal_id(db, cabinet_id)
+                if pid is not None:
+                    from ..models.pedestal import Pedestal
+                    from ..models.pedestal_config import PedestalConfig as _PC
+                    p = db.get(Pedestal, pid)
+                    cfg = db.query(_PC).filter(_PC.pedestal_id == pid).first()
+                    if cfg and cfg.status != "online":
+                        cfg.status = "online"
+                        db.commit()
+                    await _announce_pedestal_heartbeat(pid, cabinet_id, p.name if p else cabinet_id)
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning("[Discovery] heartbeat announce failed for %s: %s", cabinet_id, e)
 
 
 def _publish_time_sync():

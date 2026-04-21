@@ -96,6 +96,7 @@ export interface BerthStatus {
 
 export interface PedestalHealth {
   opta_connected: boolean
+  opta_client_id?: string | null
   last_heartbeat: string | null
   camera_reachable: boolean
   last_camera_check: string | null
@@ -200,6 +201,25 @@ interface AppStore {
   socketAutoSkipReasons: Record<string, { reason: string; ts: number }>
   setSocketAutoSkipReason: (pedestal_id: number, socket_id: number, reason: string) => void
   clearSocketAutoSkipReason: (pedestal_id: number, socket_id: number) => void
+
+  // v3.7 — global toast queue. Used by the new-pedestal discovery flow and
+  // anything else that wants a short banner in the corner of the dashboard.
+  // Toasts auto-dismiss after 10 s unless `persistent` is set.
+  toasts: Array<{
+    id: string
+    message: string
+    variant: 'info' | 'success' | 'warning' | 'error'
+    actionLabel?: string
+    actionHref?: string
+  }>
+  addToast: (t: {
+    id?: string
+    message: string
+    variant?: 'info' | 'success' | 'warning' | 'error'
+    actionLabel?: string
+    actionHref?: string
+  }) => void
+  removeToast: (id: string) => void
 
   // Chat unread count
   unreadChatCount: number
@@ -386,6 +406,17 @@ export const useStore = create<AppStore>((set) => ({
       delete next[`${pedestal_id}-${socket_id}`]
       return { socketAutoSkipReasons: next }
     }),
+
+  toasts: [],
+  addToast: ({ id, message, variant = 'info', actionLabel, actionHref }) =>
+    set((s) => {
+      const toastId = id ?? `t-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+      // Dedupe: if an identical id is already in the queue, skip.
+      if (s.toasts.some((t) => t.id === toastId)) return s
+      return { toasts: [...s.toasts, { id: toastId, message, variant, actionLabel, actionHref }] }
+    }),
+  removeToast: (id) =>
+    set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 
   unreadChatCount: 0,
   setUnreadChatCount: (count) => set({ unreadChatCount: count }),

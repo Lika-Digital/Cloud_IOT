@@ -41,11 +41,21 @@ class PedestalConfig(Base):
 
     # Health (updated by background tasks)
     opta_connected        = Column(Integer, default=0)
-    last_heartbeat        = Column(DateTime, nullable=True)
+    last_heartbeat        = Column(DateTime, nullable=True)  # also serves as "last_seen_at" — see v3.7
     camera_reachable      = Column(Integer, default=0)
     last_camera_check     = Column(DateTime, nullable=True)
     temp_sensor_reachable = Column(Integer, default=0)
     last_temp_sensor_check = Column(DateTime, nullable=True)
+
+    # v3.7 — Auto-discovery tracking.
+    # first_seen_at is set once on the first MQTT message from this cabinet
+    # and never updated afterwards; it's how the dashboard marks a pedestal
+    # as newly registered. `status` reflects the backend's view of the opta
+    # link: "online" while recent heartbeats are flowing, "offline" when the
+    # comm-loss watchdog decides it's stale. There is intentionally no
+    # `last_seen_at` column — `last_heartbeat` above plays that role.
+    first_seen_at = Column(DateTime, nullable=True)
+    status        = Column(String, nullable=True, default="online")
 
     # Cabinet door state, persisted from opta/door/status + marina/cabinet door events.
     # Used by the auto-activation precondition check; `unknown` is treated the same

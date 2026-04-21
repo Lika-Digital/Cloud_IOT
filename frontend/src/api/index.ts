@@ -121,6 +121,25 @@ export async function getSocketQrBlob(pedestalId: number | string, socketName: s
   return { blob: r.data as Blob, url: url ?? '' }
 }
 
+
+// v3.7 — admin-only bulk QR endpoints. cabinet_id is the opta_client_id
+// string (e.g. MAR_KRK_ORM_01), not the numeric DB id.
+export async function getPedestalQrAll(cabinetId: string): Promise<Blob> {
+  const r = await api.get(`/pedestals/${cabinetId}/qr/all`, { responseType: 'blob' })
+  return r.data as Blob
+}
+
+export interface RegenerateResponse {
+  cabinet_id: string
+  deleted: number
+  regenerated: string[]
+}
+
+export async function regeneratePedestalQrs(cabinetId: string): Promise<RegenerateResponse> {
+  const r = await api.post<RegenerateResponse>(`/pedestals/${cabinetId}/qr/regenerate`)
+  return r.data
+}
+
 // Diagnostics
 export const runDiagnostics = (pedestalId: number) =>
   api.post<DiagnosticsResult>(`/pedestals/${pedestalId}/diagnostics/run`).then((r) => r.data)

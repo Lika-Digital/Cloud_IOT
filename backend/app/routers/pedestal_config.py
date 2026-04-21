@@ -345,6 +345,7 @@ def get_health(
     for cfg in configs:
         result[cfg.pedestal_id] = {
             "opta_connected": bool(cfg.opta_connected),
+            "opta_client_id": cfg.opta_client_id,  # v3.7 — needed by QR UI
             "last_heartbeat": cfg.last_heartbeat.isoformat() if cfg.last_heartbeat else None,
             "camera_reachable": bool(cfg.camera_reachable),
             "last_camera_check": cfg.last_camera_check.isoformat() if cfg.last_camera_check else None,

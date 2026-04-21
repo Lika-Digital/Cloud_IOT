@@ -84,6 +84,10 @@ def _migrate_schema():
         ("pedestal_configs", "last_temp_sensor_check","DATETIME"),
         # v3.5 — door state persisted for the auto-activate precondition check.
         ("pedestal_configs", "door_state",         "TEXT DEFAULT 'unknown'"),
+        # v3.7 — MQTT-driven auto-discovery. first_seen_at is stamped once on
+        # first contact; status reflects the backend's view of the opta link.
+        ("pedestal_configs", "first_seen_at",      "DATETIME"),
+        ("pedestal_configs", "status",             "TEXT DEFAULT 'online'"),
         # external_api_config columns (table created by metadata; ALTER handles existing DBs)
         ("external_api_config", "api_key",              "TEXT"),
         ("external_api_config", "allowed_endpoints",    "TEXT DEFAULT '[]'"),

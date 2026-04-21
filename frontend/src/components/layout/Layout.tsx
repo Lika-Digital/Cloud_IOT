@@ -4,6 +4,7 @@ import { useAuthStore } from '../../store/authStore'
 import logo from '../../assets/logo.png'
 import { useEffect } from 'react'
 import { getUnreadCount } from '../../api/billing'
+import ToastContainer from '../ui/ToastContainer'
 
 export default function Layout() {
   const { wsConnected, pedestalOnline, unreadChatCount, setUnreadChatCount, newErrorCount, hwAlarmLevel } = useStore()
@@ -114,6 +115,9 @@ export default function Layout() {
           <Outlet />
         </div>
       </main>
+
+      {/* v3.7 — global toast tray (new-pedestal discovery + ad-hoc banners) */}
+      <ToastContainer />
     </div>
   )
 }

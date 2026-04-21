@@ -34,6 +34,18 @@ Mosquitto Broker (:1883)                  │                         │
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-04-21 — MQTT auto-discovery + QR bundle (v3.7)
+- Unknown cabinets appearing on `opta/status` now register themselves automatically. `Pedestal.name` is prettified once on first creation (`MAR_KRK_ORM_01` → `MAR KRK ORM 01`); operator renames are never overwritten afterwards. New `PedestalConfig.first_seen_at` column stamps the moment; `status` column tracks `online`/`offline`. `last_heartbeat` keeps playing the `last_seen_at` role (no redundant column).
+- Unknown sockets appearing on `opta/sockets/Q*/status` auto-create a `SocketConfig` row (`auto_activate=false` default) and trigger a printable QR PNG on disk.
+- QR labels (new): 300×300 PNG with a "{cabinet spaced} — Q{n}" text caption beneath the matrix, saved to `backend/static/qr/{cabinet_id}_{socket_id}.png`. Idempotent — subsequent writes are skipped until explicitly regenerated.
+- Two new admin endpoints: `GET /api/pedestals/{cab}/qr/all` streams a ZIP of all 4 PNGs; `POST /api/pedestals/{cab}/qr/regenerate` deletes the disk cache + rebuilds. The single-socket preview (`GET /api/mobile/socket/{pid}/{sid}/qr`) from v3.6 stays as-is.
+- New `pedestal_registered` WebSocket event fires with `is_new=true` on first contact and `is_new=false` on reconnect. Throttled to one broadcast per pedestal per 60 s so reconnect storms cannot spam the dashboard.
+- Dashboard: new **QR Codes** collapsible section at the top of Control Center with a 2×2 grid, per-cell Download + Copy URL buttons, top-right Download All + Regenerate buttons. Existing Cabinet Status / Event Log / ACK Log / Diagnostic panels are untouched.
+- Pedestal grid: each `PedestalCard` now shows a 🔖 icon that opens a modal with the same QR grid + Download All without navigating away from the fleet view.
+- New **Toast tray** (bottom-right, 10 s auto-dismiss) shows `New pedestal discovered: {name} ({cab})` with a View link that deep-links to the pedestal detail page.
+- 13 new backend tests (`test_pedestal_auto_discovery.py`) covering discovery, name-pretty + admin-rename protection, SocketConfig auto-create + preservation, QR cache idempotency, ZIP structure, regenerate mtime proof, and the 60 s throttle. 262 → 275 total.
+- Wire: `backend/app/services/qr_service.py` (new), `backend/app/routers/qr.py` (new), `backend/app/services/api_catalog.py` + drift guards updated, `frontend/src/components/pedestal/SocketQrGrid.tsx` shared component, `frontend/src/components/ui/ToastContainer.tsx` new global tray.
+
 ### 2026-04-21 — QR-code mobile ownership + per-session telemetry (v3.6)
 - Every socket now has a static QR printed on its label; scanning it opens `/mobile/socket/{pedestal_id}/{socket_id}` in the customer app and claims the active session for the scanning customer. Claim branches: `no_session`, `claimed`, `already_owner`, `read_only`.
 - **Mobile authority model is monitoring-only.** `POST /api/customer/sessions/{id}/stop` now returns **403** for every customer call — the customer ends a session by physically unplugging the cable (firmware emits `UserPluggedOut`). Operator stop from the dashboard (admin role) is the only software-side stop.
@@ -589,6 +601,7 @@ sudo journalctl -u cloud-iot-backend -n 50 --no-pager  # last 50 lines
 | `invoice_created` | Invoice written after session completion |
 | `session_telemetry` | **Mobile only** — per-session live metrics sent to the scanning customer |
 | `session_ended` | **Mobile only** — session completed; server closes the subscriber socket after sending |
+| `pedestal_registered` | Cabinet auto-discovered (`is_new=true`) or reconnected (`is_new=false`, throttled 60 s/pedestal) |
 | `error_logged` | New entry in error log |
 | `pedestal_health_updated` | Camera or OPTA reachability change |
 | `pedestal_reset_sent` | Reset command dispatched |
@@ -656,7 +669,7 @@ cd Cloud_IOT
 backend/.venv/Scripts/python -m pytest tests/backend/ -q
 ```
 
-**262 tests** covering:
+**275 tests** covering:
 - Session lifecycle and MQTT integration
 - Operator approval flow and timeouts
 - Customer auth and billing
@@ -675,5 +688,6 @@ backend/.venv/Scripts/python -m pytest tests/backend/ -q
 - **DB integrity** (bounded backfill, invoice idempotency, partial unique index on active sessions, per-valve water session split)
 - **Contract drift guards** (AST walk — backend broadcasts vs. frontend cases, route vs. ENDPOINT_CATALOG)
 - **Mobile QR claim + session telemetry** (auth, 404 branches, 4 claim paths, owner_claimed_at persistence, websocket_token validity, per-session WS fan-out, admin-only QR PNG)
+- **Pedestal + socket auto-discovery + QR bundle** (name-pretty first-creation, operator-rename survival, SocketConfig auto-create, QR cache idempotency, `/qr/all` ZIP + `/qr/regenerate`, `pedestal_registered` throttle)
 
 Pre-commit and pre-push hooks run the full suite automatically. Pushes to `main` require `CLOUD_IOT_RELEASE=1` and a merged `develop` branch.

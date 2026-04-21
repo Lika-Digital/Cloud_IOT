@@ -134,6 +134,7 @@ export interface SnmpDevice {
 
 export interface PedestalHealth {
   opta_connected: boolean
+  opta_client_id: string | null
   last_heartbeat: string | null
   camera_reachable: boolean
   last_camera_check: string | null

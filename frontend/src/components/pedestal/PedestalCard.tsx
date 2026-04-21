@@ -1,4 +1,7 @@
+import { useState } from 'react'
 import { useStore, type Pedestal, type PedestalHealth } from '../../store'
+import { SocketQrGrid } from './SocketQrGrid'
+import { getPedestalQrAll } from '../../api'
 
 interface PedestalCardProps {
   pedestal: Pedestal
@@ -7,7 +10,8 @@ interface PedestalCardProps {
 }
 
 export default function PedestalCard({ pedestal, health, onClick }: PedestalCardProps) {
-  const { pendingSessions, activeSessions, temperatureData, moistureData } = useStore()
+  const { pendingSessions, activeSessions, temperatureData, moistureData, addToast } = useStore()
+  const [qrOpen, setQrOpen] = useState(false)
 
   const pending = pendingSessions.filter((s) => s.pedestal_id === pedestal.id)
   const active  = activeSessions.filter((s) => s.pedestal_id === pedestal.id)
@@ -20,6 +24,7 @@ export default function PedestalCard({ pedestal, health, onClick }: PedestalCard
   const hasAlarm = (temp?.alarm || moist?.alarm) ?? false
 
   return (
+    <>
     <button
       onClick={onClick}
       className={`card text-left w-full transition-all duration-200 hover:scale-[1.02] hover:border-blue-600/50 active:scale-[0.98]
@@ -28,9 +33,26 @@ export default function PedestalCard({ pedestal, health, onClick }: PedestalCard
     >
       {/* Header */}
       <div className="flex items-start justify-between mb-4">
-        <div>
-          <h3 className="font-bold text-white text-lg">{pedestal.name}</h3>
-          <p className="text-gray-500 text-sm">{pedestal.location ?? '—'}</p>
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="min-w-0">
+            <h3 className="font-bold text-white text-lg truncate">{pedestal.name}</h3>
+            <p className="text-gray-500 text-sm">{pedestal.location ?? '—'}</p>
+          </div>
+          {/* v3.7 — QR icon: opens the printable-QR grid without navigating
+              away from the fleet overview. Only shown when we have a
+              cabinet_id to resolve (real pedestals). stopPropagation so
+              the surrounding card's onClick doesn't fire. */}
+          {health?.opta_client_id && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setQrOpen(true) }}
+              className="text-sm px-1.5 py-0.5 rounded border border-gray-700 text-gray-400 hover:text-white hover:border-blue-500/50"
+              title="Show printable QR codes"
+              aria-label="Show QR codes"
+            >
+              🔖
+            </button>
+          )}
         </div>
         <div className="flex flex-col items-end gap-1">
           <span className={`text-xs px-2 py-1 rounded-full border
@@ -120,6 +142,115 @@ export default function PedestalCard({ pedestal, health, onClick }: PedestalCard
         </p>
       )}
     </button>
+
+    {qrOpen && health?.opta_client_id && (
+      <PedestalQrGridModal
+        cabinetId={health.opta_client_id}
+        pedestalId={pedestal.id}
+        pedestalName={pedestal.name}
+        onClose={() => setQrOpen(false)}
+        onCopied={(sid) => addToast({ message: `Copied ${sid} URL`, variant: 'success' })}
+        onCopyFailed={(sid) => addToast({ message: `Clipboard unavailable for ${sid}`, variant: 'warning' })}
+      />
+    )}
+    </>
+  )
+}
+
+
+// ─── QR grid modal (v3.7) ────────────────────────────────────────────────────
+// Opened from the QR icon on a PedestalCard. Lightweight — no feedback
+// toolbar, just the 4 QRs + Download All. Closes on backdrop click and on ×.
+
+function PedestalQrGridModal({
+  cabinetId,
+  pedestalId,
+  pedestalName,
+  onClose,
+  onCopied,
+  onCopyFailed,
+}: {
+  cabinetId: string
+  pedestalId: number
+  pedestalName: string
+  onClose: () => void
+  onCopied: (sid: string) => void
+  onCopyFailed: (sid: string) => void
+}) {
+  const [zipBusy, setZipBusy] = useState(false)
+
+  const handleDownloadAll = async () => {
+    setZipBusy(true)
+    try {
+      const blob = await getPedestalQrAll(cabinetId)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${cabinetId}_qr_codes.zip`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch {
+      /* silent — button stops the spinner on fail */
+    } finally {
+      setZipBusy(false)
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+    >
+      <div
+        className="bg-gray-900 border border-gray-700 rounded-lg p-4 max-w-lg w-full space-y-3"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-white">QR Codes</h3>
+            <p className="text-xs text-gray-500 font-mono">{pedestalName} — {cabinetId}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-gray-400 hover:text-white text-lg leading-none"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+
+        <SocketQrGrid
+          cabinetId={cabinetId}
+          pedestalId={pedestalId}
+          reloadNonce={0}
+          onCopied={onCopied}
+          onCopyFailed={onCopyFailed}
+        />
+
+        <div className="flex gap-2 pt-1">
+          <button
+            type="button"
+            onClick={handleDownloadAll}
+            disabled={zipBusy}
+            className="flex-1 py-1.5 text-sm rounded bg-blue-700/60 hover:bg-blue-600/60 text-blue-100 border border-blue-700/50 disabled:opacity-40"
+          >
+            {zipBusy ? 'Downloading…' : 'Download All (ZIP)'}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex-1 py-1.5 text-sm rounded border border-gray-600 text-gray-300 hover:bg-gray-700/60"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 

@@ -28,6 +28,9 @@ ENDPOINT_CATALOG = [
     {"id": "mobile.qr_claim",        "path": "/api/mobile/qr/claim",                                            "method": "POST",  "category": "Mobile", "allow_bidirectional": True},
     {"id": "mobile.session_live",    "path": "/api/mobile/sessions/{session_id}/live",                          "method": "GET",   "category": "Mobile", "allow_bidirectional": False},
     {"id": "mobile.socket_qr",       "path": "/api/mobile/socket/{pedestal_id}/{socket_id}/qr",                 "method": "GET",   "category": "Mobile", "allow_bidirectional": False},
+    # Auto-discovery + printable QR bundles (v3.7)
+    {"id": "qr.pedestal_all",        "path": "/api/pedestals/{cabinet_id}/qr/all",                              "method": "GET",   "category": "QR",     "allow_bidirectional": False},
+    {"id": "qr.pedestal_regenerate", "path": "/api/pedestals/{cabinet_id}/qr/regenerate",                       "method": "POST",  "category": "QR",     "allow_bidirectional": True},
     {"id": "controls.reset",         "path": "/api/controls/pedestal/{id}/reset",    "method": "POST", "category": "Controls",    "allow_bidirectional": True},
     {"id": "controls.led",           "path": "/api/controls/pedestal/{id}/led",      "method": "POST", "category": "Controls",    "allow_bidirectional": True},
     # Direct ext-pedestal endpoints (not proxied — served by ext_pedestal_endpoints router)
@@ -53,6 +56,7 @@ EVENT_CATALOG = [
     {"id": "socket_auto_activate_skipped", "name": "Auto-Activate Skipped", "category": "Sessions"},
     {"id": "session_telemetry",        "name": "Session Telemetry (mobile)", "category": "Sessions"},
     {"id": "session_ended",            "name": "Session Ended (mobile)", "category": "Sessions"},
+    {"id": "pedestal_registered",      "name": "Pedestal Registered", "category": "Discovery"},
     {"id": "user_plugged_in",          "name": "User Plugged In",     "category": "Sessions"},
     {"id": "invoice_created",          "name": "Invoice Created",     "category": "Billing"},
     {"id": "berth_occupancy_updated",  "name": "Berth Occupancy",     "category": "Berths"},

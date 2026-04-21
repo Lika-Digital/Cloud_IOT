@@ -41,6 +41,7 @@ EVENT_CATALOG = [
     {"id": "session_completed",        "name": "Session Completed",   "category": "Sessions"},
     {"id": "socket_pending",           "name": "Socket Pending",      "category": "Sessions"},
     {"id": "socket_rejected",          "name": "Socket Rejected",     "category": "Sessions"},
+    {"id": "socket_state_changed",     "name": "Socket State Changed","category": "Sessions"},
     {"id": "user_plugged_in",          "name": "User Plugged In",     "category": "Sessions"},
     {"id": "invoice_created",          "name": "Invoice Created",     "category": "Billing"},
     {"id": "berth_occupancy_updated",  "name": "Berth Occupancy",     "category": "Berths"},

@@ -30,16 +30,22 @@ function fmtTs(ts: string): string {
   }
 }
 
-function StateBadge({ state }: { state: string }) {
+function StateBadge({ state, title }: { state: string; title?: string }) {
   const cfg: Record<string, { color: string; dot: string }> = {
     active:      { color: 'bg-green-900/40 text-green-300 border-green-700/50', dot: 'bg-green-400 animate-pulse' },
     idle:        { color: 'bg-gray-800 text-gray-400 border-gray-700', dot: 'bg-gray-600' },
     fault:       { color: 'bg-red-900/40 text-red-300 border-red-700/50', dot: 'bg-red-400 animate-pulse' },
+    // Plug inserted, session not yet activated. Mirrors the yellow socket
+    // circle on the pedestal picture overlay.
+    pending:     { color: 'bg-yellow-900/40 text-yellow-300 border-yellow-700/50', dot: 'bg-yellow-400 animate-pulse' },
     blocked:     { color: 'bg-amber-900/40 text-amber-300 border-amber-700/50', dot: 'bg-amber-400' },
   }
   const c = cfg[state] ?? cfg['idle']
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium border ${c.color}`}>
+    <span
+      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium border ${c.color}`}
+      title={title}
+    >
       <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />
       {state.toUpperCase()}
     </span>
@@ -71,18 +77,27 @@ function SocketCard({
   socketName,
   socketState,
   pedestalId,
+  computedState,
   isAdmin,
   onFeedback,
 }: {
   socketName: string
   socketState: OptaSocketState | null
   pedestalId: number
+  computedState: 'idle' | 'pending' | 'active' | 'fault' | undefined
   isAdmin: boolean
   onFeedback: (key: string, type: 'success' | 'error', text: string) => void
 }) {
   const [loading, setLoading] = useState<string | null>(null)
-  const state = socketState?.state ?? 'idle'
+  // Prefer the unified socket_state_changed broadcast when we have it —
+  // otherwise fall back to the raw Opta firmware state string.
+  const firmwareState = socketState?.state ?? 'idle'
+  const state = computedState ?? firmwareState
   const label = `Socket ${socketName.replace('Q', '')}`
+  const isPending = state === 'pending'
+  const isActive = state === 'active'
+  const isIdle = state === 'idle'
+  const pendingTip = 'Plug inserted — awaiting activation'
 
   const sendCmd = async (action: string) => {
     setLoading(action)
@@ -99,12 +114,15 @@ function SocketCard({
   return (
     <div className="rounded-lg border border-gray-700 bg-gray-800/40 p-3 space-y-2">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+        <div
+          className="flex items-center gap-2"
+          title={isPending ? pendingTip : undefined}
+        >
           <span className="text-base">🔌</span>
           <span className="text-sm font-medium text-white">{label}</span>
           <span className="text-xs text-gray-500 font-mono">{socketName}</span>
         </div>
-        <StateBadge state={state} />
+        <StateBadge state={state} title={isPending ? pendingTip : undefined} />
       </div>
 
       {socketState && (
@@ -127,20 +145,26 @@ function SocketCard({
 
       {isAdmin && (
         <div className="flex gap-1.5 pt-1">
-          <CmdButton
-            label="Activate"
-            color="green"
-            disabled={state === 'active' || loading !== null}
-            loading={loading === 'activate'}
-            onClick={() => sendCmd('activate')}
-          />
-          <CmdButton
-            label="Stop"
-            color="red"
-            disabled={state === 'idle' || loading !== null}
-            loading={loading === 'stop'}
-            onClick={() => sendCmd('stop')}
-          />
+          {/* Only show Stop when the socket is actually active. Otherwise show
+              Activate, which is only enabled for pending (plug inserted). */}
+          {isActive ? (
+            <CmdButton
+              label="Stop"
+              color="red"
+              disabled={loading !== null}
+              loading={loading === 'stop'}
+              onClick={() => sendCmd('stop')}
+            />
+          ) : (
+            <CmdButton
+              label="Activate"
+              color="green"
+              disabled={!isPending || loading !== null}
+              loading={loading === 'activate'}
+              onClick={() => sendCmd('activate')}
+              title={isIdle ? 'No plug inserted' : (isPending ? pendingTip : undefined)}
+            />
+          )}
         </div>
       )}
     </div>
@@ -379,12 +403,14 @@ function CmdButton({
   disabled,
   loading,
   onClick,
+  title,
 }: {
   label: string
   color: 'green' | 'red' | 'blue'
   disabled: boolean
   loading: boolean
   onClick: () => void
+  title?: string
 }) {
   const cls = {
     green: 'bg-green-800/60 hover:bg-green-700/60 text-green-300 border-green-700/50',
@@ -396,6 +422,7 @@ function CmdButton({
     <button
       onClick={onClick}
       disabled={disabled || loading}
+      title={title}
       className={`flex-1 py-1 rounded text-xs font-medium border transition-colors disabled:opacity-40 ${cls} flex items-center justify-center gap-1`}
     >
       {loading && <span className="w-2.5 h-2.5 rounded-full border border-current border-t-transparent animate-spin" />}
@@ -419,6 +446,7 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
     pedestalHealth,
     marinaDoorState,
     pedestals,
+    socketComputedStates,
   } = useStore()
 
   const { feedbacks, show } = useCmdFeedback()
@@ -519,16 +547,22 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
       <div>
         <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">Electricity Sockets</p>
         <div className="grid grid-cols-2 gap-2">
-          {SOCKETS.map((name) => (
-            <SocketCard
-              key={name}
-              socketName={name}
-              socketState={optaSocketStates[`${pedestalId}-${name}`] ?? null}
-              pedestalId={pedestalId}
-              isAdmin={isAdmin}
-              onFeedback={show}
-            />
-          ))}
+          {SOCKETS.map((name) => {
+            // Socket numeric id is the digit in Q1..Q4 (matches backend
+            // broadcast key `${pedestal_id}-${socket_id}`).
+            const socketId = Number(name.replace('Q', ''))
+            return (
+              <SocketCard
+                key={name}
+                socketName={name}
+                socketState={optaSocketStates[`${pedestalId}-${name}`] ?? null}
+                pedestalId={pedestalId}
+                computedState={socketComputedStates[`${pedestalId}-${socketId}`]}
+                isAdmin={isAdmin}
+                onFeedback={show}
+              />
+            )
+          })}
         </div>
       </div>
 

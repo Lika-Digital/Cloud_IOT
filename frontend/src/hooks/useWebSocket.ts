@@ -31,6 +31,7 @@ export function useWebSocket() {
     setOptaStatusInfo,
     addOptaEvent,
     addOptaAck,
+    setSocketComputedState,
   } = useStore()
   const { role } = useAuthStore()
 
@@ -90,12 +91,29 @@ export function useWebSocket() {
         }
         case 'user_plugged_in': {
           // Informational: firmware reports a physical plug-in. Treat the
-          // socket as connected so the ZoneButton shows amber until the
-          // operator / customer activates it.
+          // socket as connected so legacy ZoneButton logic still flips amber.
+          // The canonical signal is `socket_state_changed`; this case is kept
+          // for backwards-compat with older event consumers.
           const pedId = msg.data.pedestal_id as number
           const sockId = msg.data.socket_id as number | null | undefined
           if (sockId != null) {
             addPendingSocket(pedId, sockId)
+          }
+          break
+        }
+        case 'socket_state_changed': {
+          // Unified state broadcast: idle | pending | active | fault.
+          // Powers the yellow pending indicator in Control Center + the
+          // pedestal picture zone circle.
+          const pedId = msg.data.pedestal_id as number
+          const sockId = msg.data.socket_id as number | null | undefined
+          const state = msg.data.state as 'idle' | 'pending' | 'active' | 'fault' | undefined
+          if (sockId != null && state) {
+            setSocketComputedState(pedId, sockId, state)
+            // Keep pendingSockets in sync so ZoneButton logic (which already
+            // reads pendingSockets for amber) produces matching visuals.
+            if (state === 'pending') addPendingSocket(pedId, sockId)
+            else removePendingSocket(pedId, sockId)
           }
           break
         }

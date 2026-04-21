@@ -3,7 +3,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DBSession
 from ..database import get_db
@@ -481,11 +481,33 @@ async def direct_socket_cmd(
 ):
     """
     Send a direct action to a socket outlet (Q1–Q4) via opta/cmd/socket.
-    Valid actions: activate, stop, maintenance.
+    Valid actions: activate, stop.
+
+    Activate is gated on physical plug-in state: the backend refuses to send
+    the command if SocketState.connected is False for this socket. This
+    prevents the firmware from activating an empty outlet and mirrors what
+    the operator sees in the dashboard (yellow pending vs. white idle).
+
     On stop: also completes any active DB session for this socket.
     """
     if socket_name not in ("Q1", "Q2", "Q3", "Q4"):
         raise HTTPException(status_code=400, detail="socket_name must be one of Q1, Q2, Q3, Q4")
+
+    from ..services.mqtt_handlers import _socket_name_to_id
+    socket_id = _socket_name_to_id(socket_name)
+
+    if body.action == "activate":
+        from ..models.pedestal_config import SocketState
+        sock_state = db.query(SocketState).filter(
+            SocketState.pedestal_id == pedestal_id,
+            SocketState.socket_id == socket_id,
+        ).first()
+        if not sock_state or not sock_state.connected:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Socket has no plug inserted",
+            )
+
     cabinet_id = _get_cabinet_id(db, pedestal_id)
     msg_id = str(int(datetime.utcnow().timestamp() * 1000))
     if cabinet_id:
@@ -499,10 +521,8 @@ async def direct_socket_cmd(
             json.dumps({"msgId": msg_id, "action": body.action}),
         )
 
-    # Complete active DB session when stopping
+    # Complete active DB session when stopping (socket_id was resolved above).
     if body.action == "stop":
-        from ..services.mqtt_handlers import _socket_name_to_id
-        socket_id = _socket_name_to_id(socket_name)
         active_session = session_service.get_active_for_socket(db, pedestal_id, socket_id)
         if active_session:
             session_service.complete(db, active_session)

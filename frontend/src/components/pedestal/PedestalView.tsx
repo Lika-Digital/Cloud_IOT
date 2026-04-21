@@ -167,7 +167,7 @@ function ZoneButton({
   isSelected: boolean
   onClick: () => void
 }) {
-  const { pendingSessions, activeSessions, pendingSockets, optaWaterStates } = useStore()
+  const { pendingSessions, activeSessions, pendingSockets, optaWaterStates, socketComputedStates } = useStore()
 
   const socketId = typeof zone.id === 'number' ? zone.id : null
   const isWater = zone.type === 'water'
@@ -176,6 +176,13 @@ function ZoneButton({
 
   // Per-valve firmware state (V1 / V2 tracked independently via opta/water/V*/status)
   const valveState = valveName ? optaWaterStates[`${pedestalId}-${valveName}`] : null
+
+  // Unified state broadcast from backend for electricity sockets. Takes priority
+  // over session-based inference when present — reflects plug-in status even
+  // before a session exists.
+  const computed = !isCamera && !isWater && socketId !== null
+    ? socketComputedStates[`${pedestalId}-${socketId}`]
+    : undefined
 
   const pending = isCamera
     ? undefined
@@ -194,13 +201,21 @@ function ZoneButton({
     ? !!pendingSockets[`${pedestalId}-${socketId}`]
     : false
 
-  const status = active ? 'active' : (pending || socketPending) ? 'pending' : 'idle'
+  // Status resolution: computed state from backend wins when we have it;
+  // otherwise fall back to session / socket-pending inference.
+  let status: 'idle' | 'pending' | 'active'
+  if (computed) {
+    status = computed === 'fault' ? 'idle' : computed
+  } else {
+    status = active ? 'active' : (pending || socketPending) ? 'pending' : 'idle'
+  }
 
   const ringColor = isCamera
     ? 'ring-gray-500 shadow-transparent'
     : {
         active: 'ring-green-400 shadow-green-400/60',
-        pending: 'ring-amber-400 shadow-amber-400/60',
+        // Yellow for "plug inserted, awaiting activation" — matches Control Center badge.
+        pending: 'ring-yellow-400 shadow-yellow-400/60',
         idle: 'ring-gray-600 shadow-transparent',
       }[status]
 
@@ -208,7 +223,7 @@ function ZoneButton({
     ? 'bg-black/70'
     : {
         active: 'bg-green-500/30',
-        pending: 'bg-amber-500/30',
+        pending: 'bg-yellow-400/30',
         idle: 'bg-white/10',
       }[status]
 
@@ -230,7 +245,9 @@ function ZoneButton({
     ? 'Camera'
     : status === 'active'
       ? 'Stop Session'
-      : zone.label
+      : status === 'pending'
+        ? 'Plug inserted — awaiting activation'
+        : zone.label
 
   return (
     <div style={posStyle} className="group">

@@ -181,6 +181,13 @@ interface AppStore {
   addPendingSocket: (pedestal_id: number, socket_id: number) => void
   removePendingSocket: (pedestal_id: number, socket_id: number) => void
 
+  // Computed socket state from the unified backend `socket_state_changed` WS
+  // event. Keyed by `${pedestal_id}-${socket_id}`; values: idle|pending|active|fault.
+  // Reflects plug-inserted + session + firmware fault state as a single source
+  // of truth for SocketCard / ZoneButton coloring.
+  socketComputedStates: Record<string, 'idle' | 'pending' | 'active' | 'fault'>
+  setSocketComputedState: (pedestal_id: number, socket_id: number, state: 'idle' | 'pending' | 'active' | 'fault') => void
+
   // Chat unread count
   unreadChatCount: number
   setUnreadChatCount: (count: number) => void
@@ -333,6 +340,15 @@ export const useStore = create<AppStore>((set) => ({
       delete next[`${pedestal_id}-${socket_id}`]
       return { pendingSockets: next }
     }),
+
+  socketComputedStates: {},
+  setSocketComputedState: (pedestal_id, socket_id, state) =>
+    set((s) => ({
+      socketComputedStates: {
+        ...s.socketComputedStates,
+        [`${pedestal_id}-${socket_id}`]: state,
+      },
+    })),
 
   unreadChatCount: 0,
   setUnreadChatCount: (count) => set({ unreadChatCount: count }),

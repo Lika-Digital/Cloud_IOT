@@ -74,7 +74,24 @@ def _simulate_mqtt(topic: str, payload: str) -> list[dict]:
 
 @pytest.mark.parametrize("action", ["activate", "stop"])
 def test_direct_socket_cmd_publishes_mqtt(client, auth_headers, action):
-    """TC-DC-01/02  POST socket cmd → MQTT published to opta/cmd/socket/Q{n}."""
+    """TC-DC-01/02  POST socket cmd → MQTT published to opta/cmd/socket/Q{n}.
+
+    Activate now requires SocketState.connected=True (see test_socket_plug_state_machine
+    TC-SP-03); seed the plug-in state so the activate path is reachable.
+    """
+    # Seed plug-in state for the activate path.
+    from app.models.pedestal_config import SocketState
+    db = _TestSession()
+    try:
+        existing = db.query(SocketState).filter_by(pedestal_id=1, socket_id=1).first()
+        if existing:
+            existing.connected = True
+        else:
+            db.add(SocketState(pedestal_id=1, socket_id=1, connected=True))
+        db.commit()
+    finally:
+        db.close()
+
     published: list[tuple] = []
 
     def mock_publish(topic, payload, qos=1):

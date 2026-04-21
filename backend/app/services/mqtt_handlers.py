@@ -411,6 +411,8 @@ async def _handle_marina_events(cabinet_id: str, payload: str):
             await _handle_event_session_ended(db, pedestal_id, outlet_id, resource, data)
         elif event_type == "UserPluggedIn":
             await _handle_event_user_plugged_in(db, pedestal_id, outlet_id, resource, data)
+        elif event_type == "UserPluggedOut":
+            await _handle_event_user_plugged_out(db, pedestal_id, outlet_id, resource, data)
         elif event_type == "AlarmRaised":
             alarm = data.get("alarm", {})
             code = alarm.get("code", "UNKNOWN")
@@ -436,38 +438,64 @@ async def _handle_marina_events(cabinet_id: str, payload: str):
     })
 
 
-async def _handle_event_user_plugged_in(db, pedestal_id: int, outlet_id: str, resource: str, data: dict):
-    """UserPluggedIn — informational only. Marks socket as physically connected.
-
-    No approval flow: operator can activate from Control Center or customer
-    from mobile app. Session is created on OutletActivated, not here.
+async def _broadcast_socket_state(pedestal_id: int, socket_id: int, new_state: str, resource: str = "POWER"):
+    """Single-point emitter for socket_state_changed. Keeps the WebSocket event
+    shape consistent across every call site (UserPluggedIn/Out, OutletActivated,
+    SessionEnded). `new_state` is one of idle|pending|active|fault.
     """
+    await ws_manager.broadcast({
+        "event": "socket_state_changed",
+        "data": {
+            "pedestal_id": pedestal_id,
+            "socket_id": socket_id,
+            "state": new_state,
+            "resource": resource,
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    })
+
+
+def _set_socket_connected(db, pedestal_id: int, socket_id: int, connected: bool) -> None:
+    """Upsert SocketState.connected. Caller is responsible for committing."""
     from ..models.pedestal_config import SocketState
-
-    is_water = resource == "WATER"
-    socket_id = _water_name_to_id(outlet_id) if is_water else _socket_name_to_id(outlet_id)
-
-    _ensure_pedestal(db, pedestal_id)
     now = datetime.utcnow()
     state = db.query(SocketState).filter(
         SocketState.pedestal_id == pedestal_id,
         SocketState.socket_id == socket_id,
     ).first()
     if state:
-        state.connected = True
+        state.connected = connected
         state.updated_at = now
     else:
         state = SocketState(
             pedestal_id=pedestal_id,
             socket_id=socket_id,
-            connected=True,
+            connected=connected,
         )
         db.add(state)
+
+
+async def _handle_event_user_plugged_in(db, pedestal_id: int, outlet_id: str, resource: str, data: dict):
+    """UserPluggedIn — marks socket as physically connected and moves the
+    computed socket state to `pending` when no session is running. A session
+    already in flight keeps `active` — plug re-assertions during a session
+    must not flip the operator-visible state.
+    """
+    is_water = resource == "WATER"
+    socket_id = _water_name_to_id(outlet_id) if is_water else _socket_name_to_id(outlet_id)
+
+    _ensure_pedestal(db, pedestal_id)
+    _set_socket_connected(db, pedestal_id, socket_id, True)
     db.commit()
 
-    berth_id = data.get("device", {}).get("berthId", "")
-    logger.info("[Event] UserPluggedIn %s (berth=%s, socket=%d) — plug detected, awaiting activate", outlet_id, berth_id, socket_id)
+    session_type = "water" if is_water else "electricity"
+    active = session_service.get_active_for_socket(db, pedestal_id, socket_id, session_type=session_type)
+    computed = "active" if (active and active.status == "active") else "pending"
 
+    berth_id = data.get("device", {}).get("berthId", "")
+    logger.info("[Event] UserPluggedIn %s (berth=%s, socket=%d) — state=%s", outlet_id, berth_id, socket_id, computed)
+
+    # Back-compat event (consumed by the pendingSockets store).
     await ws_manager.broadcast({
         "event": "user_plugged_in",
         "data": {
@@ -478,6 +506,60 @@ async def _handle_event_user_plugged_in(db, pedestal_id: int, outlet_id: str, re
             "resource": resource,
         },
     })
+    await _broadcast_socket_state(pedestal_id, socket_id, computed, resource=resource)
+
+
+async def _handle_event_user_plugged_out(db, pedestal_id: int, outlet_id: str, resource: str, data: dict):
+    """UserPluggedOut — plug was physically removed.
+
+    If a session is currently active we stop it (publish stop command to Opta,
+    complete the DB row) before marking the socket idle. If no session is
+    active we just flip connected=False and broadcast idle.
+    """
+    is_water = resource == "WATER"
+    socket_id = _water_name_to_id(outlet_id) if is_water else _socket_name_to_id(outlet_id)
+    session_type = "water" if is_water else "electricity"
+
+    _ensure_pedestal(db, pedestal_id)
+
+    active = session_service.get_active_for_socket(db, pedestal_id, socket_id, session_type=session_type)
+    if active and active.status == "active":
+        # Tell the firmware to stop, then complete the DB session. The Opta
+        # SessionEnded that normally follows is idempotent (handler logs +
+        # re-sets socket state, we will already be idle).
+        from ..models.pedestal_config import PedestalConfig
+        cfg = db.query(PedestalConfig).filter(PedestalConfig.pedestal_id == pedestal_id).first()
+        cabinet_id = getattr(cfg, "opta_client_id", None) if cfg else None
+        if cabinet_id:
+            from .mqtt_client import mqtt_service
+            cmd_topic = (
+                f"opta/cmd/water/{outlet_id}" if is_water
+                else f"opta/cmd/socket/{outlet_id}"
+            )
+            msg_id = str(int(datetime.utcnow().timestamp() * 1000))
+            mqtt_service.publish(
+                cmd_topic,
+                json.dumps({"msgId": msg_id, "cabinetId": cabinet_id, "action": "stop"}),
+            )
+        session_service.complete(db, active)
+        await ws_manager.broadcast({
+            "event": "session_completed",
+            "data": {
+                "session_id": active.id,
+                "pedestal_id": pedestal_id,
+                "socket_id": socket_id,
+                "energy_kwh": active.energy_kwh,
+                "water_liters": active.water_liters,
+                "customer_id": active.customer_id,
+            },
+        })
+        logger.info("[Event] UserPluggedOut %s — stopped active session %d", outlet_id, active.id)
+
+    _set_socket_connected(db, pedestal_id, socket_id, False)
+    db.commit()
+
+    logger.info("[Event] UserPluggedOut %s (socket=%d) — state=idle", outlet_id, socket_id)
+    await _broadcast_socket_state(pedestal_id, socket_id, "idle", resource=resource)
 
 
 async def _handle_event_outlet_activated(db, pedestal_id: int, outlet_id: str, resource: str, data: dict):
@@ -518,6 +600,7 @@ async def _handle_event_outlet_activated(db, pedestal_id: int, outlet_id: str, r
             "customer_name": None,
         },
     })
+    await _broadcast_socket_state(pedestal_id, socket_id, "active", resource=resource)
 
 
 async def _handle_event_telemetry_update(db, pedestal_id: int, outlet_id: str, resource: str, data: dict):
@@ -602,6 +685,19 @@ async def _handle_event_session_ended(db, pedestal_id: int, outlet_id: str, reso
             "customer_id": session.customer_id,
         },
     })
+
+    # Socket state after SessionEnded:
+    #   cable still inserted (SocketState.connected=True) → 'pending'
+    #   cable removed                                      → 'idle'
+    from ..models.pedestal_config import SocketState
+    sock_state = db.query(SocketState).filter(
+        SocketState.pedestal_id == pedestal_id,
+        SocketState.socket_id == socket_id,
+    ).first()
+    still_connected = bool(sock_state and sock_state.connected)
+    await _broadcast_socket_state(
+        pedestal_id, socket_id, "pending" if still_connected else "idle", resource=resource,
+    )
 
 
 async def _handle_marina_acks(cabinet_id: str, payload: str):

@@ -34,6 +34,19 @@ Mosquitto Broker (:1883)                  │                         │
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-04-21 — QR-code mobile ownership + per-session telemetry (v3.6)
+- Every socket now has a static QR printed on its label; scanning it opens `/mobile/socket/{pedestal_id}/{socket_id}` in the customer app and claims the active session for the scanning customer. Claim branches: `no_session`, `claimed`, `already_owner`, `read_only`.
+- **Mobile authority model is monitoring-only.** `POST /api/customer/sessions/{id}/stop` now returns **403** for every customer call — the customer ends a session by physically unplugging the cable (firmware emits `UserPluggedOut`). Operator stop from the dashboard (admin role) is the only software-side stop.
+- New `/api/mobile/` router (3 endpoints): `POST /qr/claim`, `GET /sessions/{id}/live` (polling fallback; owner-only 403 guard), `GET /socket/{pid}/{sid}/qr` (admin-only PNG download).
+- New `Session.owner_claimed_at` column (nullable). `customer_id` is reused; there is **no** new `owner_user_id` — operators do not claim sessions via QR.
+- WebSocket manager gains per-session subscriptions — `broadcast_to_session(session_id, ...)` fans out `session_telemetry` / `session_ended` / `socket_state_changed` only to the mobile client that claimed that session. Global operator dashboard broadcasts are unchanged.
+- New short-lived `websocket_token` JWT (1 h, `role="ws_session"`) returned by `/qr/claim`; the mobile app passes it on `/ws?token=...` to establish the per-session subscription.
+- Dashboard Control Center: every electricity socket now shows a `QR` button that opens a modal with the printable PNG + URL preview + Download (`{pid}_{Qn}_qr.png`), and a 📱 indicator when the active session has a mobile owner (tooltip shows the owner's name).
+- Mobile app (Expo): new deep-link route `app/(app)/mobile/socket/[pedestal_id]/[socket_id].tsx` with loading / claimed / read-only / no-session / ended view states. No Stop button anywhere.
+- `docs/mobile_api.md` (NEW) — authoritative mobile contract with auth model, REST schemas, WebSocket event catalog, `owner_claimed_at` semantics table, and Phase-2 marina-access TODO.
+- 14 new backend tests (`test_mobile_qr_claim.py`) — auth, 404 branches, all 4 claim paths, `owner_claimed_at` persistence, websocket_token validity, live endpoint auth, QR PNG + customer-403, `session_telemetry` fan-out, `session_ended` + channel close. 248 → 262 total.
+- Marina access control **intentionally skipped** — any authenticated customer may claim any socket (prepaid walk-up model). Documented in `docs/mobile_api.md` as Phase-2 TODO.
+
 ### 2026-04-21 — Per-socket auto-activation (v3.5)
 - New per-socket `auto_activate` flag (default off) — operator toggles it from the Control Center socket card. When enabled, the backend auto-fires the activate command after `UserPluggedIn`, with a 2-second firmware stabilisation delay.
 - 5 precondition checks gate the auto-fire (all must pass, in order): door closed (unknown ≡ open), no active fault on the pedestal, heartbeat within 300 s, socket not already active, no diagnostic in the last 60 s. Any failure produces a `socket_auto_activate_skipped` WebSocket event with the reason string and logs a row to the new `auto_activation_log` table.
@@ -574,6 +587,8 @@ sudo journalctl -u cloud-iot-backend -n 50 --no-pager  # last 50 lines
 | `socket_state_changed` | Unified socket state (`idle / pending / active / fault`) — canonical feed for UI circle colour |
 | `user_plugged_in` | Physical plug detected (legacy informational) |
 | `invoice_created` | Invoice written after session completion |
+| `session_telemetry` | **Mobile only** — per-session live metrics sent to the scanning customer |
+| `session_ended` | **Mobile only** — session completed; server closes the subscriber socket after sending |
 | `error_logged` | New entry in error log |
 | `pedestal_health_updated` | Camera or OPTA reachability change |
 | `pedestal_reset_sent` | Reset command dispatched |
@@ -641,7 +656,7 @@ cd Cloud_IOT
 backend/.venv/Scripts/python -m pytest tests/backend/ -q
 ```
 
-**238 tests** covering:
+**262 tests** covering:
 - Session lifecycle and MQTT integration
 - Operator approval flow and timeouts
 - Customer auth and billing
@@ -659,5 +674,6 @@ backend/.venv/Scripts/python -m pytest tests/backend/ -q
 - **Auth hardening** (rate limiting on login/otp/register, `ALLOW_SELF_REGISTRATION` flag, production JWT_SECRET guard)
 - **DB integrity** (bounded backfill, invoice idempotency, partial unique index on active sessions, per-valve water session split)
 - **Contract drift guards** (AST walk — backend broadcasts vs. frontend cases, route vs. ENDPOINT_CATALOG)
+- **Mobile QR claim + session telemetry** (auth, 404 branches, 4 claim paths, owner_claimed_at persistence, websocket_token validity, per-session WS fan-out, admin-only QR PNG)
 
 Pre-commit and pre-push hooks run the full suite automatically. Pushes to `main` require `CLOUD_IOT_RELEASE=1` and a merged `develop` branch.

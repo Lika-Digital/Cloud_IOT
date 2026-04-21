@@ -125,6 +125,20 @@ def _db_clear_socket_state(pedestal_id: int, socket_id: int):
         db.close()
 
 
+def _complete_via_db(session_id: int):
+    """v3.6 cleanup helper — customer stop is locked at 403 so tests mark
+    sessions completed directly in the DB rather than via the API."""
+    db = _TestSession()
+    try:
+        from app.models.session import Session as SessionModel
+        row = db.get(SessionModel, session_id)
+        if row:
+            row.status = "completed"
+            db.commit()
+    finally:
+        db.close()
+
+
 # ─── Dedicated workflow pedestal fixture ──────────────────────────────────────
 
 @pytest.fixture(scope="module")
@@ -410,7 +424,7 @@ class TestMobileSessionFlow:
         assert session["status"] == "active"
 
         # Cleanup
-        client.post(f"/api/customer/sessions/{session['id']}/stop", headers=cust_headers)
+        _complete_via_db(session['id'])
 
     def test_tc_mob_02_session_start_blocked_when_socket_disconnected(
         self, client, cust_headers, workflow_pedestal_id
@@ -461,7 +475,7 @@ class TestMobileSessionFlow:
         assert session["status"] == "active"
 
         # Cleanup
-        client.post(f"/api/customer/sessions/{session['id']}/stop", headers=cust_headers)
+        _complete_via_db(session['id'])
 
     def test_tc_mob_04_session_start_sends_mqtt_allow(
         self, client, cust_headers, workflow_pedestal_id
@@ -498,7 +512,7 @@ class TestMobileSessionFlow:
         ), f"Expected MQTT 'allow' publish, got: {published}"
 
         # Cleanup
-        client.post(f"/api/customer/sessions/{session_id}/stop", headers=cust_headers)
+        _complete_via_db(session_id)
 
     def test_tc_mob_05_customer_can_list_pedestals_by_pedestal_id(
         self, client, cust_headers, workflow_pedestal_id
@@ -540,19 +554,34 @@ class TestSessionStop:
     """Session stop: status transitions and MQTT control message."""
 
     def test_tc_stop_01_customer_stop_completes_session(
-        self, client, cust_headers, workflow_pedestal_id
+        self, client, cust_headers, auth_headers, workflow_pedestal_id
     ):
         """
-        TC-STOP-01 [IMPLEMENTED]
-        Customer stopping their own session transitions it to 'completed'.
+        TC-STOP-01 [UPDATED v3.6]
+        Customer-side stop is intentionally disabled (monitoring-only model).
+        Admin stop via /api/controls/{id}/stop transitions the session to
+        'completed'. Customer stop must return 403.
         """
         pid = workflow_pedestal_id
         _db_clear_socket_state(pid, 4)
 
-        # Clean up any active sessions left by previous tests
-        for s in client.get("/api/customer/sessions/mine", headers=cust_headers).json():
-            if s["status"] == "active":
-                client.post(f"/api/customer/sessions/{s['id']}/stop", headers=cust_headers)
+        # Any leftover active session — mark completed directly in DB (customer
+        # stop is no longer a usable cleanup path).
+        from sqlalchemy import create_engine as _ce
+        from sqlalchemy.orm import sessionmaker as _sm
+        _eng = _ce("sqlite:///./tests/test_pedestal.db", connect_args={"check_same_thread": False})
+        _DB = _sm(bind=_eng)
+        try:
+            from app.models.session import Session as _SM
+            _d = _DB()
+            try:
+                for s in _d.query(_SM).filter(_SM.status == "active", _SM.pedestal_id == pid).all():
+                    s.status = "completed"
+                _d.commit()
+            finally:
+                _d.close()
+        finally:
+            _eng.dispose()
 
         r = client.post("/api/customer/sessions/start", json={
             "pedestal_id": pid, "type": "electricity", "socket_id": 4,
@@ -560,7 +589,14 @@ class TestSessionStop:
         assert r.status_code == 200
         session_id = r.json()["id"]
 
-        r2 = client.post(f"/api/customer/sessions/{session_id}/stop", headers=cust_headers)
+        # Customer stop is locked (v3.6 monitoring-only). Verify the 403 directly
+        # via the API — we do NOT use _complete_via_db here because we need the
+        # HTTP response to assert the 403.
+        r_cust = client.post(f"/api/customer/sessions/{session_id}/stop", headers=cust_headers)
+        assert r_cust.status_code == 403
+
+        # Admin stop still works and is the canonical end-of-session path.
+        r2 = client.post(f"/api/controls/{session_id}/stop", headers=auth_headers)
         assert r2.status_code == 200
         assert r2.json()["status"] == "completed"
 
@@ -578,7 +614,7 @@ class TestSessionStop:
         # Clean up any active sessions left by previous tests
         for s in client.get("/api/customer/sessions/mine", headers=cust_headers).json():
             if s["status"] == "active":
-                client.post(f"/api/customer/sessions/{s['id']}/stop", headers=cust_headers)
+                _complete_via_db(s['id'])
 
         r = client.post("/api/customer/sessions/start", json={
             "pedestal_id": pid, "type": "electricity", "socket_id": 4,
@@ -763,7 +799,7 @@ class TestFullWorkflow:
         r_mine = client.get("/api/customer/sessions/mine", headers=cust_headers)
         for s in r_mine.json():
             if s["status"] == "active":
-                client.post(f"/api/customer/sessions/{s['id']}/stop", headers=cust_headers)
+                _complete_via_db(s['id'])
 
         # ── Step 5: Customer starts session ───────────────────────────────────
         published = []
@@ -813,7 +849,7 @@ class TestFullWorkflow:
         finally:
             db.close()
 
-        # ── Step 7: Customer stops session ────────────────────────────────────
-        r = client.post(f"/api/customer/sessions/{session_id}/stop", headers=cust_headers)
-        assert r.status_code == 200, f"[Step 7] Stop failed: {r.text}"
+        # ── Step 7: Stop via admin (v3.6 — customer stop is disabled) ─────────
+        r = client.post(f"/api/controls/{session_id}/stop", headers=auth_headers)
+        assert r.status_code == 200, f"[Step 7] Admin stop failed: {r.text}"
         assert r.json()["status"] == "completed", "[Step 7] Session not completed after stop"

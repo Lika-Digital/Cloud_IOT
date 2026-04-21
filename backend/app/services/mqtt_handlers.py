@@ -476,7 +476,40 @@ async def _broadcast_socket_state(pedestal_id: int, socket_id: int, new_state: s
     """Single-point emitter for socket_state_changed. Keeps the WebSocket event
     shape consistent across every call site (UserPluggedIn/Out, OutletActivated,
     SessionEnded). `new_state` is one of idle|pending|active|fault.
+
+    v3.6 — also fans out to any mobile client subscribed to the currently
+    active session for this (pedestal, socket) pair so its screen refreshes
+    without a global reconnect.
     """
+    # Look up an active session so we can target the mobile subscriber.
+    db = SessionLocal()
+    try:
+        from ..models.session import Session as _S
+        active = (
+            db.query(_S)
+            .filter(_S.pedestal_id == pedestal_id,
+                    _S.socket_id == socket_id,
+                    _S.type == "electricity",
+                    _S.status == "active")
+            .first()
+        )
+        session_id_for_subs = active.id if active else None
+    finally:
+        db.close()
+
+    if session_id_for_subs is not None:
+        await ws_manager.broadcast_to_session(session_id_for_subs, {
+            "event": "socket_state_changed",
+            "data": {
+                "pedestal_id": pedestal_id,
+                "socket_id": socket_id,
+                "session_id": session_id_for_subs,
+                "state": new_state,
+                "resource": resource,
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+        })
+
     await ws_manager.broadcast({
         "event": "socket_state_changed",
         "data": {
@@ -866,6 +899,26 @@ async def _handle_event_telemetry_update(db, pedestal_id: int, outlet_id: str, r
             },
         })
 
+        # v3.6 — per-session mobile telemetry push. Only subscribers of this
+        # session's WebSocket channel receive it, so the mobile user sees
+        # their own live kWh/kW data without the whole operator broadcast
+        # firehose.
+        if session_id is not None:
+            started_at = session.started_at if session else None
+            duration_seconds = int((datetime.utcnow() - started_at).total_seconds()) if started_at else 0
+            await ws_manager.broadcast_to_session(session_id, {
+                "event": "session_telemetry",
+                "data": {
+                    "session_id": session_id,
+                    "pedestal_id": pedestal_id,
+                    "socket_id": socket_id,
+                    "duration_seconds": duration_seconds,
+                    "energy_kwh": kwh_total,
+                    "power_kw": round(power_kw, 3),
+                    "timestamp": datetime.utcnow().isoformat(),
+                },
+            })
+
 
 async def _handle_event_session_ended(db, pedestal_id: int, outlet_id: str, resource: str, data: dict):
     """SessionEnded — complete the DB session; store final totals from firmware."""
@@ -902,6 +955,21 @@ async def _handle_event_session_ended(db, pedestal_id: int, outlet_id: str, reso
             "customer_id": session.customer_id,
         },
     })
+
+    # v3.6 — push a session_ended event to the mobile subscriber and close
+    # their channel cleanly. The subscriber has no further use for this
+    # session after it completes.
+    await ws_manager.broadcast_to_session(session.id, {
+        "event": "session_ended",
+        "data": {
+            "session_id": session.id,
+            "pedestal_id": pedestal_id,
+            "socket_id": socket_id,
+            "energy_kwh": session.energy_kwh,
+            "water_liters": session.water_liters,
+            "ended_at": session.ended_at.isoformat() if session.ended_at else datetime.utcnow().isoformat(),
+        },
+    }, close_after=True)
 
     # Socket state after SessionEnded:
     #   cable still inserted (SocketState.connected=True) → 'pending'

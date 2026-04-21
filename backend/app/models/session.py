@@ -21,6 +21,12 @@ class Session(Base):
     water_liters: Mapped[float] = mapped_column(Float, nullable=True)
     customer_id: Mapped[int] = mapped_column(Integer, nullable=True)
     deny_reason: Mapped[str] = mapped_column(String(500), nullable=True)
+    # v3.6 — set when an auto-activated (customer_id=NULL) session is later
+    # claimed by a customer via QR scan. Lets us distinguish sessions started
+    # from the mobile app (owner_claimed_at=NULL, customer_id=customer.id)
+    # from sessions claimed after-the-fact (both set). Does not replace
+    # customer_id — that remains the sole FK to the Customer table.
+    owner_claimed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
 
     pedestal: Mapped["Pedestal"] = relationship("Pedestal", back_populates="sessions")  # noqa: F821
     sensor_readings: Mapped[list["SensorReading"]] = relationship(  # noqa: F821

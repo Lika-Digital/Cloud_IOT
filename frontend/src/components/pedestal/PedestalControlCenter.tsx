@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../../store'
 import { useAuthStore } from '../../store/authStore'
 import {
@@ -8,6 +8,7 @@ import {
   resetPedestal,
   getSocketConfigs,
   setSocketConfig,
+  getSocketQrBlob,
 } from '../../api'
 import type { OptaSocketState, OptaWaterState, OptaLogEntry } from '../../store'
 
@@ -83,6 +84,7 @@ function SocketCard({
   autoActivate,
   autoSkipReason,
   onAutoActivateChange,
+  ownerLabel,
   isAdmin,
   onFeedback,
 }: {
@@ -93,12 +95,16 @@ function SocketCard({
   autoActivate: boolean
   autoSkipReason: string | undefined
   onAutoActivateChange: (socketId: number, value: boolean) => Promise<void>
+  /** Non-null when the active session for this socket has a mobile-app owner
+   *  (either started from mobile or claimed via QR). Shows a phone icon. */
+  ownerLabel: string | null
   isAdmin: boolean
   onFeedback: (key: string, type: 'success' | 'error', text: string) => void
 }) {
   const [loading, setLoading] = useState<string | null>(null)
   const [autoBusy, setAutoBusy] = useState(false)
   const [autoJustSaved, setAutoJustSaved] = useState(false)
+  const [qrOpen, setQrOpen] = useState(false)
 
   const socketId = Number(socketName.replace('Q', ''))
   // Prefer the unified socket_state_changed broadcast when we have it —
@@ -158,8 +164,29 @@ function SocketCard({
               AUTO
             </span>
           )}
+          {ownerLabel && (
+            <span
+              className="text-[12px] text-blue-300"
+              title={`Mobile owner: ${ownerLabel}`}
+              aria-label={`Mobile owner ${ownerLabel}`}
+            >
+              📱
+            </span>
+          )}
         </div>
-        <StateBadge state={state} title={isPending ? pendingTip : undefined} />
+        <div className="flex items-center gap-1.5">
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => setQrOpen(true)}
+              className="text-[10px] px-1.5 py-0.5 rounded border border-gray-600 text-gray-300 hover:bg-gray-700/60"
+              title="Show printable QR code for this socket"
+            >
+              QR
+            </button>
+          )}
+          <StateBadge state={state} title={isPending ? pendingTip : undefined} />
+        </div>
       </div>
 
       {socketState && (
@@ -230,6 +257,124 @@ function SocketCard({
           </div>
         </>
       )}
+
+      {qrOpen && (
+        <QrModal
+          pedestalId={pedestalId}
+          socketName={socketName}
+          onClose={() => setQrOpen(false)}
+        />
+      )}
+    </div>
+  )
+}
+
+
+// ─── QR modal ────────────────────────────────────────────────────────────────
+// Admin-only — fetches the PNG blob from /api/mobile/socket/{pid}/{sid}/qr and
+// shows a preview + Download button. The URL encoded in the QR is read from the
+// X-QR-URL response header so the operator can visually verify it.
+
+function QrModal({
+  pedestalId,
+  socketName,
+  onClose,
+}: {
+  pedestalId: number
+  socketName: string
+  onClose: () => void
+}) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null)
+  const [qrTargetUrl, setQrTargetUrl] = useState<string>('')
+  const [err, setErr] = useState<string | null>(null)
+  const objectUrlRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    getSocketQrBlob(pedestalId, socketName)
+      .then(({ blob, url }) => {
+        if (cancelled) return
+        const u = URL.createObjectURL(blob)
+        objectUrlRef.current = u
+        setBlobUrl(u)
+        setQrTargetUrl(url)
+      })
+      .catch(() => setErr('Failed to load QR image'))
+    return () => {
+      cancelled = true
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
+    }
+  }, [pedestalId, socketName])
+
+  const handleDownload = () => {
+    if (!blobUrl) return
+    const a = document.createElement('a')
+    a.href = blobUrl
+    a.download = `${pedestalId}_${socketName}_qr.png`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+    >
+      <div
+        className="bg-gray-900 border border-gray-700 rounded-lg p-4 max-w-sm w-full space-y-3"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-white">
+            QR for {socketName}
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-gray-400 hover:text-white text-lg leading-none"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="bg-white rounded p-3 flex items-center justify-center min-h-[240px]">
+          {err ? (
+            <span className="text-red-500 text-sm">{err}</span>
+          ) : blobUrl ? (
+            <img src={blobUrl} alt={`QR for ${socketName}`} className="max-w-full" />
+          ) : (
+            <span className="text-gray-500 text-sm">Loading…</span>
+          )}
+        </div>
+
+        {qrTargetUrl && (
+          <p className="text-[11px] text-gray-400 break-all" title={qrTargetUrl}>
+            {qrTargetUrl}
+          </p>
+        )}
+
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={handleDownload}
+            disabled={!blobUrl}
+            className="flex-1 py-1.5 text-sm rounded bg-blue-700/60 hover:bg-blue-600/60 text-blue-100 border border-blue-700/50 disabled:opacity-40"
+          >
+            Download PNG
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex-1 py-1.5 text-sm rounded border border-gray-600 text-gray-300 hover:bg-gray-700/60"
+          >
+            Close
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -513,6 +658,7 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
     socketAutoActivate,
     setSocketAutoActivate,
     socketAutoSkipReasons,
+    activeSessions,
   } = useStore()
 
   // v3.5 — load per-socket auto-activate config whenever the Control Center
@@ -642,6 +788,16 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
             // broadcast key `${pedestal_id}-${socket_id}`).
             const socketId = Number(name.replace('Q', ''))
             const key = `${pedestalId}-${socketId}`
+            // v3.6 phone-icon indicator — look up the active session (if any)
+            // for this socket and pass a customer-owner label for the tooltip.
+            const activeSession = activeSessions.find(
+              (s) => s.pedestal_id === pedestalId
+                && s.socket_id === socketId
+                && s.type === 'electricity',
+            )
+            const ownerLabel = activeSession && activeSession.customer_id
+              ? (activeSession.customer_name || `Customer #${activeSession.customer_id}`)
+              : null
             return (
               <SocketCard
                 key={name}
@@ -652,6 +808,7 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
                 autoActivate={!!socketAutoActivate[key]}
                 autoSkipReason={socketAutoSkipReasons[key]?.reason}
                 onAutoActivateChange={onAutoActivateChange}
+                ownerLabel={ownerLabel}
                 isAdmin={isAdmin}
                 onFeedback={show}
               />

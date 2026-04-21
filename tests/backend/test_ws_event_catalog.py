@@ -32,6 +32,11 @@ INTERNAL_EVENTS = {
     "pedestal_reset_sent",   # logged via REST
     "invoice_created",       # billing page fetches via REST
     "diagnostics_result",    # diagnostics panel fetches via REST
+    # v3.6 — mobile-only events. Delivered via broadcast_to_session() to
+    # the customer's mobile WebSocket subscription, never to the operator
+    # dashboard, so there is no case in useWebSocket.ts by design.
+    "session_telemetry",
+    "session_ended",
 }
 
 

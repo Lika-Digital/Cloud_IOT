@@ -24,6 +24,10 @@ ENDPOINT_CATALOG = [
     {"id": "sockets.config_list",    "path": "/api/pedestals/{pedestal_id}/sockets/config",                     "method": "GET",   "category": "Controls", "allow_bidirectional": False},
     {"id": "sockets.config_patch",   "path": "/api/pedestals/{pedestal_id}/sockets/{socket_id}/config",          "method": "PATCH", "category": "Controls", "allow_bidirectional": True},
     {"id": "sockets.auto_log",       "path": "/api/pedestals/{pedestal_id}/sockets/{socket_id}/auto-activate-log","method": "GET",   "category": "Controls", "allow_bidirectional": False},
+    # Mobile QR-claim + monitoring (v3.6)
+    {"id": "mobile.qr_claim",        "path": "/api/mobile/qr/claim",                                            "method": "POST",  "category": "Mobile", "allow_bidirectional": True},
+    {"id": "mobile.session_live",    "path": "/api/mobile/sessions/{session_id}/live",                          "method": "GET",   "category": "Mobile", "allow_bidirectional": False},
+    {"id": "mobile.socket_qr",       "path": "/api/mobile/socket/{pedestal_id}/{socket_id}/qr",                 "method": "GET",   "category": "Mobile", "allow_bidirectional": False},
     {"id": "controls.reset",         "path": "/api/controls/pedestal/{id}/reset",    "method": "POST", "category": "Controls",    "allow_bidirectional": True},
     {"id": "controls.led",           "path": "/api/controls/pedestal/{id}/led",      "method": "POST", "category": "Controls",    "allow_bidirectional": True},
     # Direct ext-pedestal endpoints (not proxied — served by ext_pedestal_endpoints router)
@@ -47,6 +51,8 @@ EVENT_CATALOG = [
     {"id": "socket_rejected",          "name": "Socket Rejected",     "category": "Sessions"},
     {"id": "socket_state_changed",     "name": "Socket State Changed","category": "Sessions"},
     {"id": "socket_auto_activate_skipped", "name": "Auto-Activate Skipped", "category": "Sessions"},
+    {"id": "session_telemetry",        "name": "Session Telemetry (mobile)", "category": "Sessions"},
+    {"id": "session_ended",            "name": "Session Ended (mobile)", "category": "Sessions"},
     {"id": "user_plugged_in",          "name": "User Plugged In",     "category": "Sessions"},
     {"id": "invoice_created",          "name": "Invoice Created",     "category": "Billing"},
     {"id": "berth_occupancy_updated",  "name": "Berth Occupancy",     "category": "Berths"},

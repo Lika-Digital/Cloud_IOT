@@ -6,6 +6,24 @@ from sqlalchemy.orm import sessionmaker
 TEST_DB = "sqlite:///./tests/test_pedestal.db"
 
 
+def _complete_session_direct(session_id: int) -> None:
+    """Mark a session `completed` via direct DB write. Used as a cleanup step
+    in tests — replaces `POST /api/customer/sessions/{id}/stop` since the
+    customer-stop endpoint is intentionally locked down (403) in v3.6."""
+    engine = create_engine(TEST_DB, connect_args={"check_same_thread": False})
+    S = sessionmaker(bind=engine)
+    db = S()
+    try:
+        from app.models.session import Session as SessionModel
+        row = db.get(SessionModel, session_id)
+        if row:
+            row.status = "completed"
+            db.commit()
+    finally:
+        db.close()
+        engine.dispose()
+
+
 @pytest.fixture(scope="module")
 def active_session_id(client, cust_headers):
     """Start a session, activate it directly in the test DB, return its id."""
@@ -76,11 +94,21 @@ def test_list_my_sessions(client, cust_headers, active_session_id):
 
 
 def test_stop_session(client, cust_headers, active_session_id):
+    """v3.6 — customer stop is disabled (monitoring-only model).
+
+    Mobile clients can no longer end their session via API; they must unplug
+    the cable (firmware emits UserPluggedOut → backend completes the session)
+    or wait for the operator to stop it from the dashboard.
+    """
     r = client.post(f"/api/customer/sessions/{active_session_id}/stop",
                     headers=cust_headers)
-    assert r.status_code == 200
-    data = r.json()
-    assert data["status"] == "completed"
+    assert r.status_code == 403
+    assert "customer stop is disabled" in r.json()["detail"].lower()
+
+    # Leftover active session would block subsequent "one session per customer"
+    # checks in later tests — tidy up via direct DB write (admin stop path is
+    # tested separately in test_operator_stop_sends_completed).
+    _complete_session_direct(active_session_id)
 
 
 def test_admin_list_sessions(client, auth_headers):
@@ -122,8 +150,7 @@ def test_session_starts_as_active(client, cust_headers):
         f"Expected status='active' (auto-start), got '{session['status']}'"
     )
 
-    # Clean up: stop the session
-    client.post(f"/api/customer/sessions/{session['id']}/stop", headers=cust_headers)
+    _complete_session_direct(session["id"])
 
 
 def test_session_invalid_socket_id(client, cust_headers):
@@ -151,8 +178,7 @@ def test_water_session_no_socket_id_required(client, cust_headers):
     assert session["status"] == "active"
     assert session["socket_id"] is None
 
-    # Clean up
-    client.post(f"/api/customer/sessions/{session['id']}/stop", headers=cust_headers)
+    _complete_session_direct(session["id"])
 
 
 def test_operator_stop_sends_completed(client, auth_headers, cust_headers):

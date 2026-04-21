@@ -20,6 +20,22 @@ from sqlalchemy.orm import sessionmaker
 TEST_DB = "sqlite:///./tests/test_pedestal.db"
 
 
+def _complete_via_db_gap(session_id: int):
+    """v3.6 — customer-stop is disabled, so cleanup happens via direct DB."""
+    engine = create_engine(TEST_DB, connect_args={"check_same_thread": False})
+    S = sessionmaker(bind=engine)
+    db = S()
+    try:
+        from app.models.session import Session as SessionModel
+        row = db.get(SessionModel, session_id)
+        if row:
+            row.status = "completed"
+            db.commit()
+    finally:
+        db.close()
+        engine.dispose()
+
+
 # ── Shared fixture: pedestal_id ───────────────────────────────────────────────
 
 @pytest.fixture(scope="module")
@@ -118,7 +134,7 @@ class TestGap5SessionCustomerNameField:
                 f"customer_name should be str|None, got {type(target['customer_name'])!r}"
             )
         finally:
-            client.post(f"/api/customer/sessions/{session_id}/stop", headers=cust_headers)
+            _complete_via_db_gap(session_id)
 
     def test_single_session_endpoint_has_customer_name_key(
         self, client, auth_headers, cust_headers, gap_pedestal_id
@@ -141,7 +157,7 @@ class TestGap5SessionCustomerNameField:
                 f"Keys: {list(s.keys())}"
             )
         finally:
-            client.post(f"/api/customer/sessions/{session_id}/stop", headers=cust_headers)
+            _complete_via_db_gap(session_id)
 
 
 # ── GAP-6: Controls 400/404 error responses for wrong session state ───────────
@@ -178,7 +194,7 @@ class TestGap6Controls400Errors:
 
         yield sid
 
-        client.post(f"/api/customer/sessions/{sid}/stop", headers=cust_headers)
+        _complete_via_db_gap(sid)
 
     def test_allow_already_active_session_returns_400(
         self, client, auth_headers, active_session_id

@@ -238,6 +238,20 @@ async def stop_my_session(
     user_db: DBSession = Depends(get_user_db),
     customer: Customer = Depends(require_customer),
 ):
+    # v3.6 authority model — mobile app is monitoring only. Customer cannot
+    # stop a session via API; physical unplug (firmware UserPluggedOut) is the
+    # only customer-side stop mechanism. Operator stop stays in the controls
+    # router under admin role. The handler body below is preserved for
+    # reference but is unreachable.
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "Customer stop is disabled. Unplug the cable to end your session; "
+            "only operators can stop sessions from the dashboard."
+        ),
+    )
+
+    # ─── unreachable — kept for audit / future re-enable ─────────────────────
     session = db.get(Session, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")

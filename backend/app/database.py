@@ -51,6 +51,11 @@ def _migrate_schema():
         ("pedestals", "ai_enabled",     "INTEGER NOT NULL DEFAULT 0"),
         ("sessions",  "customer_id", "INTEGER"),
         ("sessions",  "deny_reason", "TEXT"),
+        # v3.6 — QR claim timestamp (nullable). NULL for unclaimed sessions
+        # AND for sessions started directly from the mobile app; populated
+        # only when a customer claims a previously-unowned auto-activated
+        # session via QR scan.
+        ("sessions",  "owner_claimed_at", "DATETIME"),
         # pedestal_configs columns (table created by metadata, but ALTER handles existing DBs)
         ("pedestal_configs", "site_id",           "TEXT"),
         ("pedestal_configs", "dock_id",           "TEXT"),

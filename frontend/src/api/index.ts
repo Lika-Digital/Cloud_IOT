@@ -110,6 +110,17 @@ export const getAutoActivateLog = (pedestalId: number, socketId: number) =>
     `/pedestals/${pedestalId}/sockets/${socketId}/auto-activate-log`,
   ).then((r) => r.data)
 
+// v3.6 — admin-only QR image download. Returns the PNG blob + the URL the
+// QR encodes (via response header `X-QR-URL`) so the modal can show both.
+export async function getSocketQrBlob(pedestalId: number | string, socketName: string) {
+  const r = await api.get(
+    `/mobile/socket/${pedestalId}/${socketName}/qr`,
+    { responseType: 'blob' },
+  )
+  const url = r.headers['x-qr-url'] as string | undefined
+  return { blob: r.data as Blob, url: url ?? '' }
+}
+
 // Diagnostics
 export const runDiagnostics = (pedestalId: number) =>
   api.post<DiagnosticsResult>(`/pedestals/${pedestalId}/diagnostics/run`).then((r) => r.data)

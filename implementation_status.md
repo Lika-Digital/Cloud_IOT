@@ -145,6 +145,59 @@ behaves exactly as today (manual Activate click in Control Center).
 - Frontend toggle updates optimistically; rollback on PATCH failure.
 - Warning auto-clears after 30 s OR on any transition away from pending (whichever comes first).
 
+---
+---
+
+# Implementation Status — QR-Code Mobile Session Ownership + Real-Time Monitoring (v3.6)
+
+## Session started: 2026-04-21
+
+Feature scope: customer scans the QR on a physical socket → backend claims the
+existing active session for that customer → mobile app shows real-time kWh /
+kW / duration via per-session WebSocket. Customer app is **monitoring only** —
+customer has no stop capability anywhere. Operator keeps absolute SW control
+from the dashboard (admin role only for stop/override). Physical unplug via
+UserPluggedOut remains the customer's only way to end a session.
+
+**Approved design decisions (2026-04-21):**
+- DB: reuse existing `Session.customer_id`; add **only** `owner_claimed_at`. Do not add `owner_user_id`.
+- Customer stop is removed — `/api/customer/sessions/{id}/stop` returns 403 for customer role. No `/api/mobile/sessions/{id}/stop` endpoint at all.
+- New `/api/mobile/` router for genuinely new endpoints only: `qr/claim`, `sessions/{id}/live`, `socket/{pid}/{sid}/qr`.
+- Marina access control skipped; any authenticated customer may claim any socket. Phase-2 TODO in docs/mobile_api.md.
+- Operator override authority = `admin` role only. `monitor` stays read-only.
+- WebSocket token: 1-hour JWT, re-issued on re-claim.
+- `qrcode[pil]` added to backend/requirements.txt.
+
+### Files — Status
+
+| # | File | Status | Notes |
+|---|------|--------|-------|
+| 1 | `implementation_status.md` | IN PROGRESS | Feature header + per-file log (this) |
+| 2 | `backend/app/models/session.py` | COMPLETE | Added `owner_claimed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)` — reuses `customer_id` per design decision |
+| 3 | `backend/app/database.py` | COMPLETE | Added `("sessions", "owner_claimed_at", "DATETIME")` to `_migrate_schema` migration list |
+| 4 | `backend/requirements.txt` | COMPLETE | `qrcode[pil]==8.0` added; smoke-tested PNG generation (468 bytes) |
+| 5 | `backend/app/routers/customer_sessions.py` | COMPLETE | `POST /api/customer/sessions/{id}/stop` now raises 403 for every customer-authenticated call — monitoring-only model enforced at the router. Original handler body kept unreachable for future re-enable reference. |
+| 6 | `backend/app/services/websocket_manager.py` | COMPLETE | `_session_subs: dict[int, set[WebSocket]]`; `subscribe_to_session`, `unsubscribe_from_session`, `broadcast_to_session(session_id, message, close_after=False)`. `disconnect()` now also removes the socket from all session sub-sets. `session_subscriber_count` property for metrics / tests. |
+| 7 | `backend/app/routers/websocket.py` | COMPLETE | `/ws` now recognises `role="ws_session"` tokens (new). Extracts `session_id` claim and calls `subscribe_to_session`. Customer and anonymous modes unchanged for backwards compat. |
+| 8 | `backend/app/auth/tokens.py` | COMPLETE | `create_websocket_token(session_id, customer_id)` — 1h TTL, `role="ws_session"`, includes `session_id` claim. Distinct role so the token cannot be reused against long-lived customer APIs. |
+| 9 | `backend/app/routers/mobile.py` | COMPLETE (NEW) | `POST /qr/claim` branches to claimed / already_owner / read_only / no_session; `GET /sessions/{id}/live` owner-only 403 guard; `GET /socket/{pid}/{sid}/qr` admin-only PNG generation (qrcode box_size=10, ERROR_CORRECT_M); helper functions for pedestal resolve + socket validation; marina-access TODO inline comment. |
+| 10 | `backend/app/services/mqtt_handlers.py` | COMPLETE | `_handle_event_telemetry_update` emits `session_telemetry` via `broadcast_to_session` (carrying duration/kwh/kw); `_handle_event_session_ended` pushes `session_ended` to subscribers with `close_after=True`; `_broadcast_socket_state` also fans out to the session channel when an active session exists for the socket |
+| 11 | `backend/app/main.py` | COMPLETE | Imports `mobile` router and `app.include_router(mobile_router.router)` after customer_auth group |
+| 12 | `backend/app/services/api_catalog.py` | COMPLETE | 3 endpoints (`mobile.qr_claim`, `mobile.session_live`, `mobile.socket_qr`) + 2 events (`session_telemetry`, `session_ended`) added; drift guards pass |
+| 12a | `tests/backend/test_ws_event_catalog.py` | COMPLETE | `session_telemetry` + `session_ended` added to `INTERNAL_EVENTS` since they're per-session pushes only, not consumed by the dashboard switch |
+| 12b | `tests/backend/test_sessions.py` | COMPLETE | `test_stop_session` now asserts 403 + tidies up via `_complete_session_direct`; cleanup calls in other tests swapped for direct DB writes |
+| 12c | `tests/backend/test_workflow.py` | COMPLETE | Bulk-replaced 7 customer-stop cleanup calls with new `_complete_via_db` helper; `test_tc_stop_01` updated to assert 403 + admin-stop path; `test_tc_workflow_01` step 7 uses admin stop |
+| 12d | `tests/backend/test_gap_session_fields.py` | COMPLETE | 3 customer-stop cleanup calls swapped for `_complete_via_db_gap` helper |
+| 12e | `tests/backend/test_operator_approval.py` | COMPLETE | 6 customer-stop cleanup calls swapped for `_complete_via_db_op` helper |
+| 12f | `tests/backend/_session_helpers.py` | COMPLETE (NEW) | Shared `complete_session` / `complete_all_active_for_pedestal` helpers |
+| 13 | `frontend/src/components/pedestal/PedestalControlCenter.tsx` | COMPLETE | Each SocketCard now shows a 📱 icon with a "Mobile owner: {name}" tooltip when the active session has a customer_id; a new `QR` button opens a modal that fetches `GET /api/mobile/socket/{pid}/{sid}/qr`, renders the PNG, shows the encoded URL, and has a Download button that saves as `{pid}_{socketName}_qr.png`. New `getSocketQrBlob` helper added in `frontend/src/api/index.ts`. |
+| 14 | `mobile/app/(app)/mobile/socket/[pedestal_id]/[socket_id].tsx` | COMPLETE (NEW) | QR landing screen, 4 view states (loading / no_session / claimed / read_only / ended); WebSocket subscribe with `websocket_token`; REST polling fallback every 5 s; session_ended → summary screen. No Stop button anywhere — monitoring only. |
+| 15 | `mobile/src/api/mobile.ts` | COMPLETE (NEW) | `qrClaim` + `sessionLive` wrappers + response types |
+| 16 | `docs/mobile_api.md` | COMPLETE (NEW) | Full contract: base URLs, auth model (customer JWT vs ws_session JWT), QR URL format, 3 REST endpoints with request/response schemas + error matrix, WebSocket event catalog (`session_telemetry`, `session_state_changed`, `session_ended`), authority model explaining monitoring-only, `owner_claimed_at` semantics table, Phase-2 marina-access TODO |
+| 17 | `tests/backend/test_mobile_qr_claim.py` | COMPLETE (NEW) | 14 cases covering: auth, 404 pedestal/socket, no_session branch, claimed / already_owner / read_only paths, owner_claimed_at persistence, websocket_token validity + session_id claim, live endpoint owner 200 / non-owner 403, admin QR PNG + customer 403, TelemetryUpdate → `session_telemetry` fan-out, SessionEnded → `session_ended` + channel close. Reuses shared conftest. |
+| 18 | `README.md` | PENDING | Changelog v3.6 entry |
+
+
 
 
 

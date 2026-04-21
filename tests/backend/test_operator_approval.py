@@ -39,6 +39,19 @@ _TestSession      = sessionmaker(autocommit=False, autoflush=False, bind=_test_e
 _TestUserSession  = sessionmaker(autocommit=False, autoflush=False, bind=_test_user_engine)
 
 
+def _complete_via_db_op(session_id: int):
+    """v3.6 — customer stop is disabled, cleanup via direct DB write."""
+    db = _TestSession()
+    try:
+        from app.models.session import Session as SessionModel
+        row = db.get(SessionModel, session_id)
+        if row:
+            row.status = "completed"
+            db.commit()
+    finally:
+        db.close()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _dispose_oa_engines():
     yield
@@ -351,7 +364,7 @@ class TestMobileLateAfterOperator:
         # First stop any existing customer sessions to avoid customer_busy block
         for s in client.get("/api/customer/sessions/mine", headers=cust_headers).json():
             if s["status"] in ("active", "pending"):
-                client.post(f"/api/customer/sessions/{s['id']}/stop", headers=cust_headers)
+                _complete_via_db_op(s['id'])
 
         r2 = client.post("/api/customer/sessions/start", json={
             "pedestal_id": pid,
@@ -368,7 +381,7 @@ class TestMobileLateAfterOperator:
         assert claimed["customer_id"] is not None, "customer_id must be assigned after claim"
 
         # Cleanup
-        client.post(f"/api/customer/sessions/{op_session_id}/stop", headers=cust_headers)
+        _complete_via_db_op(op_session_id)
         _clear_sessions_for_socket(pid, socket_id)
 
 
@@ -395,7 +408,7 @@ class TestMobileNormalFlowNoOperator:
         # Stop any lingering customer sessions
         for s in client.get("/api/customer/sessions/mine", headers=cust_headers).json():
             if s["status"] in ("active", "pending"):
-                client.post(f"/api/customer/sessions/{s['id']}/stop", headers=cust_headers)
+                _complete_via_db_op(s['id'])
 
         r = client.post("/api/customer/sessions/start", json={
             "pedestal_id": pid,
@@ -414,7 +427,7 @@ class TestMobileNormalFlowNoOperator:
         )
 
         # Cleanup
-        client.post(f"/api/customer/sessions/{session['id']}/stop", headers=cust_headers)
+        _complete_via_db_op(session['id'])
         _clear_sessions_for_socket(pid, socket_id)
 
 
@@ -490,7 +503,7 @@ class TestAuditLog:
         # Stop any lingering customer sessions
         for s in client.get("/api/customer/sessions/mine", headers=cust_headers).json():
             if s["status"] in ("active", "pending"):
-                client.post(f"/api/customer/sessions/{s['id']}/stop", headers=cust_headers)
+                _complete_via_db_op(s['id'])
 
         _clear_sessions_for_socket(pid, socket_id)
 
@@ -548,5 +561,5 @@ class TestAuditLog:
         assert cust_entries[0].timestamp is not None
 
         # Cleanup
-        client.post(f"/api/customer/sessions/{session_id}/stop", headers=cust_headers)
+        _complete_via_db_op(session_id)
         _clear_sessions_for_socket(pid, socket_id)

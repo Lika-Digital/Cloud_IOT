@@ -35,6 +35,8 @@ export function useWebSocket() {
     setSocketAutoSkipReason,
     clearSocketAutoSkipReason,
     addToast,
+    setBreakerState,
+    addBreakerAlarm,
   } = useStore()
   const { role } = useAuthStore()
 
@@ -373,6 +375,47 @@ export function useWebSocket() {
           if (role === 'admin') {
             const level = msg.data.alarm_level as 'warning' | 'critical'
             setHwAlarmLevel(level)
+          }
+          break
+        }
+        case 'breaker_state_changed': {
+          // v3.8 — merge patch into the per-socket breaker state. Undefined
+          // fields are preserved (matches the backend "no-overwrite-with-null"
+          // rule in mqtt_handlers._handle_opta_breaker_status).
+          const d = msg.data
+          if (typeof d?.pedestal_id === 'number' && typeof d?.socket_id === 'number') {
+            const patch: Record<string, unknown> = {}
+            if (d.breaker_state !== undefined) patch.breaker_state = d.breaker_state
+            if (d.trip_cause !== undefined) patch.trip_cause = d.trip_cause
+            if (d.breaker_type !== undefined) patch.breaker_type = d.breaker_type
+            if (d.breaker_rating !== undefined) patch.breaker_rating = d.breaker_rating
+            if (d.breaker_poles !== undefined) patch.breaker_poles = d.breaker_poles
+            if (d.breaker_rcd !== undefined) patch.breaker_rcd = d.breaker_rcd
+            if (d.breaker_rcd_sensitivity !== undefined) patch.breaker_rcd_sensitivity = d.breaker_rcd_sensitivity
+            setBreakerState(d.pedestal_id, d.socket_id, patch)
+            // When the socket transitions back to closed, auto-clear any
+            // outstanding alarm flag for it so the banner disappears without
+            // needing an acknowledgement.
+            if (d.breaker_state === 'closed') {
+              useStore.getState().clearBreakerAlarm(`${d.pedestal_id}-${d.socket_id}`)
+            }
+          }
+          break
+        }
+        case 'breaker_alarm': {
+          // v3.8 — persistent alarm banner + admin Browser Notification per D9.
+          const d = msg.data
+          if (typeof d?.pedestal_id === 'number' && typeof d?.socket_id === 'number') {
+            addBreakerAlarm(`${d.pedestal_id}-${d.socket_id}`)
+            if (role === 'admin'
+                && typeof Notification !== 'undefined'
+                && Notification.permission === 'granted') {
+              const cause = d.trip_cause ?? 'unknown'
+              new Notification('Breaker Tripped', {
+                body: `Pedestal ${d.pedestal_id} socket Q${d.socket_id} — cause: ${cause}`,
+                icon: '/vite.svg',
+              })
+            }
           }
           break
         }

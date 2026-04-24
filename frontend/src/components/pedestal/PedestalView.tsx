@@ -167,7 +167,7 @@ function ZoneButton({
   isSelected: boolean
   onClick: () => void
 }) {
-  const { pendingSessions, activeSessions, pendingSockets, optaWaterStates, socketComputedStates, socketAutoActivate } = useStore()
+  const { pendingSessions, activeSessions, pendingSockets, optaWaterStates, socketComputedStates, socketAutoActivate, socketBreakerStates } = useStore()
 
   const socketId = typeof zone.id === 'number' ? zone.id : null
   const isWater = zone.type === 'water'
@@ -247,6 +247,12 @@ function ZoneButton({
     ? !!socketAutoActivate[`${pedestalId}-${socketId}`]
     : false
 
+  // v3.8 — show a small red lightning bolt when this socket's breaker is
+  // tripped. Purely additive; the existing ring/bg colour logic is untouched.
+  const breakerTripped = !isCamera && !isWater && socketId !== null
+    ? socketBreakerStates[`${pedestalId}-${socketId}`]?.breaker_state === 'tripped'
+    : false
+
   const tooltipText = isCamera
     ? 'Camera'
     : status === 'active'
@@ -273,6 +279,15 @@ function ZoneButton({
           <span className="flex items-center justify-center w-full h-full text-white text-xs">📷</span>
         )}
         {!isCamera && <span className="sr-only">{zone.label}</span>}
+        {breakerTripped && (
+          <span
+            aria-label="Breaker tripped"
+            title="Breaker tripped"
+            className="absolute -top-1 -right-1 text-red-500 text-base drop-shadow animate-pulse pointer-events-none"
+          >
+            ⚡
+          </span>
+        )}
       </button>
       {/* Custom tooltip */}
       <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-10">

@@ -37,6 +37,13 @@ ENDPOINT_CATALOG = [
     {"id": "berths.occupancy_ext",   "path": "/api/ext/pedestals/{id}/berths/occupancy", "method": "GET",  "category": "Berths",    "allow_bidirectional": False},
     {"id": "camera.frame_ext",       "path": "/api/ext/pedestals/{id}/camera/frame",     "method": "GET",  "category": "Camera",    "allow_bidirectional": False},
     {"id": "camera.stream_ext",      "path": "/api/ext/pedestals/{id}/camera/stream",    "method": "GET",  "category": "Camera",    "allow_bidirectional": False},
+    # v3.8 — Breaker Management API (direct ext routes, not gateway-proxied).
+    # Category groups them in the API Gateway UI per D14.
+    {"id": "breakers.pedestal_list_ext",    "path": "/api/ext/pedestals/{pedestal_id}/breakers",                            "method": "GET",  "category": "Breaker Management", "allow_bidirectional": False},
+    {"id": "breakers.socket_get_ext",       "path": "/api/ext/pedestals/{pedestal_id}/sockets/{socket_id}/breaker",         "method": "GET",  "category": "Breaker Management", "allow_bidirectional": False},
+    {"id": "breakers.socket_reset_ext",     "path": "/api/ext/pedestals/{pedestal_id}/sockets/{socket_id}/breaker/reset",   "method": "POST", "category": "Breaker Management", "allow_bidirectional": True},
+    {"id": "breakers.pedestal_history_ext", "path": "/api/ext/pedestals/{pedestal_id}/breaker/history",                     "method": "GET",  "category": "Breaker Management", "allow_bidirectional": False},
+    {"id": "breakers.marina_alarms_ext",    "path": "/api/ext/marinas/{marina_id}/breaker/alarms",                          "method": "GET",  "category": "Breaker Management", "allow_bidirectional": False},
 ]
 
 EVENT_CATALOG = [
@@ -68,4 +75,11 @@ EVENT_CATALOG = [
     {"id": "opta_water_status",        "name": "Opta Water Status",   "category": "Hardware"},
     {"id": "opta_status",              "name": "Opta Status",         "category": "Hardware"},
     {"id": "pedestal_reset_sent",      "name": "Pedestal Reset",      "category": "Controls"},
+    # v3.8 — breaker state + alarm events. Both flow through the existing
+    # ws_manager broadcast hook to webhook_service, so setting either in
+    # ExternalApiConfig.allowed_events pushes them to the ERP webhook.
+    # Note: a state transition to `resetting` is itself a breaker_state_changed
+    # broadcast — no separate reset_sent event is needed.
+    {"id": "breaker_state_changed",    "name": "Breaker State Changed", "category": "Breaker Management"},
+    {"id": "breaker_alarm",            "name": "Breaker Alarm",         "category": "Breaker Management"},
 ]

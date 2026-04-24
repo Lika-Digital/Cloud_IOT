@@ -60,6 +60,9 @@ OPTA_DOOR_RE         = re.compile(r"opta/door/status")
 OPTA_EVENTS_RE       = re.compile(r"opta/events")
 OPTA_ACKS_RE         = re.compile(r"opta/acks")
 OPTA_DIAGNOSTIC_RE   = re.compile(r"opta/diagnostic")
+# v3.8 — per-socket breaker status; socket_id ("Q1"..."Q4") is in the topic path
+# and authoritative. The payload may also carry `socketId` as a sanity check.
+OPTA_BREAKER_RE      = re.compile(r"opta/breakers/([^/]+)/status")
 
 
 def _hw_warn(source: str, message: str, details: str | None = None):
@@ -279,6 +282,8 @@ async def handle_message(topic: str, payload: str):
             await _handle_opta_acks(payload)
         elif OPTA_DIAGNOSTIC_RE.match(topic):
             await _handle_opta_diagnostic(payload)
+        elif m := OPTA_BREAKER_RE.match(topic):
+            await _handle_opta_breaker_status(m.group(1), payload)
         # ── Marina cabinet firmware (real hardware) ──────────────────────────
         elif m := MARINA_SOCKET_RE.match(topic):
             await _handle_marina_socket(m.group(1), m.group(2), payload)
@@ -574,6 +579,11 @@ async def _handle_marina_events(cabinet_id: str, payload: str):
                 details=json.dumps(data),
             )
             logger.warning("[Event] AlarmRaised pedestal=%d code=%s severity=%s", pedestal_id, code, severity)
+        elif event_type == "BreakerTripped":
+            # v3.8 — breaker trip event. Logs to breaker_events, stops any active
+            # power session on that socket with end_reason="breaker_trip", and
+            # broadcasts a breaker_alarm WS event for persistent dashboard UI.
+            await _handle_event_breaker_tripped(db, pedestal_id, outlet_id, data)
     finally:
         db.close()
 
@@ -1315,6 +1325,210 @@ async def _handle_opta_acks(payload: str):
     cabinet_id = _opta_cabinet_id(payload, "opta/acks")
     if cabinet_id:
         await _handle_marina_acks(cabinet_id, payload)
+
+
+async def _handle_opta_breaker_status(socket_name: str, payload: str):
+    """v3.8 — opta/breakers/{socket_id}/status.
+
+    Updates `SocketConfig` breaker state + metadata, stamps
+    `breaker_last_trip_at` and increments `breaker_trip_count` on fresh trips,
+    and broadcasts `breaker_state_changed` to all dashboards.
+
+    Metadata rule: only write fields that are PRESENT in the payload. A missing
+    key leaves the previously-stored value alone — D4 in v3.8 design decisions.
+    `socket_id` is taken from the topic path; payload `socketId` is used as a
+    sanity check and logged as warning if it disagrees.
+    """
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError as e:
+        logger.warning("[Breaker] Bad status payload on %s: %s", socket_name, e)
+        return
+
+    cabinet_id = _opta_cabinet_id(payload, f"opta/breakers/{socket_name}/status")
+    if not cabinet_id:
+        return
+
+    # Sanity check — log if payload disagrees with topic path.
+    payload_socket = data.get("socketId")
+    if payload_socket and payload_socket != socket_name:
+        logger.warning(
+            "[Breaker] payload socketId=%s disagrees with topic socket_name=%s — trusting topic",
+            payload_socket, socket_name,
+        )
+
+    breaker_state = data.get("breakerState", "unknown")
+    trip_cause    = data.get("tripCause")   # May be None when breaker is closed.
+    socket_id     = _socket_name_to_id(socket_name)
+
+    db = SessionLocal()
+    try:
+        pedestal_id = _cabinet_to_pedestal_id(db, cabinet_id)
+        if pedestal_id is None:
+            logger.warning("[Breaker] Could not resolve cabinet '%s' for breaker status", cabinet_id)
+            return
+
+        _ensure_pedestal(db, pedestal_id)
+
+        from ..models.socket_config import SocketConfig
+        cfg = db.query(SocketConfig).filter(
+            SocketConfig.pedestal_id == pedestal_id,
+            SocketConfig.socket_id == socket_id,
+        ).first()
+        if cfg is None:
+            # Mirror the v3.7 auto-discovery pattern: create the row with defaults.
+            cfg = SocketConfig(
+                pedestal_id=pedestal_id,
+                socket_id=socket_id,
+                auto_activate=False,
+            )
+            db.add(cfg)
+            db.flush()
+
+        previous_state = cfg.breaker_state
+        cfg.breaker_state = breaker_state
+        cfg.breaker_trip_cause = trip_cause
+
+        # Increment count + stamp timestamp on the transition INTO tripped.
+        if breaker_state == "tripped" and previous_state != "tripped":
+            cfg.breaker_last_trip_at = datetime.utcnow()
+            cfg.breaker_trip_count = (cfg.breaker_trip_count or 0) + 1
+
+        # Metadata merge — D4: only write keys that are PRESENT in this payload.
+        # `in data` check handles explicit `null` values (treated as written) and
+        # absent keys (treated as no-change). This preserves history across
+        # firmware messages that omit the metadata block.
+        if "breakerType" in data:
+            cfg.breaker_type = data["breakerType"]
+        if "rating" in data:
+            cfg.breaker_rating = data["rating"]
+        if "poles" in data:
+            cfg.breaker_poles = data["poles"]
+        if "rcd" in data:
+            cfg.breaker_rcd = data["rcd"]
+        if "rcdSensitivity" in data:
+            cfg.breaker_rcd_sensitivity = data["rcdSensitivity"]
+
+        db.commit()
+    finally:
+        db.close()
+
+    await ws_manager.broadcast({
+        "event": "breaker_state_changed",
+        "data": {
+            "pedestal_id": pedestal_id,
+            "socket_id": socket_id,
+            "breaker_state": breaker_state,
+            "trip_cause": trip_cause,
+            "breaker_type": data.get("breakerType"),
+            "breaker_rating": data.get("rating"),
+            "breaker_poles": data.get("poles"),
+            "breaker_rcd": data.get("rcd"),
+            "breaker_rcd_sensitivity": data.get("rcdSensitivity"),
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    })
+
+    logger.info(
+        "[Breaker] cabinet=%s socket=%s(%d) state=%s cause=%s",
+        cabinet_id, socket_name, socket_id, breaker_state, trip_cause,
+    )
+
+
+async def _handle_event_breaker_tripped(
+    db, pedestal_id: int, outlet_id: str, data: dict,
+):
+    """v3.8 — process a `BreakerTripped` event on opta/events.
+
+    Steps:
+      1. Resolve socket_id from outlet_id ("Q1" → 1).
+      2. Append a `breaker_events` row with event_type="tripped".
+      3. Stop any active power session on that socket with end_reason="breaker_trip".
+      4. Broadcast `breaker_alarm` WS event for the dashboard banner + Notification.
+    """
+    from ..models.breaker_event import BreakerEvent
+    from ..models.session import Session as _Session
+
+    socket_id  = _socket_name_to_id(outlet_id) if outlet_id else 0
+    breaker    = data.get("breaker", {}) or {}
+    trip_cause = breaker.get("tripCause")
+    current_at_trip_raw = breaker.get("currentAtTrip")
+    try:
+        current_at_trip = float(current_at_trip_raw) if current_at_trip_raw is not None else None
+    except (TypeError, ValueError):
+        current_at_trip = None
+    occurred_at_str = data.get("occurredAt")
+
+    # 1. Audit log row.
+    evt = BreakerEvent(
+        pedestal_id=pedestal_id,
+        socket_id=socket_id,
+        event_type="tripped",
+        timestamp=datetime.utcnow(),
+        trip_cause=trip_cause,
+        current_at_trip=current_at_trip,
+        reset_initiated_by=None,
+        raw_payload=json.dumps(data),
+    )
+    db.add(evt)
+    db.commit()
+
+    # 2. Stop active POWER session only — water sessions unaffected (D5).
+    active = (
+        db.query(_Session)
+        .filter(
+            _Session.pedestal_id == pedestal_id,
+            _Session.socket_id == socket_id,
+            _Session.type == "electricity",
+            _Session.status.in_(["pending", "active"]),
+        )
+        .first()
+    )
+    if active is not None:
+        try:
+            from .session_service import session_service as _ss
+            _ss.complete(db, active, end_reason="breaker_trip")
+        except Exception as e:
+            logger.warning("[Breaker] failed to stop session %d on breaker trip: %s", active.id, e)
+        else:
+            await ws_manager.broadcast({
+                "event": "session_completed",
+                "data": {
+                    "session_id": active.id,
+                    "pedestal_id": pedestal_id,
+                    "socket_id": socket_id,
+                    "energy_kwh": active.energy_kwh,
+                    "water_liters": active.water_liters,
+                    "end_reason": "breaker_trip",
+                    "timestamp": datetime.utcnow().isoformat(),
+                },
+            })
+
+    # 3. Persistent dashboard alarm — survives page navigation via Zustand +
+    # sessionStorage ack on the frontend. Admin clients also get a Browser
+    # Notification (useWebSocket handler).
+    await ws_manager.broadcast({
+        "event": "breaker_alarm",
+        "data": {
+            "pedestal_id": pedestal_id,
+            "socket_id": socket_id,
+            "trip_cause": trip_cause,
+            "current_at_trip": current_at_trip,
+            "severity": "HIGH",
+            "occurred_at": occurred_at_str,
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    })
+
+    _hw_error(
+        f"pedestal_{pedestal_id}",
+        f"Breaker tripped on socket Q{socket_id} (cause={trip_cause})",
+        details=json.dumps(data),
+    )
+    logger.warning(
+        "[Breaker] TRIPPED pedestal=%d socket=%d cause=%s current=%s",
+        pedestal_id, socket_id, trip_cause, current_at_trip,
+    )
 
 
 async def _handle_opta_diagnostic(payload: str):

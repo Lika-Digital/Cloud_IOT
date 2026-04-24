@@ -34,6 +34,78 @@ Mosquitto Broker (:1883)                  │                         │
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-04-24 — Smart circuit breaker monitoring + remote reset (v3.8)
+- New MQTT topic `opta/breakers/{socket_id}/status` carries live breaker state
+  (`closed | tripped | open | resetting`) and breaker hardware metadata (type,
+  rating, poles, RCD yes/no, RCD sensitivity). The Opta publishes whatever is
+  wired on the cabinet — backend never hardcodes breaker descriptions and, per
+  the "no-overwrite-with-null" rule, preserves previously-reported metadata
+  when a subsequent payload omits it.
+- New `BreakerTripped` event on `opta/events` appends to the new `breaker_events`
+  audit table, stops any active power session on the affected socket with
+  `end_reason="breaker_trip"`, and broadcasts a persistent `breaker_alarm`
+  WebSocket event. Admin browsers also get a Browser Notification.
+- `SocketConfig` extended with 9 nullable breaker columns
+  (`breaker_state`, `breaker_last_trip_at`, `breaker_trip_cause`,
+  `breaker_trip_count`, `breaker_type`, `breaker_rating`, `breaker_poles`,
+  `breaker_rcd`, `breaker_rcd_sensitivity`). `breaker_trip_count` is cumulative
+  forever. `Session` gains a nullable `end_reason` column. All via `_migrate_schema()`
+  so existing pedestal DBs upgrade in place with no manual SQL.
+- Internal admin endpoints: `POST /api/pedestals/{pid}/sockets/{sid}/breaker/reset`
+  (returns 409 when not tripped, 200 with `reset_command_sent` otherwise, writes
+  an audit row tagged with the operator email, publishes
+  `opta/cmd/breaker/Q{n}` and broadcasts `breaker_state_changed → resetting`).
+  Read-only GETs for state, per-socket history (`?limit=10` default), and last 50
+  events across all sockets of a pedestal.
+- ERP external API (direct FastAPI routes registered before the
+  `/api/ext/{path:path}` gateway catch-all, same pattern as the v3.3
+  ext-pedestal endpoints):
+  - `GET /api/ext/pedestals/{pid}/breakers` — state + metadata for all sockets.
+  - `GET /api/ext/pedestals/{pid}/sockets/{sid}/breaker` — state + last 5 events.
+  - `POST /api/ext/pedestals/{pid}/sockets/{sid}/breaker/reset` — ERP-triggered
+    remote reset; audit row tagged `reset_initiated_by="erp-service"` so it is
+    distinguishable from operator resets.
+  - `GET /api/ext/pedestals/{pid}/breaker/history` — last 50 events.
+  - `GET /api/ext/marinas/{marina_id}/breaker/alarms` — every socket currently
+    in `tripped` or `resetting` state across all pedestals whose cabinet id
+    matches `MAR_{marina_id}_...`.
+- WebSocket events: `breaker_state_changed` carries the full metadata bundle;
+  `breaker_alarm` fires on BreakerTripped. Both flow through the existing
+  `dispatch_webhook` hook, so enabling them in `ExternalApiConfig.allowed_events`
+  pushes them to the ERP webhook with no additional wiring.
+- Control Center: red alarm banner at the top when any socket on the current
+  pedestal is tripped, listing Q{n} labels and an Acknowledge button
+  (dismisses via sessionStorage — returns on full reload). New
+  `SocketBreakerPanel` inside each SocketCard shows the coloured state dot,
+  Hardware Info (all fields render "Not reported" when Arduino didn't publish),
+  admin-only Reset Breaker button with confirm dialog + 15 s timeout watchdog,
+  and a History button opening a modal with the last 10 events (operator
+  username vs ERP tag is surfaced per row).
+- PedestalView: small red ⚡ lightning-bolt overlay on the socket circle when
+  the breaker is tripped. Existing ring/bg colour logic is untouched.
+- API Configuration UI: the 5 new ERP endpoints auto-group under a new
+  **Breaker Management** category in the existing ApiGateway table (catalog-
+  driven, no JSX changes needed).
+- 21 new backend tests (`test_breaker_monitoring.py` — TC-BR-01..21) covering
+  payload parsing, no-null-overwrite rule, trip-count edge semantics,
+  BreakerTripped → session stop, MQTT reset payload shape, internal & ERP 409
+  guards, ERP 403 on invalid token, list / single-socket-with-5-events /
+  pedestal-history-capped-50 / marina-alarms-filter / api_catalog drift guard.
+  New Playwright spec `breaker.spec.ts` covers Hardware Info default,
+  admin-only Reset visibility, and alarm banner. Total suite: 275 → 292 passing.
+- New `docs/firmware_requirements.md` records the retain-flag recommendation
+  for `opta/breakers/+/status` so backend restarts see the current state
+  immediately via the MQTT retained message.
+- Wire: `backend/app/models/{socket_config.py, session.py, breaker_event.py}`,
+  `backend/app/database.py`, `backend/app/services/{mqtt_client.py, mqtt_handlers.py, session_service.py, api_catalog.py}`,
+  `backend/app/routers/{breakers.py, ext_breaker_endpoints.py}`,
+  `backend/app/main.py`,
+  `frontend/src/{store/index.ts, hooks/useWebSocket.ts, api/breakers.ts}`,
+  `frontend/src/components/pedestal/{SocketBreakerPanel.tsx, BreakerHistoryModal.tsx, PedestalControlCenter.tsx, PedestalView.tsx}`,
+  `tests/backend/{test_breaker_monitoring.py, conftest.py}`,
+  `frontend/e2e/breaker.spec.ts`,
+  `docs/firmware_requirements.md`.
+
 ### 2026-04-21 — MQTT auto-discovery + QR bundle (v3.7)
 - Unknown cabinets appearing on `opta/status` now register themselves automatically. `Pedestal.name` is prettified once on first creation (`MAR_KRK_ORM_01` → `MAR KRK ORM 01`); operator renames are never overwritten afterwards. New `PedestalConfig.first_seen_at` column stamps the moment; `status` column tracks `online`/`offline`. `last_heartbeat` keeps playing the `last_seen_at` role (no redundant column).
 - Unknown sockets appearing on `opta/sockets/Q*/status` auto-create a `SocketConfig` row (`auto_activate=false` default) and trigger a printable QR PNG on disk.

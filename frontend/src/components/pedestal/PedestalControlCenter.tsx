@@ -13,6 +13,7 @@ import {
   regeneratePedestalQrs,
 } from '../../api'
 import { SocketQrGrid } from './SocketQrGrid'
+import SocketBreakerPanel from './SocketBreakerPanel'
 import type { OptaSocketState, OptaWaterState, OptaLogEntry } from '../../store'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -215,6 +216,15 @@ function SocketCard({
           Auto-activate skipped: {autoSkipReason}
         </div>
       )}
+
+      {/* v3.8 — breaker status + Hardware Info + reset/history.
+          Visible to all roles; Reset button gates on isAdmin inside the panel. */}
+      <SocketBreakerPanel
+        pedestalId={pedestalId}
+        socketId={socketId}
+        isAdmin={isAdmin}
+        onFeedback={onFeedback}
+      />
 
       {isAdmin && (
         <>
@@ -662,7 +672,18 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
     setSocketAutoActivate,
     socketAutoSkipReasons,
     activeSessions,
+    activeBreakerAlarms,
+    acknowledgeBreakerAlarm,
   } = useStore()
+
+  // v3.8 — keys that belong to THIS pedestal only. The banner shows socket
+  // labels (Q1, Q3, ...) for this pedestal; alarms from other pedestals keep
+  // living in the store but are rendered on their own Control Center page.
+  const trippedSocketIds = activeBreakerAlarms
+    .filter((k) => k.startsWith(`${pedestalId}-`))
+    .map((k) => Number(k.split('-')[1]))
+    .filter((n) => !Number.isNaN(n))
+    .sort((a, b) => a - b)
 
   // v3.5 — load per-socket auto-activate config whenever the Control Center
   // opens for this pedestal. Tiny payload (4 booleans); no caching needed.
@@ -734,6 +755,36 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
               {f.text}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* v3.8 — persistent breaker alarm banner. Red, pulsing dot, stays until
+          either the breaker returns to `closed` (auto-clear via useWebSocket)
+          or the operator clicks Acknowledge (dismisses for this browser tab
+          via sessionStorage). */}
+      {trippedSocketIds.length > 0 && (
+        <div
+          role="alert"
+          className="rounded-lg bg-red-900/40 border border-red-600 p-3 flex items-start gap-2"
+        >
+          <span className="text-xl leading-none mt-0.5">⚠️</span>
+          <div className="flex-1 text-xs">
+            <p className="font-semibold text-red-200">
+              BREAKER TRIPPED — {trippedSocketIds.map((id) => `Q${id}`).join(', ')}
+            </p>
+            <p className="text-red-300/80 mt-0.5">
+              Resolve the overload before resetting. Use each socket's Reset
+              Breaker button below.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => trippedSocketIds.forEach((id) => acknowledgeBreakerAlarm(`${pedestalId}-${id}`))}
+            className="text-[11px] px-2 py-1 rounded border border-red-500 text-red-200 hover:bg-red-800/60"
+            aria-label="Acknowledge breaker alarms"
+          >
+            Acknowledge
+          </button>
         </div>
       )}
 

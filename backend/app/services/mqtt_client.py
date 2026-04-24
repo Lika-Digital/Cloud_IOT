@@ -33,6 +33,8 @@ TOPICS = [
     "opta/events",
     "opta/acks",
     "opta/diagnostic",
+    # v3.8 — per-socket breaker status; socket_id is taken from the topic path.
+    "opta/breakers/+/status",
 ]
 
 

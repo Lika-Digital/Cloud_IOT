@@ -90,9 +90,22 @@ class SessionService:
             raise
         return session
 
-    def complete(self, db: DBSession, session: Session) -> Session:
+    def complete(
+        self,
+        db: DBSession,
+        session: Session,
+        end_reason: str | None = None,
+    ) -> Session:
+        """Finalise a session.
+
+        `end_reason` is stored machine-readable on `sessions.end_reason` when set
+        (e.g. "breaker_trip"). Legacy call sites can omit it; the column stays NULL
+        for the natural unplug / operator-stop paths.
+        """
         session.status = "completed"
         session.ended_at = datetime.utcnow()
+        if end_reason:
+            session.end_reason = end_reason
 
         # Calculate totals from sensor readings
         readings = (

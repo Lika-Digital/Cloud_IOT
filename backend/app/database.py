@@ -30,6 +30,7 @@ def init_db():
     from .models import session_audit  # noqa: F401
     from .models import socket_config  # noqa: F401
     from .models import auto_activation_log  # noqa: F401
+    from .models import breaker_event  # noqa: F401 — v3.8
     Base.metadata.create_all(bind=engine)
     _migrate_schema()
 
@@ -102,6 +103,20 @@ def _migrate_schema():
         # Operator approval flow columns on socket_states
         ("socket_states", "operator_status",    "TEXT"),
         ("socket_states", "operator_status_at", "DATETIME"),
+        # v3.8 — breaker monitoring. Live state + cumulative counter on socket_configs;
+        # every field is nullable / defaulted so auto-discovery keeps working for
+        # cabinets whose firmware doesn't yet publish breaker topics.
+        ("socket_configs", "breaker_state",           "TEXT DEFAULT 'unknown'"),
+        ("socket_configs", "breaker_last_trip_at",    "DATETIME"),
+        ("socket_configs", "breaker_trip_cause",      "TEXT"),
+        ("socket_configs", "breaker_trip_count",      "INTEGER NOT NULL DEFAULT 0"),
+        ("socket_configs", "breaker_type",            "TEXT"),
+        ("socket_configs", "breaker_rating",          "TEXT"),
+        ("socket_configs", "breaker_poles",           "TEXT"),
+        ("socket_configs", "breaker_rcd",             "INTEGER"),
+        ("socket_configs", "breaker_rcd_sensitivity", "TEXT"),
+        # v3.8 — machine-readable session end reason (e.g. "breaker_trip").
+        ("sessions",       "end_reason",              "TEXT"),
     ]
 
     with engine.connect() as conn:

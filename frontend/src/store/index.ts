@@ -189,6 +189,46 @@ interface AppStore {
   socketComputedStates: Record<string, 'idle' | 'pending' | 'active' | 'fault'>
   setSocketComputedState: (pedestal_id: number, socket_id: number, state: 'idle' | 'pending' | 'active' | 'fault') => void
 
+  // v3.8 — live breaker state + hardware metadata per socket, populated from
+  // the `breaker_state_changed` WS event. Keyed by `${pedestal_id}-${socket_id}`.
+  // Metadata fields are whatever the Arduino reported — NEVER hardcoded.
+  socketBreakerStates: Record<string, {
+    breaker_state: 'closed' | 'tripped' | 'open' | 'resetting' | 'unknown'
+    trip_cause?: string | null
+    breaker_type?: string | null
+    breaker_rating?: string | null
+    breaker_poles?: string | null
+    breaker_rcd?: boolean | null
+    breaker_rcd_sensitivity?: string | null
+    last_trip_at?: string | null
+    trip_count?: number
+    updated_at: string
+  }>
+  setBreakerState: (
+    pedestal_id: number,
+    socket_id: number,
+    patch: Partial<{
+      breaker_state: 'closed' | 'tripped' | 'open' | 'resetting' | 'unknown'
+      trip_cause: string | null
+      breaker_type: string | null
+      breaker_rating: string | null
+      breaker_poles: string | null
+      breaker_rcd: boolean | null
+      breaker_rcd_sensitivity: string | null
+      last_trip_at: string | null
+      trip_count: number
+    }>,
+  ) => void
+
+  // v3.8 — string[] of `${pedestal_id}-${socket_id}` keys for sockets whose
+  // most recent `breaker_alarm` event has not been acknowledged. Acknowledged
+  // keys persist in sessionStorage so dismissed alarms stay dismissed through
+  // navigation but re-appear on a full page reload (D3).
+  activeBreakerAlarms: string[]
+  addBreakerAlarm: (key: string) => void
+  clearBreakerAlarm: (key: string) => void
+  acknowledgeBreakerAlarm: (key: string) => void
+
   // v3.5 — per-socket auto-activation config, keyed by `${pedestal_id}-${socket_id}`.
   // Populated when the Control Center opens (`getSocketConfigs`) and by the PATCH
   // optimistic update. Consumed by SocketCard (AUTO badge, toggle state) and
@@ -383,6 +423,56 @@ export const useStore = create<AppStore>((set) => ({
       },
     })),
 
+  socketBreakerStates: {},
+  setBreakerState: (pedestal_id, socket_id, patch) =>
+    set((s) => {
+      const key = `${pedestal_id}-${socket_id}`
+      const prev = s.socketBreakerStates[key] ?? { breaker_state: 'unknown', updated_at: '' }
+      return {
+        socketBreakerStates: {
+          ...s.socketBreakerStates,
+          [key]: { ...prev, ...patch, updated_at: new Date().toISOString() },
+        },
+      }
+    }),
+
+  activeBreakerAlarms: (() => {
+    // Hydrate from sessionStorage the set of keys the operator has already
+    // acknowledged this session — we exclude those from the initial banner.
+    try {
+      const ack = JSON.parse(sessionStorage.getItem('ackedBreakerAlarms') ?? '[]') as string[]
+      // Start empty; incoming `breaker_alarm` events add keys, `acknowledge`
+      // moves them to ack-sessionStorage without emitting a banner.
+      void ack  // referenced so tree-shakers don't remove it.
+    } catch {
+      // sessionStorage unavailable (SSR, private mode) — fall through.
+    }
+    return [] as string[]
+  })(),
+  addBreakerAlarm: (key) =>
+    set((s) => {
+      // Don't re-add if operator already acknowledged this socket's trip.
+      try {
+        const acked = JSON.parse(sessionStorage.getItem('ackedBreakerAlarms') ?? '[]') as string[]
+        if (acked.includes(key)) return s
+      } catch { /* sessionStorage unavailable */ }
+      if (s.activeBreakerAlarms.includes(key)) return s
+      return { activeBreakerAlarms: [...s.activeBreakerAlarms, key] }
+    }),
+  clearBreakerAlarm: (key) =>
+    set((s) => ({ activeBreakerAlarms: s.activeBreakerAlarms.filter((k) => k !== key) })),
+  acknowledgeBreakerAlarm: (key) =>
+    set((s) => {
+      try {
+        const acked = JSON.parse(sessionStorage.getItem('ackedBreakerAlarms') ?? '[]') as string[]
+        if (!acked.includes(key)) {
+          acked.push(key)
+          sessionStorage.setItem('ackedBreakerAlarms', JSON.stringify(acked))
+        }
+      } catch { /* sessionStorage unavailable */ }
+      return { activeBreakerAlarms: s.activeBreakerAlarms.filter((k) => k !== key) }
+    }),
+
   socketAutoActivate: {},
   setSocketAutoActivate: (pedestal_id, socket_id, value) =>
     set((s) => ({
@@ -481,3 +571,10 @@ export const useStore = create<AppStore>((set) => ({
       return { optaAcks: { ...s.optaAcks, [pedestalId]: [entry, ...prev].slice(0, 30) } }
     }),
 }))
+
+// v3.8 — tiny hook so Playwright specs can seed state without waiting for
+// WebSocket events. Harmless in production (it's a reference to an existing
+// object) and makes `breaker.spec.ts` simple.
+if (typeof window !== 'undefined') {
+  (window as unknown as { __APP_STORE__?: typeof useStore }).__APP_STORE__ = useStore
+}

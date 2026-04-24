@@ -1,3 +1,83 @@
+# Implementation Status — Smart Circuit Breaker Monitoring + Remote Reset (v3.8)
+
+## Session started: 2026-04-24
+
+Feature scope: subscribe to `opta/breakers/+/status` and handle new `BreakerTripped`
+event on `opta/events`; persist breaker state + metadata on `SocketConfig`; log every
+trip/reset into new `breaker_events` table; stop active power session on trip with
+`end_reason="breaker_trip"`; expose internal admin endpoints and a parallel ERP
+external API for breaker status, history, reset, and marina-wide active alarms;
+Control Center gains a red alarm banner + per-socket SocketBreakerPanel with Hardware
+Info, Reset button (with confirmation + 15 s timeout), and history modal; PedestalView
+gains a ⚡ overlay on tripped circles; `breaker_alarm` is webhookable to ERP.
+
+**Approved design decisions (2026-04-24):**
+- URL params use numeric `{socket_id}` (1–4); internal conversion to `Q{n}` for MQTT.
+- New breaker UI extracted to `SocketBreakerPanel.tsx` to keep SocketCard bounded.
+- Alarm banner state: Zustand in-memory; acknowledgements kept in `sessionStorage`.
+- Metadata merge: only write keys present in the payload — never overwrite with null.
+- BreakerTripped affects power sessions only. Water sessions never touched.
+- Breaker history modal uses a new `GET /api/pedestals/{pid}/sockets/{sid}/breaker/history?limit=10`.
+- Reset button 15 s watchdog on the frontend; error toast if still tripped after timeout.
+- Lightning bolt on socket circle uses emoji `⚡` (matches existing `📷` convention).
+- Browser Notification on `breaker_alarm` for admin role only (mirrors `session_created`).
+- `breaker_trip_count` is cumulative forever — never auto-reset.
+- ERP routes follow v3.3 pattern — direct FastAPI routes registered in `main.py`
+  before the `ext_api_gateway_router` catch-all.
+- Socket id taken from MQTT topic path on `opta/breakers/{socket_id}/status`;
+  payload `socketId` is only a sanity check.
+- New `docs/firmware_requirements.md` captures the retained-MQTT recommendation
+  for breaker status so the Arduino team publishes with retain flag.
+- API Gateway UI groups the 5 new endpoints automatically via
+  `category: "Breaker Management"` on each catalog entry. No hand-written JSX.
+- Release flow: push develop with normal test gate, pause for explicit user
+  approval, then merge and push main with `CLOUD_IOT_RELEASE=1`.
+- `breaker_alarm` registered with `webhook: True` so ERP gets push on trip.
+- `breaker_reset_sent` event dropped from EVENT_CATALOG — the state transition
+  to `resetting` already broadcasts `breaker_state_changed`, so a separate
+  event would be redundant and trip the drift guard.
+- No SNMP trap. No mobile app changes.
+
+### Files — Status
+
+| # | File | Status | Notes |
+|---|------|--------|-------|
+| 1 | `backend/app/models/socket_config.py` | COMPLETE | Added 9 breaker columns: breaker_state, breaker_last_trip_at, breaker_trip_cause, breaker_trip_count, breaker_type, breaker_rating, breaker_poles, breaker_rcd, breaker_rcd_sensitivity |
+| 2 | `backend/app/models/breaker_event.py` | COMPLETE | New model + table; indexed on (pedestal_id, socket_id, timestamp) |
+| 3 | `backend/app/models/session.py` | COMPLETE | Added `end_reason: Mapped[str]` nullable 64-char column |
+| 4 | `backend/app/database.py` | COMPLETE | Added breaker_event import + 10 migration entries (9 socket_configs + 1 sessions.end_reason) |
+| 5 | `backend/app/services/mqtt_client.py` | COMPLETE | Added `opta/breakers/+/status` to TOPICS |
+| 6 | `backend/app/services/session_service.py` | COMPLETE | `complete()` accepts optional `end_reason` kwarg; writes to `Session.end_reason` |
+| 7 | `backend/app/services/mqtt_handlers.py` | COMPLETE | OPTA_BREAKER_RE + dispatch branch; `_handle_opta_breaker_status` (upsert SocketConfig, increment trip_count on fresh trip, metadata merge preserving nulls, broadcast `breaker_state_changed`); `_handle_event_breaker_tripped` (breaker_events log, stop power session with end_reason="breaker_trip", broadcast `session_completed` + `breaker_alarm`) |
+| 8 | `backend/app/routers/breakers.py` | COMPLETE | New router: POST /reset (admin), GET status + socket history (default 10) + pedestal history (50). Shared helpers `get_cabinet_id`, `publish_breaker_reset`, `serialize_breaker_status`, `serialize_event`, `perform_breaker_reset`, `broadcast_resetting` reused by ERP router |
+| 9 | `backend/app/routers/ext_breaker_endpoints.py` | COMPLETE | 5 ERP routes: breakers list, single-socket + 5 events, POST reset (initiated_by="erp-service"), pedestal history, marina_id alarm aggregator. Reuses shared helpers from breakers.py |
+| 10 | `backend/app/main.py` | COMPLETE | Imports + include_router for breakers_router and ext_breaker_router (the latter before ext_api_gateway_router catch-all) |
+| 11 | `backend/app/services/api_catalog.py` | COMPLETE | Added 5 ENDPOINT_CATALOG entries (all `category: "Breaker Management"`) + 3 EVENT_CATALOG entries (breaker_state_changed, breaker_alarm, breaker_reset_sent). Events flow through existing dispatch_webhook hook — no additional wiring required |
+| 12 | `frontend/src/store/index.ts` | COMPLETE | Added `socketBreakerStates` + `setBreakerState` (partial-patch merge, never overwrites with null); `activeBreakerAlarms` list + `addBreakerAlarm` / `clearBreakerAlarm` / `acknowledgeBreakerAlarm`. Acknowledgements persist to `sessionStorage['ackedBreakerAlarms']` per D3 |
+| 13 | `frontend/src/hooks/useWebSocket.ts` | COMPLETE | Destructured `setBreakerState`, `addBreakerAlarm`; added `breaker_state_changed` case (partial-patch update + auto-clear banner on `closed`) and `breaker_alarm` case (adds key + admin-only Notification) |
+| 14 | `frontend/src/api/breakers.ts` | COMPLETE | Typed client: BreakerStatus + BreakerEvent types; `getSocketBreakerStatus`, `getSocketBreakerHistory` (limit default 10), `getPedestalBreakerHistory`, `postBreakerReset` |
+| 15 | `frontend/src/components/pedestal/SocketBreakerPanel.tsx` | COMPLETE | New component: status dot + label, Hardware Info block (type, rating, poles, RCD, sensitivity, trips, cause — all fallback to "Not reported"), admin-only Reset with inline confirm dialog + 15 s timeout watchdog, History button opens modal. 409 surfaces "Breaker is not in tripped state" toast |
+| 16 | `frontend/src/components/pedestal/BreakerHistoryModal.tsx` | COMPLETE | Modal fetches /api/pedestals/{pid}/sockets/{sid}/breaker/history?limit=10, renders event list with colour-coded event_type, shows trip_cause + current_at_trip + operator/erp-service badge |
+| 17 | `frontend/src/components/pedestal/PedestalControlCenter.tsx` | COMPLETE | Import SocketBreakerPanel; mount inside SocketCard (after autoSkipReason, before admin controls); destructure activeBreakerAlarms + acknowledgeBreakerAlarm; red alarm banner at top (after feedback toasts) lists tripped `Q{n}` sockets on THIS pedestal, Acknowledge button dismisses via sessionStorage |
+| 18 | `frontend/src/components/pedestal/PedestalView.tsx` | COMPLETE | Destructure `socketBreakerStates`; compute `breakerTripped` for electricity sockets; render red ⚡ overlay top-right of the button when tripped. Existing ring/bg colour logic untouched |
+| 19 | `tests/backend/test_breaker_monitoring.py` | COMPLETE | 21 tests (TC-BR-01..21) covering MQTT parse + no-null-overwrite + trip-count + BreakerTripped session stop + WS broadcasts + internal 409/publish/audit + ERP 409/publish/audit + invalid token + list / socket 5 events / history 50 / marina alarms / catalog registration |
+| 20 | `tests/backend/conftest.py` | COMPLETE | Added breaker_event model import so tables are created in the test DB |
+| 21 | `frontend/e2e/breaker.spec.ts` | COMPLETE | Playwright — Hardware Info "Not reported" default; Reset button hidden for monitor, visible for admin only when tripped, hidden when closed; alarm banner shows Q{n} label when socket is tripped. Store seeding via `window.__APP_STORE__` (see note for wiring) |
+| 22 | `docs/firmware_requirements.md` | COMPLETE | New doc captures the v3.8 retain-flag recommendation for `opta/breakers/+/status` per D13; lists every currently-contracted topic with retain flag for cross-team reference |
+| 23 | `frontend/src/store/index.ts` (touched again) | COMPLETE | Exposed `useStore` as `window.__APP_STORE__` at module end so Playwright can seed breaker state without waiting for the mocked WebSocket |
+| 24 | `README.md` | COMPLETE | Newest-first v3.8 changelog entry — MQTT topic, internal endpoints, 5 ERP endpoints, WS events, UI features, test delta 275 → 292, Wire: list |
+
+## Test run result: 292 passed, 0 failed (2026-04-24) — 271 pre-existing + 21 new breaker cases (test counts include TC-BR-01..21)
+
+## Pending before release
+- Run Playwright e2e locally (`tests/playwright_e2e.sh`) — backend suite already green.
+- Commit on develop with full test gate.
+- PAUSE for explicit user approval before merging to main.
+
+---
+
+---
+
 # Implementation Status — External Pedestal API Endpoints (v3.3)
 
 ## Session started: 2026-04-11

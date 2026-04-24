@@ -28,6 +28,11 @@ class Session(Base):
     # customer_id — that remains the sole FK to the Customer table.
     owner_claimed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
 
+    # v3.8 — machine-readable reason the session ended. NULL for legacy rows and
+    # normal unplug/stop paths; populated for specific flows such as
+    # "breaker_trip". Human-facing UI still uses deny_reason for denied sessions.
+    end_reason: Mapped[str] = mapped_column(String(64), nullable=True)
+
     pedestal: Mapped["Pedestal"] = relationship("Pedestal", back_populates="sessions")  # noqa: F821
     sensor_readings: Mapped[list["SensorReading"]] = relationship(  # noqa: F821
         "SensorReading", back_populates="session"

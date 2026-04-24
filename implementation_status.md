@@ -69,10 +69,13 @@ gains a ⚡ overlay on tripped circles; `breaker_alarm` is webhookable to ERP.
 
 ## Test run result: 292 passed, 0 failed (2026-04-24) — 271 pre-existing + 21 new breaker cases (test counts include TC-BR-01..21)
 
-## Pending before release
-- Run Playwright e2e locally (`tests/playwright_e2e.sh`) — backend suite already green.
-- Commit on develop with full test gate.
-- PAUSE for explicit user approval before merging to main.
+## Release status
+
+- ✅ Commit `716f6b3` on develop.
+- ✅ Pre-commit + pre-push gates green (pytest 292/292, bandit, semgrep, gap 1-4, detect-secrets, pip-audit).
+- ⚠️ Playwright e2e **skipped** in the pre-push hook because the backend was not running on :8000. The spec itself is committed and will run automatically the next time the hook fires with a live backend (e.g. `bash tests/playwright_e2e.sh` with `uvicorn` up).
+- ✅ `716f6b3` pushed to `origin/develop` (`2f9af0e..716f6b3`).
+- ⏸️ PAUSED — awaiting explicit user approval before merging to `main` with `CLOUD_IOT_RELEASE=1`.
 
 ---
 

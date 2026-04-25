@@ -37,6 +37,7 @@ export function useWebSocket() {
     addToast,
     setBreakerState,
     addBreakerAlarm,
+    addValveFlowWarning,
   } = useStore()
   const { role } = useAuthStore()
 
@@ -413,6 +414,28 @@ export function useWebSocket() {
               const cause = d.trip_cause ?? 'unknown'
               new Notification('Breaker Tripped', {
                 body: `Pedestal ${d.pedestal_id} socket Q${d.socket_id} — cause: ${cause}`,
+                icon: '/vite.svg',
+              })
+            }
+          }
+          break
+        }
+        case 'valve_flow_warning': {
+          // v3.9 — post-diagnostic auto-open reported zero flow after 30 s.
+          // Informational only; valve remains open. Shows a banner and fires
+          // a Browser Notification for admin so an operator on another page
+          // still sees it.
+          const d = msg.data
+          if (typeof d?.pedestal_id === 'number' && typeof d?.valve_id === 'number') {
+            addValveFlowWarning(`${d.pedestal_id}-${d.valve_id}`)
+            if (role === 'admin'
+                && typeof Notification !== 'undefined'
+                && Notification.permission === 'granted') {
+              const body: string = (typeof d.message === 'string' && d.message)
+                ? d.message
+                : `Valve V${d.valve_id} on pedestal ${d.pedestal_id} reports zero flow`
+              new Notification('Valve zero-flow warning', {
+                body,
                 icon: '/vite.svg',
               })
             }

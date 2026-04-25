@@ -29,9 +29,25 @@ _opta_cached_cabinet_id: str | None = None
 socket_fault_state: dict[tuple[int, int], datetime] = {}
 #
 # Key: pedestal_id; Value: UTC datetime when the diagnostics router last
-# published `opta/cmd/diagnostic` for this pedestal. Auto-activate refuses
-# to fire within 60 s of that timestamp.
-last_diagnostic_at: dict[int, datetime] = {}
+# published `opta/cmd/diagnostic` for this pedestal. SOCKET auto-activate
+# refuses to fire within 60 s of that timestamp (prevents racing with the
+# diagnostic pulse). Renamed in v3.9 for clarity vs. the valve trigger dict.
+last_diagnostic_lockout_at: dict[int, datetime] = {}
+# Back-compat alias — existing imports (e.g. routers/diagnostics.py) still
+# reference `last_diagnostic_at`. Keeps the rename a non-breaking change.
+last_diagnostic_at = last_diagnostic_lockout_at
+
+# v3.9 — stamped when `opta/diagnostic` RESPONSE arrives. Used for telemetry
+# and can be consumed by future flows that want to know when a pedestal was
+# last successfully diagnosed. NOT a blocker — actual valve auto-open fires
+# inline inside `_handle_opta_diagnostic` per-valve.
+last_diagnostic_ok_at: dict[int, datetime] = {}
+
+# v3.9 — Key: (pedestal_id, valve_id); Value: UTC datetime when the operator
+# last manually stopped this valve. Post-diagnostic valve auto-open refuses
+# to re-open within 10 minutes so that diagnostic does not become an
+# accidental water-on button (D3).
+last_valve_manual_stop_at: dict[tuple[int, int], datetime] = {}
 
 # Topic patterns — legacy pedestal/... schema
 SOCKET_STATUS_RE  = re.compile(r"pedestal/(\d+)/socket/(\d+)/status")
@@ -244,6 +260,40 @@ def _auto_discover_socket_config(db, pedestal_id: int, socket_id: int) -> bool:
         return False
 
 
+def _auto_discover_valve_config(db, pedestal_id: int, valve_id: int) -> bool:
+    """v3.9 — ValveConfig sibling of _auto_discover_socket_config.
+
+    Mirrors the v3.7 auto-discovery pattern: on first contact with a water
+    valve, create the config row with `auto_activate=True` (default-ON for
+    valves, opposite of sockets). Never overwrites an existing row so
+    operator toggles survive.
+    """
+    try:
+        from ..models.valve_config import ValveConfig
+        row = db.query(ValveConfig).filter(
+            ValveConfig.pedestal_id == pedestal_id,
+            ValveConfig.valve_id == valve_id,
+        ).first()
+        if row:
+            return False
+        db.add(ValveConfig(
+            pedestal_id=pedestal_id,
+            valve_id=valve_id,
+            auto_activate=True,
+        ))
+        db.commit()
+        logger.info("[Discovery] ValveConfig created pedestal=%d valve=%d", pedestal_id, valve_id)
+        return True
+    except Exception as e:
+        logger.warning("[Discovery] valve config create failed (pedestal=%d valve=%d): %s",
+                       pedestal_id, valve_id, e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return False
+
+
 def _socket_name_to_id(name: str) -> int:
     """E1→1, E2→2, E3→3, E4→4; Q1→1, Q2→2, Q3→3, Q4→4; fallback: strip non-digits."""
     mapping = {"E1": 1, "E2": 2, "E3": 3, "E4": 4,
@@ -416,9 +466,13 @@ async def _handle_marina_water(cabinet_id: str, water_name: str, payload: str):
     lpm = session_l  # firmware doesn't send L/min, use session_l as-is
     legacy_payload = json.dumps({"lpm": lpm, "total_liters": total_l})
 
+    valve_id = _water_name_to_id(water_name)
     db = SessionLocal()
     try:
         pedestal_id = _cabinet_to_pedestal_id(db, cabinet_id)
+        # v3.9 — idempotent ValveConfig auto-discovery on first sight.
+        if pedestal_id is not None:
+            _auto_discover_valve_config(db, pedestal_id, valve_id)
     finally:
         db.close()
 
@@ -801,8 +855,8 @@ def _auto_activate_precondition_check(db, pedestal_id: int, socket_id: int) -> s
     if existing:
         return "socket already active"
 
-    # 5. No diagnostic running.
-    last_diag = last_diagnostic_at.get(pedestal_id)
+    # 5. No diagnostic running (socket lockout window).
+    last_diag = last_diagnostic_lockout_at.get(pedestal_id)
     if last_diag and (datetime.utcnow() - last_diag).total_seconds() < _DIAGNOSTIC_LOCKOUT_S:
         return "diagnostic in progress"
 
@@ -884,6 +938,137 @@ async def _maybe_auto_activate(pedestal_id: int, socket_id: int, outlet_id: str)
                 pedestal_id, socket_id, msg_id)
     # Session id isn't known yet — OutletActivated will create it shortly.
     _log_auto_activation(pedestal_id, socket_id, "success")
+
+
+# ── v3.9 — Post-diagnostic valve auto-open + zero-flow watchdog ──────────────
+
+_VALVE_MANUAL_STOP_COOLDOWN_S = 600   # D3: 10 minutes after a manual stop
+_VALVE_FLOW_WATCHDOG_S = 30           # User-requested zero-flow check delay
+
+
+async def _maybe_auto_open_valve(pedestal_id: int, valve_id: int, cabinet_id: str | None) -> None:
+    """Post-diagnostic auto-open for a single valve (v3.9).
+
+    Triggered by `_handle_opta_diagnostic` when the diagnostic response arrives
+    and reports that this valve's sensor is ok.
+
+    Guards (in order, first failure logs + returns):
+      1. ValveConfig.auto_activate is True for this (pedestal, valve).
+      2. No active water session on this valve.
+      3. Operator has not manually stopped this valve in the last 10 minutes.
+      4. Pedestal has a cabinet_id configured (else MQTT publish is impossible).
+
+    On success: publishes `opta/cmd/water/V{n}` activate and spawns a 30 s
+    zero-flow watchdog. The unattributed customer_id=NULL session is created
+    by the existing `_handle_event_outlet_activated` flow when firmware emits
+    `OutletActivated` in response to this activate command.
+    """
+    db = SessionLocal()
+    try:
+        from ..models.valve_config import ValveConfig
+        from ..models.session import Session as SessionModel
+
+        cfg = db.query(ValveConfig).filter(
+            ValveConfig.pedestal_id == pedestal_id,
+            ValveConfig.valve_id == valve_id,
+        ).first()
+        if not cfg or not cfg.auto_activate:
+            logger.info("[ValveAutoOpen] pedestal=%d valve=%d SKIPPED: auto_activate=False",
+                        pedestal_id, valve_id)
+            return
+
+        existing = db.query(SessionModel).filter(
+            SessionModel.pedestal_id == pedestal_id,
+            SessionModel.socket_id == valve_id,
+            SessionModel.type == "water",
+            SessionModel.status.in_(["pending", "active"]),
+        ).first()
+        if existing:
+            logger.info("[ValveAutoOpen] pedestal=%d valve=%d SKIPPED: active session %d",
+                        pedestal_id, valve_id, existing.id)
+            return
+    finally:
+        db.close()
+
+    last_stop = last_valve_manual_stop_at.get((pedestal_id, valve_id))
+    if last_stop and (datetime.utcnow() - last_stop).total_seconds() < _VALVE_MANUAL_STOP_COOLDOWN_S:
+        elapsed = int((datetime.utcnow() - last_stop).total_seconds())
+        logger.info("[ValveAutoOpen] pedestal=%d valve=%d SKIPPED: manual stop %ds ago (cooldown %ds)",
+                    pedestal_id, valve_id, elapsed, _VALVE_MANUAL_STOP_COOLDOWN_S)
+        return
+
+    if not cabinet_id:
+        logger.warning("[ValveAutoOpen] pedestal=%d valve=%d SKIPPED: no cabinet_id",
+                       pedestal_id, valve_id)
+        return
+
+    # Publish activate. Same shape as operator-initiated activation.
+    from .mqtt_client import mqtt_service
+    msg_id = str(int(datetime.utcnow().timestamp() * 1000))
+    mqtt_service.publish(
+        f"opta/cmd/water/V{valve_id}",
+        json.dumps({"msgId": msg_id, "cabinetId": cabinet_id, "action": "activate"}),
+    )
+    logger.info("[ValveAutoOpen] pedestal=%d valve=%d ACTIVATE published to cabinet=%s (msg_id=%s)",
+                pedestal_id, valve_id, cabinet_id, msg_id)
+
+    # Fire-and-forget 30-second zero-flow check.
+    asyncio.create_task(_check_valve_flow_after_30s(pedestal_id, valve_id))
+
+
+async def _check_valve_flow_after_30s(pedestal_id: int, valve_id: int) -> None:
+    """Zero-flow safety watchdog (v3.9 informational guard).
+
+    30 seconds after an auto-open publishes, check the most recent `lpm`
+    SensorReading for this valve. If flow is 0, broadcast a
+    `valve_flow_warning` event so the operator sees a dashboard banner.
+    Informational only — does not close the valve.
+    """
+    await asyncio.sleep(_VALVE_FLOW_WATCHDOG_S)
+
+    db = SessionLocal()
+    try:
+        from ..models.sensor_reading import SensorReading
+        from datetime import timedelta as _td
+        cutoff = datetime.utcnow() - _td(seconds=_VALVE_FLOW_WATCHDOG_S + 5)
+        recent = (
+            db.query(SensorReading)
+            .filter(
+                SensorReading.pedestal_id == pedestal_id,
+                SensorReading.socket_id == valve_id,
+                SensorReading.type == "lpm",
+                SensorReading.timestamp >= cutoff,
+            )
+            .order_by(SensorReading.timestamp.desc())
+            .first()
+        )
+        latest_flow = float(recent.value) if recent is not None else 0.0
+    finally:
+        db.close()
+
+    if latest_flow > 0:
+        logger.info("[ValveWatchdog] pedestal=%d valve=%d flow=%.3f lpm — healthy",
+                    pedestal_id, valve_id, latest_flow)
+        return
+
+    message = f"Auto-activated valve V{valve_id} reports zero flow — possible disconnected hose"
+    logger.warning("[ValveWatchdog] pedestal=%d valve=%d %s", pedestal_id, valve_id, message)
+    try:
+        from .error_log_service import log_warning
+        log_warning("hw", f"pedestal_{pedestal_id}", message)
+    except Exception:
+        pass
+
+    await ws_manager.broadcast({
+        "event": "valve_flow_warning",
+        "data": {
+            "pedestal_id": pedestal_id,
+            "valve_id": valve_id,
+            "reason": "zero_flow_after_auto_open",
+            "message": message,
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    })
 
 
 async def _handle_event_user_plugged_out(db, pedestal_id: int, outlet_id: str, resource: str, data: dict):
@@ -1577,6 +1762,15 @@ async def _handle_opta_diagnostic(payload: str):
     water_ok = all(w.get("hw", "off") != "fault" for w in water_arr) if water_arr else False
     sensors["water"] = "ok" if water_ok else ("fail" if water_arr else "missing")
 
+    # v3.9 — expose per-valve water sensor status so post-diagnostic auto-open
+    # can fire selectively on only the valves that passed.
+    per_valve_ok: dict[int, bool] = {}
+    for w in water_arr:
+        vid = _water_name_to_id(w.get("id", ""))
+        ok = (w.get("hw", "off") != "fault")
+        sensors[f"water_v{vid}"] = "ok" if ok else "fail"
+        per_valve_ok[vid] = ok
+
     # Opta doesn't have separate temp/moisture/camera sensors
     sensors["temperature"] = "ok" if data.get("mqtt") == "connected" else "missing"
     sensors["moisture"] = "ok" if data.get("mqtt") == "connected" else "missing"
@@ -1591,6 +1785,15 @@ async def _handle_opta_diagnostic(payload: str):
                 [f"{p['id']}:{p.get('hw','?')}" for p in power_arr],
                 [f"{w['id']}:{w.get('hw','?')}" for w in water_arr],
                 data.get("time", "?"))
+
+    # v3.9 — stamp the last-diagnostic-response timestamp and fire post-diag
+    # valve auto-open for each valve that reported ok. Each task is
+    # self-contained (own DB session) and runs the full precondition set —
+    # auto_activate flag, no-active-session, and 10-min manual-stop cooldown.
+    last_diagnostic_ok_at[pedestal_id] = datetime.utcnow()
+    for vid, ok in per_valve_ok.items():
+        if ok:
+            asyncio.create_task(_maybe_auto_open_valve(pedestal_id, vid, cabinet_id))
 
 
 async def _handle_socket_status(pedestal_id: int, socket_id: int, payload: str):

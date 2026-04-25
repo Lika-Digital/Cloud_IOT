@@ -236,6 +236,20 @@ interface AppStore {
   socketAutoActivate: Record<string, boolean>
   setSocketAutoActivate: (pedestal_id: number, socket_id: number, value: boolean) => void
 
+  // v3.9 — per-valve auto-activation config, keyed by `${pedestal_id}-${valve_id}`.
+  // Default is TRUE (opposite of sockets). Populated by `getValveConfigs()` and
+  // optimistic PATCH. Consumed by WaterCard (AUTO toggle).
+  valveAutoActivate: Record<string, boolean>
+  setValveAutoActivate: (pedestal_id: number, valve_id: number, value: boolean) => void
+
+  // v3.9 — string[] keys `${pedestal_id}-${valve_id}` currently showing a
+  // zero-flow warning banner. Populated by `valve_flow_warning` WS events.
+  // Cleared when flow becomes non-zero (broadcast-driven) OR when operator
+  // dismisses the banner.
+  valveFlowWarnings: string[]
+  addValveFlowWarning: (key: string) => void
+  clearValveFlowWarning: (key: string) => void
+
   // v3.5 — transient "auto-activate skipped" warning per socket. Populated by
   // the `socket_auto_activate_skipped` WS event and auto-cleared after 30 s.
   socketAutoSkipReasons: Record<string, { reason: string; ts: number }>
@@ -481,6 +495,21 @@ export const useStore = create<AppStore>((set) => ({
         [`${pedestal_id}-${socket_id}`]: value,
       },
     })),
+
+  valveAutoActivate: {},
+  setValveAutoActivate: (pedestal_id, valve_id, value) =>
+    set((s) => ({
+      valveAutoActivate: {
+        ...s.valveAutoActivate,
+        [`${pedestal_id}-${valve_id}`]: value,
+      },
+    })),
+
+  valveFlowWarnings: [],
+  addValveFlowWarning: (key) =>
+    set((s) => (s.valveFlowWarnings.includes(key) ? s : { valveFlowWarnings: [...s.valveFlowWarnings, key] })),
+  clearValveFlowWarning: (key) =>
+    set((s) => ({ valveFlowWarnings: s.valveFlowWarnings.filter((k) => k !== key) })),
 
   socketAutoSkipReasons: {},
   setSocketAutoSkipReason: (pedestal_id, socket_id, reason) =>

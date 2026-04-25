@@ -24,6 +24,9 @@ ENDPOINT_CATALOG = [
     {"id": "sockets.config_list",    "path": "/api/pedestals/{pedestal_id}/sockets/config",                     "method": "GET",   "category": "Controls", "allow_bidirectional": False},
     {"id": "sockets.config_patch",   "path": "/api/pedestals/{pedestal_id}/sockets/{socket_id}/config",          "method": "PATCH", "category": "Controls", "allow_bidirectional": True},
     {"id": "sockets.auto_log",       "path": "/api/pedestals/{pedestal_id}/sockets/{socket_id}/auto-activate-log","method": "GET",   "category": "Controls", "allow_bidirectional": False},
+    # Per-valve auto-activation + post-diagnostic auto-open (v3.9)
+    {"id": "valves.config_list",     "path": "/api/pedestals/{pedestal_id}/valves/config",                      "method": "GET",   "category": "Controls", "allow_bidirectional": False},
+    {"id": "valves.config_patch",    "path": "/api/pedestals/{pedestal_id}/valves/{valve_id}/config",           "method": "PATCH", "category": "Controls", "allow_bidirectional": True},
     # Mobile QR-claim + monitoring (v3.6)
     {"id": "mobile.qr_claim",        "path": "/api/mobile/qr/claim",                                            "method": "POST",  "category": "Mobile", "allow_bidirectional": True},
     {"id": "mobile.session_live",    "path": "/api/mobile/sessions/{session_id}/live",                          "method": "GET",   "category": "Mobile", "allow_bidirectional": False},
@@ -82,4 +85,8 @@ EVENT_CATALOG = [
     # broadcast — no separate reset_sent event is needed.
     {"id": "breaker_state_changed",    "name": "Breaker State Changed", "category": "Breaker Management"},
     {"id": "breaker_alarm",            "name": "Breaker Alarm",         "category": "Breaker Management"},
+    # v3.9 — zero-flow watchdog fires this 30 s after a post-diagnostic
+    # auto-open when the flow meter still reads 0. Informational only;
+    # the valve is left open so the operator can investigate.
+    {"id": "valve_flow_warning",       "name": "Valve Flow Warning",    "category": "Hardware"},
 ]

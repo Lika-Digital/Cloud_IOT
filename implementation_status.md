@@ -1,3 +1,77 @@
+# Implementation Status — Per-Valve Auto-Activation + Post-Diagnostic Auto-Open (v3.9)
+
+## Session started: 2026-04-24
+
+Feature scope: add a per-valve `auto_activate` flag (mirrors v3.5 socket flag but
+for V1/V2) with default `True`. When `opta/diagnostic` returns and the per-valve
+sensor reports `ok`, backend publishes `{"action":"activate"}` on
+`opta/cmd/water/V{n}` for every valve whose `auto_activate=True` — unless
+(a) an active water session already exists on that valve, or (b) an operator
+manually stopped the valve in the last 10 minutes. The auto-fire creates a
+`customer_id=NULL` "unattributed" water session so incoming flow readings are
+still attributable to a row (even though no invoice is produced). 30 s after
+each auto-open, a fire-and-forget watchdog checks the latest flow reading and
+broadcasts `valve_flow_warning` if flow is still 0 — informational only, the
+valve stays open.
+
+**Approved design decisions (2026-04-24):**
+- Default `auto_activate=True` for new valves (opposite of sockets). Hardware
+  valve is normally-closed; flow meter provides immediate operator visibility.
+- D1 option (b): create `customer_id=NULL` session when auto-activation fires
+  without a customer. Flow is tracked via the existing `_handle_water_flow`
+  pipeline; no invoice is produced.
+- D2 option (b): per-valve sensor ok gates auto-open. Diagnostic response
+  parser must be extended to expose per-valve `water_v1_ok` / `water_v2_ok`.
+- D3 option (b): 10-minute cooldown after an operator-initiated manual stop.
+  Prevents diagnostic from becoming an accidental water-on button.
+- D4: no-op if an active water session already exists on that valve.
+- D5: sockets entirely unchanged — still require `UserPluggedIn`.
+- D6: v3.7 auto-discovery pattern — create ValveConfig row once with default
+  `auto_activate=True`, never overwrite operator toggles afterwards.
+- D7 option (a): new `valve_config` table (not generalised SocketConfig).
+- D8: separate module-level dicts in mqtt_handlers — rename the existing
+  `last_diagnostic_at` to `last_diagnostic_lockout_at` for socket auto-activate
+  clarity, and add `last_diagnostic_ok_at` as the valve auto-open enabler.
+- D9: five mandatory tests cover happy path, auto_activate=False skip,
+  active-session skip, per-valve sensor filter, and orphan-session flow
+  attribution.
+- Additional guard: 30-second zero-flow watchdog after each auto-open. Logs a
+  warning + broadcasts `valve_flow_warning` WebSocket event when flow stays 0.
+  Non-destructive — valve remains open; operator sees banner + Browser Notification.
+
+### Files — Status
+
+| # | File | Status | Notes |
+|---|------|--------|-------|
+| 1 | `backend/app/models/valve_config.py` | COMPLETE | New `valve_configs` table; auto_activate default True per design D |
+| 2 | `backend/app/database.py` | COMPLETE | init_db imports valve_config so create_all creates `valve_configs` |
+| 3 | `backend/app/services/mqtt_handlers.py` | COMPLETE | Renamed `last_diagnostic_at` → `last_diagnostic_lockout_at` with back-compat alias; added `last_diagnostic_ok_at` + `last_valve_manual_stop_at` dicts; new `_auto_discover_valve_config` helper; `_handle_marina_water` now auto-discovers valve config; extended `_handle_opta_diagnostic` with per-valve `water_v{n}` keys and post-diag `_maybe_auto_open_valve` tasks per valve whose sensor is ok; new `_maybe_auto_open_valve` coroutine (4 guards: auto_activate flag, active session, 10-min cooldown, cabinet_id present) + `_check_valve_flow_after_30s` zero-flow watchdog that broadcasts `valve_flow_warning` |
+| 4 | `backend/app/services/session_service.py` | SKIPPED | No change needed — firmware emits OutletActivated with customer_id=None in response to auto-open activate command; existing `_handle_event_outlet_activated` path handles unattributed sessions natively |
+| 5 | `backend/app/routers/diagnostics.py` | SKIPPED | No change needed — auto-open is driven by MQTT response handler, not the HTTP endpoint. The existing `last_diagnostic_at` reference still works via back-compat alias |
+| 6 | `backend/app/routers/controls.py` | COMPLETE | Stamp `last_valve_manual_stop_at[(pid, vid)]` both in `_publish_session_control` water stop branch AND in `direct_water_cmd` stop branch so any operator-initiated stop triggers the 10-min cooldown |
+| 7 | `backend/app/routers/pedestal_config.py` | COMPLETE | Added ValveConfigUpdate body + `GET /api/pedestals/{pid}/valves/config` + `PATCH /api/pedestals/{pid}/valves/{vid}/config` (admin only). Default-true fallback returned for never-configured valves. Co-located with sibling socket config endpoints |
+| 8 | `backend/app/main.py` | SKIPPED | No change — endpoints piggyback on existing `pedestal_config_router` already registered |
+| 9 | `backend/app/services/api_catalog.py` | COMPLETE | Added 2 ENDPOINT_CATALOG entries (valves.config_list / valves.config_patch) + 1 EVENT_CATALOG entry (valve_flow_warning) |
+| 10 | `frontend/src/store/index.ts` | COMPLETE | `valveAutoActivate` Record + setter mirroring socketAutoActivate; `valveFlowWarnings` list + add/clear. Keyed `${pedestal_id}-${valve_id}` |
+| 11 | `frontend/src/api/valveConfig.ts` | COMPLETE | getValveConfigs, setValveConfig typed client |
+| 12 | `frontend/src/hooks/useWebSocket.ts` | COMPLETE | Destructured `addValveFlowWarning`; new case `valve_flow_warning` writes to store + fires admin Browser Notification |
+| 13 | `frontend/src/components/pedestal/PedestalControlCenter.tsx` | COMPLETE | WaterCard extended: AUTO toggle mirroring SocketCard, green AUTO / amber UNATTRIBUTED badges, zero-flow amber banner when valveFlowWarnings contains the key. ControlCenter loads `getValveConfigs` on mount; `onValveAutoActivateChange` optimistic PATCH with rollback |
+| 14 | `tests/backend/test_valve_auto_activate.py` | COMPLETE | 7 tests (TC-VA-01..07) — all five mandatory cases per D9 + auto-discovery default + GET/PATCH endpoints. Autouse fixture wipes manual-stop dict + active water sessions on the test cabinet between tests |
+| 15 | `tests/backend/conftest.py` | COMPLETE | Added valve_config import so create_all picks up the new table |
+| 16 | `frontend/src/hooks/useWebSocket.ts` (touched again) | COMPLETE | Tightened body type for valve_flow_warning Notification (TS strict mode) |
+| 17 | `README.md` | COMPLETE | Newest-first v3.9 entry — flag default, post-diag flow + 3 guards, unattributed sessions, zero-flow watchdog, 7 new tests, Wire: list |
+
+## Pending before release
+- ✅ pytest 299/299; ✅ TS clean.
+- Commit on develop, push develop with full test gate.
+- PAUSE for explicit user approval before merging to main.
+
+## Test run result: 299 passed, 0 failed (2026-04-25) — 292 prior + 7 new TC-VA cases. TypeScript: clean.
+
+---
+
+---
+
 # Implementation Status — Smart Circuit Breaker Monitoring + Remote Reset (v3.8)
 
 ## Session started: 2026-04-24
@@ -75,7 +149,9 @@ gains a ⚡ overlay on tripped circles; `breaker_alarm` is webhookable to ERP.
 - ✅ Pre-commit + pre-push gates green (pytest 292/292, bandit, semgrep, gap 1-4, detect-secrets, pip-audit).
 - ⚠️ Playwright e2e **skipped** in the pre-push hook because the backend was not running on :8000. The spec itself is committed and will run automatically the next time the hook fires with a live backend (e.g. `bash tests/playwright_e2e.sh` with `uvicorn` up).
 - ✅ `716f6b3` pushed to `origin/develop` (`2f9af0e..716f6b3`).
-- ⏸️ PAUSED — awaiting explicit user approval before merging to `main` with `CLOUD_IOT_RELEASE=1`.
+- ✅ User approved merge. `main` fast-forwarded to `6e8ab32`.
+- ✅ Pushed to `origin/main` with `CLOUD_IOT_RELEASE=1` — all pre-push gates green; Playwright skipped (no backend on :8000 at push time, same as develop push).
+- Final state: `main` and `develop` both at `6e8ab32`, synced with `origin`.
 
 ---
 

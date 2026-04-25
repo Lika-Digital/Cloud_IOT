@@ -474,6 +474,73 @@ def update_socket_config(
     return {"socket_id": socket_id, "auto_activate": bool(cfg.auto_activate)}
 
 
+# ─── Per-valve auto-activation config (v3.9) ────────────────────────────────
+
+class ValveConfigUpdate(BaseModel):
+    auto_activate: bool
+
+
+@router.get("/api/pedestals/{pedestal_id}/valves/config")
+def list_valve_configs(pedestal_id: int, db: Session = Depends(get_db)):
+    """Return the auto-activate setting for both water valves on a pedestal.
+
+    Valves never yet configured are returned as
+    `{valve_id, auto_activate: true}` — matches the v3.9 default. This means
+    new valves opt into post-diagnostic auto-open unless the operator has
+    explicitly turned them off.
+    """
+    if not db.get(Pedestal, pedestal_id):
+        raise HTTPException(status_code=404, detail="Pedestal not found")
+
+    from ..models.valve_config import ValveConfig
+    rows = db.query(ValveConfig).filter(ValveConfig.pedestal_id == pedestal_id).all()
+    by_valve = {r.valve_id: r for r in rows}
+    return [
+        {
+            "valve_id": vid,
+            "auto_activate": bool(by_valve[vid].auto_activate) if vid in by_valve else True,
+        }
+        for vid in (1, 2)
+    ]
+
+
+@router.patch("/api/pedestals/{pedestal_id}/valves/{valve_id}/config")
+def update_valve_config(
+    pedestal_id: int,
+    valve_id: int,
+    body: ValveConfigUpdate,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin),
+):
+    """Update the auto-activate flag for a single valve. Admin only.
+
+    Effective immediately — the next `opta/diagnostic` response that reports
+    this valve as ok reads the new value directly from ValveConfig.
+    """
+    if valve_id not in (1, 2):
+        raise HTTPException(status_code=400, detail="valve_id must be 1 or 2")
+    if not db.get(Pedestal, pedestal_id):
+        raise HTTPException(status_code=404, detail="Pedestal not found")
+
+    from ..models.valve_config import ValveConfig
+    cfg = db.query(ValveConfig).filter(
+        ValveConfig.pedestal_id == pedestal_id,
+        ValveConfig.valve_id == valve_id,
+    ).first()
+    if cfg:
+        cfg.auto_activate = body.auto_activate
+    else:
+        cfg = ValveConfig(
+            pedestal_id=pedestal_id,
+            valve_id=valve_id,
+            auto_activate=body.auto_activate,
+        )
+        db.add(cfg)
+    db.commit()
+    db.refresh(cfg)
+    return {"valve_id": valve_id, "auto_activate": bool(cfg.auto_activate)}
+
+
 @router.get("/api/pedestals/{pedestal_id}/sockets/{socket_id}/auto-activate-log")
 def get_auto_activate_log(pedestal_id: int, socket_id: int, db: Session = Depends(get_db)):
     """Return the last 20 auto-activation attempts for this socket, newest first."""

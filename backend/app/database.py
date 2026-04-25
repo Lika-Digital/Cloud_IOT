@@ -31,6 +31,7 @@ def init_db():
     from .models import socket_config  # noqa: F401
     from .models import auto_activation_log  # noqa: F401
     from .models import breaker_event  # noqa: F401 — v3.8
+    from .models import valve_config  # noqa: F401 — v3.9
     Base.metadata.create_all(bind=engine)
     _migrate_schema()
 

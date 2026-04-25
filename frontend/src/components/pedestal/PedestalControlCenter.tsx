@@ -12,6 +12,7 @@ import {
   getPedestalQrAll,
   regeneratePedestalQrs,
 } from '../../api'
+import { getValveConfigs, setValveConfig } from '../../api/valveConfig'
 import { SocketQrGrid } from './SocketQrGrid'
 import SocketBreakerPanel from './SocketBreakerPanel'
 import type { OptaSocketState, OptaWaterState, OptaLogEntry } from '../../store'
@@ -399,17 +400,28 @@ function WaterCard({
   valveState,
   pedestalId,
   isAdmin,
+  autoActivate,
+  onAutoActivateChange,
+  showFlowWarning,
+  unattributedSession,
   onFeedback,
 }: {
   valveName: string
   valveState: OptaWaterState | null
   pedestalId: number
   isAdmin: boolean
+  autoActivate: boolean
+  onAutoActivateChange: (valveId: number, value: boolean) => Promise<void>
+  showFlowWarning: boolean
+  unattributedSession: boolean
   onFeedback: (key: string, type: 'success' | 'error', text: string) => void
 }) {
   const [loading, setLoading] = useState<string | null>(null)
+  const [autoBusy, setAutoBusy] = useState(false)
+  const [autoJustSaved, setAutoJustSaved] = useState(false)
   const state = valveState?.state ?? 'idle'
   const label = `Valve ${valveName}`
+  const valveId = Number(valveName.replace('V', ''))
 
   const sendCmd = async (action: string) => {
     setLoading(action)
@@ -423,6 +435,21 @@ function WaterCard({
     }
   }
 
+  const handleAutoToggle = async () => {
+    if (autoBusy) return
+    const next = !autoActivate
+    setAutoBusy(true)
+    try {
+      await onAutoActivateChange(valveId, next)
+      setAutoJustSaved(true)
+      setTimeout(() => setAutoJustSaved(false), 1500)
+    } catch {
+      onFeedback(`${valveName}-auto`, 'error', `Failed to update auto-activate for ${valveName}`)
+    } finally {
+      setAutoBusy(false)
+    }
+  }
+
   return (
     <div className="rounded-lg border border-gray-700 bg-gray-800/40 p-3 space-y-2">
       <div className="flex items-center justify-between">
@@ -430,6 +457,22 @@ function WaterCard({
           <span className="text-base">💧</span>
           <span className="text-sm font-medium text-white">{label}</span>
           <span className="text-xs text-gray-500 font-mono">{valveName}</span>
+          {autoActivate && (
+            <span
+              className="text-[10px] font-bold text-green-400 border border-green-500/50 rounded px-1 py-px"
+              title="Auto-activate on — post-diagnostic auto-open active for this valve"
+            >
+              AUTO
+            </span>
+          )}
+          {unattributedSession && (
+            <span
+              className="text-[10px] font-bold text-amber-300 border border-amber-500/50 rounded px-1 py-px"
+              title="Active session has no customer attached (auto-open / firmware-initiated)"
+            >
+              UNATTRIBUTED
+            </span>
+          )}
         </div>
         <StateBadge state={state} />
       </div>
@@ -451,23 +494,46 @@ function WaterCard({
         <p className="text-xs text-gray-600">No data received yet</p>
       )}
 
-      {isAdmin && (
-        <div className="flex gap-1.5 pt-1">
-          <CmdButton
-            label="Activate"
-            color="green"
-            disabled={state === 'active' || loading !== null}
-            loading={loading === 'activate'}
-            onClick={() => sendCmd('activate')}
-          />
-          <CmdButton
-            label="Stop"
-            color="red"
-            disabled={state === 'idle' || loading !== null}
-            loading={loading === 'stop'}
-            onClick={() => sendCmd('stop')}
-          />
+      {showFlowWarning && (
+        <div className="text-[11px] text-amber-200 bg-amber-900/30 border border-amber-700/50 rounded px-2 py-1.5">
+          ⚠️ Auto-activated valve reports zero flow — possible disconnected hose
         </div>
+      )}
+
+      {isAdmin && (
+        <>
+          <label className="flex items-center justify-between gap-2 pt-1 text-xs text-gray-300 select-none cursor-pointer">
+            <span className="flex items-center gap-1.5">
+              Auto-activate
+              {autoJustSaved && <span className="text-green-400">✓</span>}
+            </span>
+            <input
+              type="checkbox"
+              checked={autoActivate}
+              onChange={handleAutoToggle}
+              disabled={autoBusy}
+              className="h-3 w-3 accent-green-500 cursor-pointer"
+              aria-label={`Auto-activate ${valveName}`}
+            />
+          </label>
+
+          <div className="flex gap-1.5 pt-1">
+            <CmdButton
+              label="Activate"
+              color="green"
+              disabled={state === 'active' || loading !== null}
+              loading={loading === 'activate'}
+              onClick={() => sendCmd('activate')}
+            />
+            <CmdButton
+              label="Stop"
+              color="red"
+              disabled={state === 'idle' || loading !== null}
+              loading={loading === 'stop'}
+              onClick={() => sendCmd('stop')}
+            />
+          </div>
+        </>
       )}
     </div>
   )
@@ -674,6 +740,9 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
     activeSessions,
     activeBreakerAlarms,
     acknowledgeBreakerAlarm,
+    valveAutoActivate,
+    setValveAutoActivate,
+    valveFlowWarnings,
   } = useStore()
 
   // v3.8 — keys that belong to THIS pedestal only. The banner shows socket
@@ -698,6 +767,18 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
     return () => { cancelled = true }
   }, [pedestalId, setSocketAutoActivate])
 
+  // v3.9 — load per-valve auto-activate config (2 booleans).
+  useEffect(() => {
+    let cancelled = false
+    getValveConfigs(pedestalId).then((rows) => {
+      if (cancelled) return
+      for (const row of rows) {
+        setValveAutoActivate(pedestalId, row.valve_id, row.auto_activate)
+      }
+    }).catch(() => { /* non-fatal — defaults to true (v3.9 default) */ })
+    return () => { cancelled = true }
+  }, [pedestalId, setValveAutoActivate])
+
   const onAutoActivateChange = async (socketId: number, value: boolean) => {
     // Optimistic update — if the PATCH fails we roll back.
     setSocketAutoActivate(pedestalId, socketId, value)
@@ -705,6 +786,16 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
       await setSocketConfig(pedestalId, socketId, value)
     } catch (e) {
       setSocketAutoActivate(pedestalId, socketId, !value)
+      throw e
+    }
+  }
+
+  const onValveAutoActivateChange = async (valveId: number, value: boolean) => {
+    setValveAutoActivate(pedestalId, valveId, value)
+    try {
+      await setValveConfig(pedestalId, valveId, value)
+    } catch (e) {
+      setValveAutoActivate(pedestalId, valveId, !value)
       throw e
     }
   }
@@ -888,16 +979,28 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
       <div>
         <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">Water Valves</p>
         <div className="grid grid-cols-2 gap-2">
-          {VALVES.map((name) => (
-            <WaterCard
-              key={name}
-              valveName={name}
-              valveState={optaWaterStates[`${pedestalId}-${name}`] ?? null}
-              pedestalId={pedestalId}
-              isAdmin={isAdmin}
-              onFeedback={show}
-            />
-          ))}
+          {VALVES.map((name) => {
+            const valveId = Number(name.replace('V', ''))
+            const key = `${pedestalId}-${valveId}`
+            const activeWaterSession = activeSessions.find(
+              (s) => s.pedestal_id === pedestalId && s.socket_id === valveId && s.type === 'water'
+            )
+            const unattributed = !!activeWaterSession && activeWaterSession.customer_id == null
+            return (
+              <WaterCard
+                key={name}
+                valveName={name}
+                valveState={optaWaterStates[`${pedestalId}-${name}`] ?? null}
+                pedestalId={pedestalId}
+                isAdmin={isAdmin}
+                autoActivate={valveAutoActivate[key] ?? true}
+                onAutoActivateChange={onValveAutoActivateChange}
+                showFlowWarning={valveFlowWarnings.includes(key)}
+                unattributedSession={unattributed}
+                onFeedback={show}
+              />
+            )
+          })}
         </div>
       </div>
 

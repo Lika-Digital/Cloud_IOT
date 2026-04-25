@@ -123,6 +123,10 @@ def _publish_session_control(db: DBSession, session: Session, action: str):
                     f"opta/cmd/water/V{wid}",
                     json.dumps({"msgId": msg_id, "cabinetId": cabinet_id, "action": "stop"}),
                 )
+                # v3.9 — record operator-initiated manual stop so the next
+                # post-diagnostic auto-open respects the 10-minute cooldown.
+                from ..services.mqtt_handlers import last_valve_manual_stop_at
+                last_valve_manual_stop_at[(session.pedestal_id, wid)] = datetime.utcnow()
             elif action == "allow":
                 mqtt_service.publish(
                     f"opta/cmd/water/V{wid}",
@@ -587,6 +591,11 @@ async def direct_water_cmd(
                     "customer_id": active_session.customer_id,
                 },
             })
+        # v3.9 — record operator-initiated manual stop per valve so post-diag
+        # auto-open respects the 10-minute cooldown.
+        from ..services.mqtt_handlers import last_valve_manual_stop_at
+        valve_id = 1 if valve_name == "V1" else 2
+        last_valve_manual_stop_at[(pedestal_id, valve_id)] = datetime.utcnow()
 
     await ws_manager.broadcast({
         "event": "direct_cmd_sent",

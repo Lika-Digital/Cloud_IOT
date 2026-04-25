@@ -34,6 +34,55 @@ Mosquitto Broker (:1883)                  │                         │
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-04-25 — Per-valve auto-activation + post-diagnostic auto-open (v3.9)
+- Each water valve (V1, V2) now has its own `auto_activate` flag — mirror of the
+  v3.5 socket flag but with the **default flipped to True**. The hardware is
+  normally-closed so an auto-open requires a real backend command, and the flow
+  meter provides immediate visibility if anything unexpected happens.
+- When `opta/diagnostic` returns and a valve's individual sensor reports `ok`,
+  backend publishes `{"action":"activate"}` on `opta/cmd/water/V{n}` for every
+  valve whose `auto_activate=True` — provided three guards pass: (a) no
+  pre-existing active water session on that valve, (b) operator has not manually
+  stopped the valve in the last 10 minutes, (c) cabinet has a configured
+  `opta_client_id`. Per-valve sensor parsing is exposed in the diagnostic
+  response as `water_v1` / `water_v2` keys.
+- Unattributed sessions: when the firmware emits `OutletActivated` in response
+  to a backend-initiated auto-open, the resulting session has `customer_id=NULL`.
+  The dashboard surfaces this with an amber `UNATTRIBUTED` badge on the valve
+  card so the operator knows flow is being measured but not billed.
+- Zero-flow safety watchdog: 30 s after each auto-open publish, backend checks
+  the latest `lpm` reading. If still zero, it broadcasts `valve_flow_warning`
+  WebSocket event + writes a hardware warning log + fires a Browser Notification
+  for admin operators. Informational only — the valve stays open so the operator
+  can investigate (likely a disconnected hose).
+- New `valve_configs` table (`pedestal_id`, `valve_id`, `auto_activate` default
+  TRUE). Auto-discovered on first contact via the v3.7 pattern: created once
+  with the default, never overwritten so operator toggles survive reconnects.
+- Two new admin endpoints: `GET /api/pedestals/{pid}/valves/config` returns
+  defaults for any valve never explicitly configured, `PATCH /api/pedestals/{pid}/valves/{vid}/config`
+  toggles the flag.
+- Refactored MQTT handlers: `last_diagnostic_at` renamed to
+  `last_diagnostic_lockout_at` for clarity (back-compat alias preserved so
+  existing imports still work). New `last_diagnostic_ok_at` and
+  `last_valve_manual_stop_at` module-level dicts. The socket `diagnostic in
+  progress` lockout is now distinct from the valve `post-diagnostic trigger`
+  semantics — same timestamp would have meant opposite things.
+- Control Center: WaterCard gains a green AUTO badge + an amber UNATTRIBUTED
+  badge + a zero-flow warning banner. Auto-activate toggle styled identically
+  to the SocketCard one. Optimistic PATCH with rollback on failure.
+- 7 new backend tests (`test_valve_auto_activate.py` — TC-VA-01..07) cover the
+  happy path, every guard (auto_activate=False, active session, sensor fault,
+  10-min cooldown), default-true on first auto-discovery, and the GET/PATCH
+  endpoints. Total suite: 292 → 299 passing, 0 failures. TypeScript clean.
+- Wire: `backend/app/models/valve_config.py` (new),
+  `backend/app/database.py`, `backend/app/services/mqtt_handlers.py`,
+  `backend/app/services/api_catalog.py`,
+  `backend/app/routers/{controls.py, pedestal_config.py}`,
+  `frontend/src/{store/index.ts, hooks/useWebSocket.ts}`,
+  `frontend/src/api/valveConfig.ts` (new),
+  `frontend/src/components/pedestal/PedestalControlCenter.tsx`,
+  `tests/backend/{test_valve_auto_activate.py (new), conftest.py}`.
+
 ### 2026-04-24 — Smart circuit breaker monitoring + remote reset (v3.8)
 - New MQTT topic `opta/breakers/{socket_id}/status` carries live breaker state
   (`closed | tripped | open | resetting`) and breaker hardware metadata (type,

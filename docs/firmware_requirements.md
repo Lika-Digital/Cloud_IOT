@@ -10,6 +10,57 @@ whether an exception is safe.
 
 ---
 
+## v3.9 — Backend-initiated water valve activate (2026-04-25)
+
+### Firmware emits `OutletActivated` for every accepted activate command
+
+**Contract:** When the backend publishes `{"action":"activate", "msgId":"..."}`
+on `opta/cmd/water/V{n}` WITHOUT a `sessionContext` block, the firmware MUST
+still:
+
+1. Open the valve relay.
+2. Generate an internal `ormarSessionId` (e.g. `OBE-S-0042`).
+3. Publish an `OutletActivated` event on `opta/events` with
+   `device.resource="WATER"` and `session.mmSessionId=""` (empty).
+
+**Why:** The v3.9 post-diagnostic auto-open flow publishes activate commands
+without a customer context. The backend needs the `OutletActivated` event to
+materialise an "unattributed" `customer_id=NULL` water session so incoming
+flow readings have a `session_id` to attach to. If the firmware silently drops
+activate commands that lack `sessionContext.customerId`, every litre auto-flow
+will land in `sensor_readings` with `session_id=NULL` and the dashboard will
+never show the open valve.
+
+**How to apply:** Confirmed in the current sketch
+(`Lika - v2.1/LLSketch/LLSketch.ino`):
+
+- `handleWaterCmd` (L1080-1120) — `mmSessionId` and `customerId` extraction is
+  best-effort; `startWaterSession(idx)` is called unconditionally for any
+  `action == "activate"` that survives the FAULT check.
+- `startWaterSession` (L937-949) — calls `sendOutletActivated` after opening
+  the relay. The `mmSessionId` field in the emitted JSON will be an empty
+  string when the original command lacked session context.
+
+**Three documented silent-skip cases** (firmware does NOT emit `OutletActivated`):
+
+1. Valve in `STATE_FAULT` → publishes ACK
+   `{"status":"error","reason":"outlet_fault"}` on `opta/acks`. Backend should
+   surface this ACK to the operator.
+2. Valve not in `STATE_IDLE` (already active or in maintenance) →
+   `startWaterSession` returns silently. The backend's "no active session"
+   guard prevents this case from being reached on the auto-open path.
+3. Idempotency cache hit (same `msgId` seen recently in the firmware's
+   16-entry circular cache) → publishes ACK `ok` but does NOT re-fire the
+   session. Backend `_maybe_auto_open_valve` builds unique `msgId =
+   int(datetime.utcnow().timestamp() * 1000)` so this only matters if the
+   exact same logical event is replayed within the cache window.
+
+**Do not change:** the firmware's `startWaterSession` logic is the contract.
+Adding a `sessionContext`-required gate would break v3.9 auto-open and the
+v3.6 mobile QR claim flows.
+
+---
+
 ## v3.8 — Breaker status topic (2026-04-24)
 
 ### Publish `opta/breakers/{socket_id}/status` as **retained**

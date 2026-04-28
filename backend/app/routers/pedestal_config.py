@@ -570,3 +570,191 @@ def get_auto_activate_log(pedestal_id: int, socket_id: int, db: Session = Depend
         }
         for r in rows
     ]
+
+
+# ─── Per-pedestal LED schedule (v3.10) ──────────────────────────────────────
+
+import re as _re
+
+_HHMM_RE = _re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+_LED_COLORS = {"green", "blue", "red", "yellow"}
+
+
+class LedScheduleBody(BaseModel):
+    enabled: bool = True
+    on_time: str
+    off_time: str
+    color: str = "green"
+    days_of_week: str = "0,1,2,3,4,5,6"
+
+
+def _validate_hhmm(label: str, value: str) -> None:
+    if not _HHMM_RE.match(value or ""):
+        raise HTTPException(status_code=400, detail=f"{label} must be HH:MM (24-hour, 00:00..23:59)")
+
+
+def _validate_days(value: str) -> str:
+    """Return the canonical comma-separated string after validation."""
+    if not value:
+        raise HTTPException(status_code=400, detail="days_of_week must not be empty")
+    seen: list[int] = []
+    for tok in value.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        try:
+            n = int(tok)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="days_of_week values must be integers 0..6")
+        if not 0 <= n <= 6:
+            raise HTTPException(status_code=400, detail="days_of_week values must be in 0..6 (Mon=0, Sun=6)")
+        if n in seen:
+            raise HTTPException(status_code=400, detail="days_of_week values must be unique")
+        seen.append(n)
+    if not seen:
+        raise HTTPException(status_code=400, detail="days_of_week must not be empty")
+    return ",".join(str(n) for n in sorted(seen))
+
+
+def _serialize_schedule(s) -> dict:
+    return {
+        "pedestal_id": s.pedestal_id,
+        "enabled": bool(s.enabled),
+        "on_time": s.on_time,
+        "off_time": s.off_time,
+        "color": s.color,
+        "days_of_week": s.days_of_week,
+        "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+    }
+
+
+@router.get("/api/pedestals/{pedestal_id}/led-schedule")
+def get_led_schedule(pedestal_id: int, db: Session = Depends(get_db)):
+    """Return the LED schedule for the pedestal, or sensible defaults when
+    none has been configured yet. Admin and monitor."""
+    if not db.get(Pedestal, pedestal_id):
+        raise HTTPException(status_code=404, detail="Pedestal not found")
+
+    from ..models.led_schedule import LedSchedule
+    s = db.query(LedSchedule).filter(LedSchedule.pedestal_id == pedestal_id).first()
+    if s is None:
+        return {
+            "pedestal_id": pedestal_id,
+            "enabled": False,
+            "on_time": None,
+            "off_time": None,
+            "color": "green",
+            "days_of_week": "0,1,2,3,4,5,6",
+            "updated_at": None,
+        }
+    return _serialize_schedule(s)
+
+
+@router.put("/api/pedestals/{pedestal_id}/led-schedule")
+def upsert_led_schedule(
+    pedestal_id: int,
+    body: LedScheduleBody,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin),
+):
+    """Create or update the LED schedule for the pedestal. Admin only."""
+    if not db.get(Pedestal, pedestal_id):
+        raise HTTPException(status_code=404, detail="Pedestal not found")
+
+    _validate_hhmm("on_time", body.on_time)
+    _validate_hhmm("off_time", body.off_time)
+    if body.color not in _LED_COLORS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"color must be one of {sorted(_LED_COLORS)}",
+        )
+    canonical_days = _validate_days(body.days_of_week)
+
+    from ..models.led_schedule import LedSchedule
+    s = db.query(LedSchedule).filter(LedSchedule.pedestal_id == pedestal_id).first()
+    if s is None:
+        s = LedSchedule(pedestal_id=pedestal_id)
+        db.add(s)
+    s.enabled = body.enabled
+    s.on_time = body.on_time
+    s.off_time = body.off_time
+    s.color = body.color
+    s.days_of_week = canonical_days
+    s.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(s)
+
+    # Clear the dedup slot for this pedestal so a freshly-saved schedule
+    # whose `on_time` already passed today still fires within the grace
+    # window. Without this, a save followed immediately by a tick would
+    # see the old fired-key and skip.
+    try:
+        from ..services.led_scheduler import _led_schedule_last_fired
+        _led_schedule_last_fired.pop(pedestal_id, None)
+    except Exception:
+        pass
+
+    return _serialize_schedule(s)
+
+
+@router.delete("/api/pedestals/{pedestal_id}/led-schedule")
+def delete_led_schedule(
+    pedestal_id: int,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin),
+):
+    """Remove the LED schedule for the pedestal. Admin only.
+    The pedestal's LED is no longer automatically controlled."""
+    if not db.get(Pedestal, pedestal_id):
+        raise HTTPException(status_code=404, detail="Pedestal not found")
+
+    from ..models.led_schedule import LedSchedule
+    s = db.query(LedSchedule).filter(LedSchedule.pedestal_id == pedestal_id).first()
+    if s is None:
+        return {"deleted": False}
+    db.delete(s)
+    db.commit()
+
+    try:
+        from ..services.led_scheduler import _led_schedule_last_fired
+        _led_schedule_last_fired.pop(pedestal_id, None)
+    except Exception:
+        pass
+
+    return {"deleted": True, "pedestal_id": pedestal_id}
+
+
+@router.post("/api/pedestals/{pedestal_id}/led-schedule/test")
+async def test_led_schedule(
+    pedestal_id: int,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin),
+):
+    """Immediately fire an LED on command using the configured color so the
+    operator can verify the wiring. Admin only. Returns 404 when no schedule
+    exists yet (D9: operator must save before testing)."""
+    if not db.get(Pedestal, pedestal_id):
+        raise HTTPException(status_code=404, detail="Pedestal not found")
+
+    from ..models.led_schedule import LedSchedule
+    s = db.query(LedSchedule).filter(LedSchedule.pedestal_id == pedestal_id).first()
+    if s is None:
+        raise HTTPException(status_code=404, detail="No LED schedule configured for this pedestal")
+
+    cfg = db.query(PedestalConfig).filter(PedestalConfig.pedestal_id == pedestal_id).first()
+    cabinet_id = getattr(cfg, "opta_client_id", None) if cfg else None
+
+    from ..services.led_scheduler import _publish_led
+    await _publish_led(
+        pedestal_id=pedestal_id,
+        cabinet_id=cabinet_id or "",
+        color=s.color,
+        state="on",
+        source="manual",
+    )
+    return {
+        "status": "led_test_sent",
+        "pedestal_id": pedestal_id,
+        "color": s.color,
+        "state": "on",
+    }

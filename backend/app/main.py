@@ -461,6 +461,9 @@ async def lifespan(app: FastAPI):
     frame_buffer_task    = asyncio.create_task(run_frame_buffer())
     storage_monitor_task = asyncio.create_task(run_storage_monitor())
     time_sync_task       = asyncio.create_task(_opta_time_sync())
+    # v3.10 — daily LED on/off scheduler
+    from .services.led_scheduler import run_scheduler as _run_led_scheduler
+    led_scheduler_task   = asyncio.create_task(_run_led_scheduler())
 
     yield
 
@@ -474,6 +477,7 @@ async def lifespan(app: FastAPI):
     frame_buffer_task.cancel()
     storage_monitor_task.cancel()
     time_sync_task.cancel()
+    led_scheduler_task.cancel()
     mqtt_service.stop()
     snmp_trap_service.stop()
     simulator_manager.stop()

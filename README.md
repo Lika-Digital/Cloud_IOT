@@ -34,6 +34,61 @@ Mosquitto Broker (:1883)                  │                         │
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-04-28 — Configurable daily LED schedule (v3.10)
+- Per-pedestal daily LED on/off schedule. Operator picks `on_time`,
+  `off_time` (HH:MM), `color`, and which days of the week from the new
+  **LED Schedule** section in the Control Center. One row per pedestal
+  in the new `led_schedules` table.
+- Background scheduler ticks every 60 seconds and compares marina-local
+  time against each enabled schedule. Color set is `{green, blue, red,
+  yellow}` — `white` is intentionally not validated yet on the firmware
+  side (see `docs/firmware_requirements.md`).
+- New `MARINA_TIMEZONE` env var (default `UTC`). Production NUC sets it
+  to `Europe/Zagreb` so an operator-entered "20:00" means 20:00 local.
+  Single global setting; per-pedestal timezone is deferred until needed.
+- 5-minute grace window — if the backend was just restarted and missed
+  the exact tick by less than 5 minutes, the scheduler still fires the
+  on/off command (D7). Beyond 5 minutes the missed fire is logged and
+  skipped. In-memory dedup dict ensures no double-fire within the same
+  HH:MM window; restart duplicates are absorbed by the Opta's 16-entry
+  `msgId` idempotency cache.
+- Four new admin endpoints:
+  `GET /api/pedestals/{pid}/led-schedule` (admin + monitor),
+  `PUT /api/pedestals/{pid}/led-schedule` (admin),
+  `DELETE /api/pedestals/{pid}/led-schedule` (admin),
+  `POST /api/pedestals/{pid}/led-schedule/test` (admin — fires LED on
+  with the configured color; 404 when no schedule exists, per D9).
+- New `led_changed` WebSocket event broadcast on **both** scheduled fires
+  and the existing manual `setLed` endpoint (retroactively wired — the
+  manual path was silent before). Payload `source` field distinguishes
+  `"manual"` vs `"scheduler"`. Dashboard surfaces a small toast for
+  scheduler-driven events so operators see the schedule actually fired.
+- Frontend: new `LedScheduleSection` between LED Control and the Reset
+  card. Auto-toggle, on/off `<input type="time">` pickers, four color
+  swatches, seven day-of-week chips, Save / Test LED / Delete Schedule
+  buttons, and a live "Next On / Next Off" preview that re-renders every
+  minute (D11) so the operator can verify the schedule will fire when
+  expected.
+- 13 new backend tests (`test_led_schedule.py` — TC-LS-01..10 plus 4
+  invalid-HH:MM parametrised cases). Tests call `led_scheduler.tick_once`
+  directly with a deterministic `now_utc` rather than waiting on the
+  60 s loop. Total suite 299 → 313 passing, 0 failures. TypeScript clean.
+- `tzdata>=2024.1` added to `requirements.txt` — Linux NUC has the IANA
+  database via `/usr/share/zoneinfo` natively, but Windows dev/test boxes
+  need the PyPI package for `zoneinfo.ZoneInfo` lookups to work.
+- Wire: `backend/app/models/led_schedule.py` (new),
+  `backend/app/database.py`, `backend/app/config.py`,
+  `backend/app/services/led_scheduler.py` (new),
+  `backend/app/services/api_catalog.py`,
+  `backend/app/routers/{controls.py, pedestal_config.py}`,
+  `backend/app/main.py`, `backend/requirements.txt`,
+  `frontend/src/api/ledSchedule.ts` (new),
+  `frontend/src/components/pedestal/LedScheduleSection.tsx` (new),
+  `frontend/src/components/pedestal/PedestalControlCenter.tsx`,
+  `frontend/src/hooks/useWebSocket.ts`,
+  `tests/backend/{test_led_schedule.py (new), conftest.py}`,
+  `docs/firmware_requirements.md`.
+
 ### 2026-04-25 — Per-valve auto-activation + post-diagnostic auto-open (v3.9)
 - Each water valve (V1, V2) now has its own `auto_activate` flag — mirror of the
   v3.5 socket flag but with the **default flipped to True**. The hardware is

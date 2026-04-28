@@ -420,6 +420,22 @@ export function useWebSocket() {
           }
           break
         }
+        case 'led_changed': {
+          // v3.10 — LED state changed (manual OR scheduled). Skip the toast
+          // for manual changes since the admin who clicked already saw the
+          // local feedback toast — only surface scheduler-driven events to
+          // confirm the schedule fired.
+          const d = msg.data
+          if (role === 'admin' && d?.source === 'scheduler') {
+            const color = typeof d.color === 'string' ? d.color : 'led'
+            const state = d.state === 'off' ? 'OFF' : 'ON'
+            addToast({
+              message: `Pedestal ${d.pedestal_id}: LED ${color} → ${state} (scheduled)`,
+              variant: 'info',
+            })
+          }
+          break
+        }
         case 'valve_flow_warning': {
           // v3.9 — post-diagnostic auto-open reported zero flow after 30 s.
           // Informational only; valve remains open. Shows a banner and fires

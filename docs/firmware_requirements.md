@@ -10,6 +10,32 @@ whether an exception is safe.
 
 ---
 
+## v3.10 — LED color set + opta/cmd/led contract (2026-04-28)
+
+### Backend ships `{green, blue, red, yellow}` only. `white` is reserved.
+
+**Rule:** The v3.10 LED schedule API only accepts color values from the set
+`{green, blue, red, yellow}`. The Arduino sketch's `handleLedCmd` is documented
+to drive these four. The product spec asked for "white" but it is **not yet
+firmware-validated** — calling `mqtt.publish("opta/cmd/led", {"color": "white", ...})`
+on the current Lika v2.1 sketch is undefined behaviour.
+
+**Why:** Avoid a backend-produced color that the firmware silently drops on the
+floor. The dashboard would happily show "LED set to white" while the cabinet
+LED stays whatever-it-was-before — exactly the kind of phantom-state bug the
+backend should never enable.
+
+**How to apply:** Two paths to add white later:
+1. Confirm with the firmware team that `handleLedCmd` accepts `"color":"white"`
+   (verify in `LLSketch.ino` near the existing color-string switch).
+2. If yes, extend the Pydantic validator + `_LED_COLORS` set in
+   `backend/app/routers/pedestal_config.py` AND the `LED_COLORS` array in
+   `backend/app/routers/controls.py::LedBody` AND `frontend/src/components/pedestal/LedScheduleSection.tsx::COLORS`.
+
+Until that confirmation, leave white out of the API.
+
+---
+
 ## v3.9 — Backend-initiated water valve activate (2026-04-25)
 
 ### Firmware emits `OutletActivated` for every accepted activate command

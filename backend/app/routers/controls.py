@@ -453,6 +453,10 @@ async def set_pedestal_led(
 ):
     """
     Set the pedestal LED color/state via opta/cmd/led.
+
+    v3.10 — broadcasts a `led_changed` WebSocket event so the dashboard sees
+    the change in real time. Source is "manual" so consumers can distinguish
+    operator-driven changes from scheduler-driven ones.
     """
     cabinet_id = _get_cabinet_id(db, pedestal_id)
     if cabinet_id:
@@ -465,6 +469,17 @@ async def set_pedestal_led(
             f"pedestal/{pedestal_id}/cmd/led",
             json.dumps({"color": body.color, "state": body.state}),
         )
+    await ws_manager.broadcast({
+        "event": "led_changed",
+        "data": {
+            "pedestal_id": pedestal_id,
+            "cabinet_id": cabinet_id or "",
+            "color": body.color,
+            "state": body.state,
+            "source": "manual",
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    })
     return {"status": "led_set", "pedestal_id": pedestal_id, "color": body.color, "state": body.state}
 
 

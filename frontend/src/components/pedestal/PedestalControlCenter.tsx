@@ -13,6 +13,7 @@ import {
   regeneratePedestalQrs,
 } from '../../api'
 import { getValveConfigs, setValveConfig } from '../../api/valveConfig'
+import LedScheduleSection from './LedScheduleSection'
 import { SocketQrGrid } from './SocketQrGrid'
 import SocketBreakerPanel from './SocketBreakerPanel'
 import type { OptaSocketState, OptaWaterState, OptaLogEntry } from '../../store'
@@ -1006,6 +1007,9 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
 
       {/* ── LED Control ────────────────────────────────────────────────── */}
       <LedControl pedestalId={pedestalId} isAdmin={isAdmin} onFeedback={show} />
+
+      {/* ── LED Schedule (v3.10) ───────────────────────────────────────── */}
+      <LedScheduleSection pedestalId={pedestalId} isAdmin={isAdmin} onFeedback={show} />
 
       {/* ── Reset ──────────────────────────────────────────────────────── */}
       {isAdmin && (

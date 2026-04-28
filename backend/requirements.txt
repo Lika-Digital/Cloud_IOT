@@ -21,6 +21,10 @@ Pillow>=10.0.0
 python-multipart>=0.0.9
 slowapi==0.1.9
 qrcode[pil]==8.0
+# v3.10 — IANA time zone database. Linux NUC has it via /usr/share/zoneinfo,
+# but Windows dev/test boxes need this PyPI package for `zoneinfo.ZoneInfo`
+# to find tz keys like "Europe/Zagreb".
+tzdata>=2024.1
 # Optional — required for YOLO ship detection (needs 64-bit Python + CUDA recommended)
 # ultralytics==8.3.0
 # opencv-python-headless==4.10.0.84

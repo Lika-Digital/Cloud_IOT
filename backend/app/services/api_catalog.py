@@ -27,6 +27,11 @@ ENDPOINT_CATALOG = [
     # Per-valve auto-activation + post-diagnostic auto-open (v3.9)
     {"id": "valves.config_list",     "path": "/api/pedestals/{pedestal_id}/valves/config",                      "method": "GET",   "category": "Controls", "allow_bidirectional": False},
     {"id": "valves.config_patch",    "path": "/api/pedestals/{pedestal_id}/valves/{valve_id}/config",           "method": "PATCH", "category": "Controls", "allow_bidirectional": True},
+    # Daily LED schedule (v3.10)
+    {"id": "led_schedule.get",       "path": "/api/pedestals/{pedestal_id}/led-schedule",                       "method": "GET",   "category": "Controls", "allow_bidirectional": False},
+    {"id": "led_schedule.upsert",    "path": "/api/pedestals/{pedestal_id}/led-schedule",                       "method": "PUT",   "category": "Controls", "allow_bidirectional": True},
+    {"id": "led_schedule.delete",    "path": "/api/pedestals/{pedestal_id}/led-schedule",                       "method": "DELETE","category": "Controls", "allow_bidirectional": True},
+    {"id": "led_schedule.test",      "path": "/api/pedestals/{pedestal_id}/led-schedule/test",                  "method": "POST",  "category": "Controls", "allow_bidirectional": True},
     # Mobile QR-claim + monitoring (v3.6)
     {"id": "mobile.qr_claim",        "path": "/api/mobile/qr/claim",                                            "method": "POST",  "category": "Mobile", "allow_bidirectional": True},
     {"id": "mobile.session_live",    "path": "/api/mobile/sessions/{session_id}/live",                          "method": "GET",   "category": "Mobile", "allow_bidirectional": False},
@@ -89,4 +94,7 @@ EVENT_CATALOG = [
     # auto-open when the flow meter still reads 0. Informational only;
     # the valve is left open so the operator can investigate.
     {"id": "valve_flow_warning",       "name": "Valve Flow Warning",    "category": "Hardware"},
+    # v3.10 — fires on every LED state change (manual or scheduled). The
+    # `source` field in the payload distinguishes them ("manual" | "scheduler").
+    {"id": "led_changed",              "name": "LED State Changed",     "category": "Hardware"},
 ]

@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     # Pending session / socket approval timeout (seconds)
     pending_timeout_seconds: int = 15
 
+    # v3.10 — Marina-local time zone for the LED schedule. Operators enter
+    # `on_time` / `off_time` in this zone via the Control Center. Default is
+    # UTC so a fresh dev install behaves predictably; production .env on the
+    # NUC sets this to e.g. `Europe/Zagreb`. Must be a valid IANA tz name
+    # parsable by zoneinfo (Python 3.9+ stdlib).
+    marina_timezone: str = "UTC"
+
     # Hardware monitoring thresholds — percentages except hw_temp_max (°C).
     # Change in .env and restart; no code changes needed.
     hw_cpu_warning: float = 60.0    # % CPU → Alarm 1

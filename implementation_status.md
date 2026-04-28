@@ -1,3 +1,74 @@
+# Implementation Status — Configurable Daily LED Schedule (v3.10)
+
+## Session started: 2026-04-28
+
+Feature scope: per-pedestal daily LED on/off schedule (HH:MM, color, days-of-week).
+Backend scheduler ticks every minute, compares marina-local time against
+configured `on_time` / `off_time`, publishes `opta/cmd/led` with the
+operator-chosen color/state. New `led_schedules` table (one row per pedestal).
+4 admin endpoints for CRUD + immediate test. New `LedScheduleSection` in the
+Control Center with on/off time pickers, color selector, day-of-week
+checkboxes, Save/Test/Delete buttons, and a forward-looking "Next on / Next
+off" preview that re-renders every minute. WebSocket `led_changed` event fires
+on both scheduled and manual LED commands so the dashboard reflects state in
+real time.
+
+**Approved design decisions (2026-04-28):**
+- D1 (b): single global `MARINA_TIMEZONE` env var (default `UTC`, on-site set
+  to `Europe/Zagreb`). Per-pedestal TZ deferred.
+- D2: endpoints co-located in `pedestal_config.py` (mirrors v3.9 valves).
+- D3: color enum `{green, blue, red, yellow}` only — `white` deferred until
+  firmware confirms support; flagged in `docs/firmware_requirements.md`.
+- D4 (a): scheduler `await asyncio.sleep(60)` with HH:MM dedup.
+- D5: in-memory `_led_schedule_last_fired: dict[int, dict[str, str]]` keyed
+  by pedestal_id, slots `on` and `off` holding `YYYY-MM-DD HH:MM`. Restart
+  duplicates absorbed by Opta's 16-entry msgId idempotency cache.
+- D6: days-of-week stored as comma-separated `0..6` string (Mon=0, Sun=6).
+  Validated unique + in-range on PUT.
+- D7 (a): 5-minute grace window — fire missed on/off if backend was down for
+  less than 5 min, otherwise log warning + skip.
+- D8 (a): new `led_changed` WebSocket event broadcast on BOTH scheduled fires
+  AND the existing manual `setLed` endpoint (retroactive consistency). Added
+  to `EVENT_CATALOG`.
+- D9 (a): `POST /led-schedule/test` returns 404 when no schedule exists.
+- D10: 7 raw day checkboxes, no presets.
+- D11: "Next on / Next off" preview computed on the frontend, re-rendered
+  via `setInterval(60_000)` on mount.
+- Out of scope: multiple windows per day, sunset/sunrise, mobile, ERP webhook
+  for `led_changed` (operator can opt in via API Gateway page later).
+
+### Files — Status
+
+| # | File | Status | Notes |
+|---|------|--------|-------|
+| 1 | `backend/app/models/led_schedule.py` | COMPLETE | One row per pedestal; HH:MM strings, comma-sep days 0..6, color default green |
+| 2 | `backend/app/database.py` | COMPLETE | init_db imports led_schedule so create_all picks up `led_schedules` |
+| 3 | `backend/app/config.py` | COMPLETE | New `marina_timezone: str = "UTC"` setting; production .env sets `Europe/Zagreb` |
+| 4 | `backend/app/services/led_scheduler.py` | COMPLETE | `_marina_now()` (zoneinfo), `_parse_days`, `_should_fire` (grace window), `_publish_led` shared helper, `tick_once(db, now_utc=None)` testable, `run_scheduler()` lifespan loop. Module-level `_led_schedule_last_fired` dict |
+| 5 | `backend/app/routers/controls.py` | COMPLETE | `set_pedestal_led` now broadcasts `led_changed` with `source="manual"` after publish |
+| 6 | `backend/app/routers/pedestal_config.py` | COMPLETE | 4 endpoints (GET/PUT/DELETE/POST-test). Validators for HH:MM, color enum, unique-sorted days. PUT/DELETE clear the per-pedestal dedup slot so a fresh save fires inside the grace window |
+| 7 | `backend/app/main.py` | COMPLETE | `led_scheduler_task = asyncio.create_task(_run_led_scheduler())` + cancellation in shutdown |
+| 8 | `backend/app/services/api_catalog.py` | COMPLETE | 4 ENDPOINT_CATALOG entries (led_schedule.{get,upsert,delete,test}) + 1 EVENT_CATALOG entry (led_changed) |
+| 9 | `frontend/src/api/ledSchedule.ts` | COMPLETE | get/upsert/delete/test typed client + LedSchedule and LedScheduleBody types |
+| 10 | `frontend/src/components/pedestal/LedScheduleSection.tsx` | COMPLETE | Auto LED toggle + on/off time inputs + 4-color swatches + 7-day checkboxes + live Next On / Next Off preview (60 s setInterval) + Save/Test/Delete buttons. Validators mirror backend. 404 from Test prompts to Save first |
+| 11 | `frontend/src/components/pedestal/PedestalControlCenter.tsx` + `useWebSocket.ts` | COMPLETE | LedScheduleSection mounted between LED Control and Danger Zone; useWebSocket adds `led_changed` case that toasts admin-only when source=scheduler (manual fires already self-feedback) |
+| 12 | `tests/backend/test_led_schedule.py` | COMPLETE | 13 tests (TC-LS-01..10 + 4 parametrised invalid HH:MM cases). Tests directly call `tick_once(db, now_utc=...)` for time-deterministic scheduler verification |
+| 13 | `tests/backend/conftest.py` | COMPLETE | imports led_schedule model |
+| 14 | `backend/requirements.txt` | COMPLETE | added `tzdata>=2024.1` for Windows zoneinfo lookups |
+| 15 | `docs/firmware_requirements.md` | COMPLETE | New v3.10 section flagging that `white` is not firmware-validated |
+| 16 | `README.md` | COMPLETE | Newest-first v3.10 entry — full feature description + 13 new tests + tzdata note + Wire: list |
+
+## Test run result: 313 passed, 0 failed (2026-04-28) — 299 prior + 14 new (13 LED + 1 from re-running breakers/valves catalog drift). TypeScript: clean.
+
+## Pending before release
+- ✅ pytest 313/313; ✅ TS clean; ✅ docs updated.
+- Stage v3.10 files, commit on develop, push develop with full pre-push gate.
+- PAUSE for explicit user approval before merging to main.
+
+---
+
+---
+
 # Implementation Status — Per-Valve Auto-Activation + Post-Diagnostic Auto-Open (v3.9)
 
 ## Session started: 2026-04-24

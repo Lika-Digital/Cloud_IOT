@@ -33,6 +33,7 @@ def init_db():
     from .models import breaker_event  # noqa: F401 — v3.8
     from .models import valve_config  # noqa: F401 — v3.9
     from .models import led_schedule  # noqa: F401 — v3.10
+    from .models import meter_load_alarm  # noqa: F401 — v3.11
     Base.metadata.create_all(bind=engine)
     _migrate_schema()
 
@@ -119,6 +120,33 @@ def _migrate_schema():
         ("socket_configs", "breaker_rcd_sensitivity", "TEXT"),
         # v3.8 — machine-readable session end reason (e.g. "breaker_trip").
         ("sessions",       "end_reason",              "TEXT"),
+        # v3.11 — live socket meter telemetry + load monitoring. All hardware
+        # values are read from the Arduino on `opta/config/hardware`; backend
+        # never assumes meter type, phase count, or rated current. Live meter
+        # readings arrive on `opta/meters/+/telemetry` every 5 s. Defaults
+        # mirror the model class so existing rows pick them up cleanly.
+        ("socket_configs", "meter_type",                  "TEXT"),
+        ("socket_configs", "phases",                      "INTEGER"),
+        ("socket_configs", "rated_amps",                  "REAL"),
+        ("socket_configs", "modbus_address",              "INTEGER"),
+        ("socket_configs", "hw_config_received_at",       "DATETIME"),
+        ("socket_configs", "meter_current_amps",          "REAL"),
+        ("socket_configs", "meter_voltage_v",             "REAL"),
+        ("socket_configs", "meter_power_kw",              "REAL"),
+        ("socket_configs", "meter_power_factor",          "REAL"),
+        ("socket_configs", "meter_energy_kwh",            "REAL"),
+        ("socket_configs", "meter_frequency_hz",          "REAL"),
+        ("socket_configs", "meter_current_l1",            "REAL"),
+        ("socket_configs", "meter_current_l2",            "REAL"),
+        ("socket_configs", "meter_current_l3",            "REAL"),
+        ("socket_configs", "meter_voltage_l1",            "REAL"),
+        ("socket_configs", "meter_voltage_l2",            "REAL"),
+        ("socket_configs", "meter_voltage_l3",            "REAL"),
+        ("socket_configs", "meter_load_pct",              "REAL"),
+        ("socket_configs", "meter_load_status",           "TEXT NOT NULL DEFAULT 'unknown'"),
+        ("socket_configs", "meter_load_updated_at",       "DATETIME"),
+        ("socket_configs", "load_warning_threshold_pct",  "INTEGER NOT NULL DEFAULT 60"),
+        ("socket_configs", "load_critical_threshold_pct", "INTEGER NOT NULL DEFAULT 80"),
     ]
 
     with engine.connect() as conn:

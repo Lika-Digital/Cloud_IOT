@@ -38,6 +38,10 @@ export function useWebSocket() {
     setBreakerState,
     addBreakerAlarm,
     addValveFlowWarning,
+    setHardwareConfig,
+    setLoadState,
+    addLoadAlarm,
+    clearLoadAlarm,
   } = useStore()
   const { role } = useAuthStore()
 
@@ -433,6 +437,74 @@ export function useWebSocket() {
               message: `Pedestal ${d.pedestal_id}: LED ${color} → ${state} (scheduled)`,
               variant: 'info',
             })
+          }
+          break
+        }
+        case 'hardware_config_updated': {
+          // v3.11 — broadcast contains parsed sockets[] from opta/config/hardware.
+          // We patch the store entry per-socket so the SocketLoadMeterPanel
+          // refreshes its Hardware Info section without a page reload.
+          const d = msg.data
+          if (typeof d?.pedestal_id === 'number' && Array.isArray(d.sockets)) {
+            for (const s of d.sockets) {
+              if (typeof s?.socket_id === 'number') {
+                setHardwareConfig(d.pedestal_id, s.socket_id, {
+                  meter_type: s.meter_type ?? null,
+                  phases: s.phases ?? null,
+                  rated_amps: s.rated_amps ?? null,
+                  modbus_address: s.modbus_address ?? null,
+                  hw_config_received_at: s.hw_config_received_at ?? null,
+                })
+              }
+            }
+          }
+          break
+        }
+        case 'meter_telemetry_received': {
+          // v3.11 — low-volume per-tick update. Refreshes load bar without
+          // hitting the API. Single-phase rows leave L1/L2/L3 untouched.
+          const d = msg.data
+          if (typeof d?.pedestal_id === 'number' && typeof d?.socket_id === 'number') {
+            const patch: Record<string, unknown> = {
+              current_amps: d.current_amps ?? null,
+              load_pct: d.load_pct ?? null,
+              load_status: d.load_status ?? 'unknown',
+            }
+            if (d.current_l1 !== undefined) patch.current_l1 = d.current_l1
+            if (d.current_l2 !== undefined) patch.current_l2 = d.current_l2
+            if (d.current_l3 !== undefined) patch.current_l3 = d.current_l3
+            setLoadState(d.pedestal_id, d.socket_id, patch as Parameters<typeof setLoadState>[2])
+          }
+          break
+        }
+        case 'meter_load_warning': {
+          const d = msg.data
+          if (typeof d?.pedestal_id === 'number' && typeof d?.socket_id === 'number') {
+            addLoadAlarm('warning', `${d.pedestal_id}-${d.socket_id}`)
+          }
+          break
+        }
+        case 'meter_load_critical': {
+          // v3.11 D8 — admin-only Browser Notification. Mirrors breaker_alarm.
+          const d = msg.data
+          if (typeof d?.pedestal_id === 'number' && typeof d?.socket_id === 'number') {
+            addLoadAlarm('critical', `${d.pedestal_id}-${d.socket_id}`)
+            if (role === 'admin'
+                && typeof Notification !== 'undefined'
+                && Notification.permission === 'granted') {
+              const loadPct = typeof d.load_pct === 'number' ? `${d.load_pct.toFixed(0)}%` : 'over critical'
+              new Notification('Critical Load — act now', {
+                body: `Pedestal ${d.pedestal_id} socket Q${d.socket_id} at ${loadPct} of rated current`,
+                icon: '/vite.svg',
+              })
+            }
+          }
+          break
+        }
+        case 'meter_load_resolved': {
+          const d = msg.data
+          if (typeof d?.pedestal_id === 'number' && typeof d?.socket_id === 'number') {
+            clearLoadAlarm(`${d.pedestal_id}-${d.socket_id}`)
           }
           break
         }

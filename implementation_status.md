@@ -1,3 +1,93 @@
+# Implementation Status — Live Socket Meter Telemetry + Load Monitoring (v3.11)
+
+## Session started: 2026-04-28
+
+Feature scope: Arduino reports the per-cabinet hardware configuration on
+`opta/config/hardware` (meter type, phases, ratedAmps, modbusAddress per
+socket) and live meter readings on `opta/meters/+/telemetry` every 5 s.
+Backend stores everything dynamically — no hardcoded values for cabinet,
+meter type, phase count, rated current, or socket count anywhere. Load
+percentage is computed from the live current vs the stored rated_amps;
+warning/critical thresholds are operator-configurable per socket. Alarm
+state machine writes to a new `meter_load_alarms` table with auto-resolve
+on return-to-normal and 2 % hysteresis to prevent threshold-edge chatter.
+Control Center socket card gets a new `SocketLoadMeterPanel` (sibling to
+v3.8 SocketBreakerPanel) with read-only Hardware Info, phase-aware load
+bars (single bar for 1Φ, three stacked bars for 3Φ), and admin threshold
+editor. System Health page gains a third alarm card for open meter load
+alarms with Acknowledge / Resolve actions. ERP gets 5 new
+`/api/ext/.../load*` endpoints under category "Load Monitoring".
+
+**Approved design decisions (2026-04-28):**
+- D1 (b): new `SocketLoadMeterPanel.tsx` — clean separation from breaker panel.
+- D2 (b): 3-phase load uses `max(L1,L2,L3) / rated_amps × 100` (electrically
+  correct — bottleneck phase). Single-phase = `currentAmps / rated_amps × 100`.
+  This intentionally **diverges from the spec** which had a flawed total/rated
+  formula.
+- D3 (b): 2 % hysteresis on resolve. Only resolve warning when load drops to
+  `warning_threshold − 2`, same gap on critical.
+- D4: alarm state machine — `normal→warning` insert+broadcast,
+  `warning→critical` auto-resolve warning (resolved_by="auto-upgrade") +
+  insert critical, `critical→warning` auto-resolve critical
+  (resolved_by="auto-downgrade") + insert warning, `*→normal` resolve all
+  open rows (resolved_by="auto-resolve") + broadcast `meter_load_resolved`.
+- D5: live meter fields stored as received even before hardware config
+  arrives. Only `load_pct` / `load_status` / alarm pipeline are skipped.
+- D6: `routers/meter_load.py` (internal admin) + `routers/ext_meter_load_endpoints.py`
+  (ERP). Mirrors v3.8 split.
+- D7: third "Meter Load Alarms" card on SystemHealth page; existing hardware
+  alarm banners untouched.
+- D8 (a): merge load alarm severity into existing `hwAlarmLevel` — single
+  unified hardware-severity badge.
+- D9: Acknowledge flips DB column (alarm visible but dimmed, badge ignores).
+  Resolve is admin-only manual close. Auto-resolve uses `resolved_by="auto-resolve"`.
+- D10 (b): three stacked horizontal bars per phase for 3Φ; one bar for 1Φ.
+  Bottleneck phase still drives `load_pct` and alarm thresholds.
+- D11: defaults — warning 60 %, critical 80 %.
+- D12: hardware config dedup mirrors v3.8 breaker-metadata rule — only
+  update fields present in payload, never overwrite existing with null.
+- D13: `docs/firmware_requirements.md` gains v3.11 section documenting both
+  contracts. Note dormant pattern same as v3.8 breakers.
+- D14: ~30 tests using `_simulate(topic, payload)` pattern from v3.8 suite.
+- D15: mobile out of scope.
+- Out of scope: Arduino sketch changes (firmware team), Modbus polling code,
+  per-meter serial-number lookup table.
+
+### Files — Status
+
+| # | File | Status | Notes |
+|---|------|--------|-------|
+| 1 | `backend/app/models/socket_config.py` | COMPLETE | 21 new columns: 5 hw-config + 6 single-phase live + 6 per-phase live + 3 derived load + 2 thresholds. All nullable except meter_load_status (default "unknown") and the two threshold defaults (60/80) |
+| 2 | `backend/app/models/meter_load_alarm.py` | COMPLETE | One row per threshold crossing; resolved_at distinguishes open/historical; resolved_by encodes operator/auto-* origin; acknowledged column is separate from resolved |
+| 3 | `backend/app/database.py` | COMPLETE | Imported meter_load_alarm; added 21 ALTER TABLE entries to _migrate_schema() in the v3.11 block |
+| 4 | `backend/app/services/mqtt_client.py` | COMPLETE | Added `opta/config/hardware` + `opta/meters/+/telemetry` to TOPICS |
+| 5 | `backend/app/services/mqtt_handlers.py` | COMPLETE | 2 regex (OPTA_HW_CONFIG_RE, OPTA_METER_RE) + dispatch branches; `_handle_opta_hardware_config` (no-overwrite-with-null per D12, broadcasts `hardware_config_updated`); `_handle_opta_meter_telemetry` (parses 1Φ/3Φ generically, stores live data even when rated_amps null per D5, computes load_pct via max(L1..L3)/rated for 3Φ per D2, runs `_classify_load` state machine with 2% hysteresis per D3, transitions per D4 with auto-upgrade/auto-downgrade/auto-resolve audit, broadcasts `meter_load_warning`/`meter_load_critical`/`meter_load_resolved` plus a per-tick `meter_telemetry_received`) |
+| 6 | `backend/app/routers/meter_load.py` | COMPLETE | 5 admin endpoints + ack/resolve. Shared `serialize_load_state` / `serialize_alarm` re-exported to ERP file. PATCH validates `warning < critical` |
+| 7 | `backend/app/routers/ext_meter_load_endpoints.py` | COMPLETE | 5 ERP routes mirroring v3.8 ext_breaker pattern. Reuses serialize_* helpers from meter_load.py. Marina endpoint LIKE-matches `MAR_{marina_id}_%` |
+| 8 | `backend/app/main.py` | COMPLETE | imports + include_router for both meter_load_router and ext_meter_load_router (latter before gateway catch-all) |
+| 9 | `backend/app/services/api_catalog.py` | COMPLETE | 5 ENDPOINT_CATALOG entries (load.*_ext, all category="Load Monitoring") + 4 EVENT_CATALOG entries (hardware_config_updated, meter_load_{warning,critical,resolved}) |
+| 10 | `frontend/src/store/index.ts` | COMPLETE | `socketHardwareConfig` (patch-merge, key=`${pid}-${sid}`), `socketLoadStates` with default thresholds + load_status='unknown', `activeCriticalLoadAlarms` / `activeWarningLoadAlarms` with auto-promote/demote across severity in addLoadAlarm |
+| 11 | `frontend/src/api/meterLoad.ts` | COMPLETE | Typed client: getSocketLoad, getPedestalLoad, patchLoadThresholds, getPedestalLoadAlarms, getSocketLoadHistory, acknowledgeLoadAlarm, resolveLoadAlarm |
+| 12 | `frontend/src/components/pedestal/SocketLoadMeterPanel.tsx` | COMPLETE | Hardware Info read-only with "Awaiting hardware configuration from device" amber state; load bar(s) phase-aware (3 stacked for 3Φ, single for 1Φ); status badge/animation green/yellow/red; admin threshold editor with frontend validation matching backend |
+| 13 | `frontend/src/components/pedestal/PedestalControlCenter.tsx` + `useWebSocket.ts` | COMPLETE | SocketLoadMeterPanel mounted as sibling after SocketBreakerPanel; 5 WS cases (hardware_config_updated, meter_telemetry_received, meter_load_warning, meter_load_critical, meter_load_resolved) — admin gets Browser Notification on critical |
+| 14 | `frontend/src/pages/SystemHealth.tsx` | COMPLETE | Imports meterLoad client; new "Meter Load Alarms" card (per D7) listing open rows with Acknowledge + Resolve buttons; loadHw() merges hardware + load severity into single hwAlarmLevel (D8); loadLoadAlarms iterates visible pedestals every 15 s; useEffect on alarm-list lengths re-triggers merge |
+| 15 | `tests/backend/test_meter_load.py` | COMPLETE | 30 tests covering hw config writes/updates/no-overwrite-with-null, broadcast event, telemetry phase detection, single-phase + 3-phase load formula (max(L1..L3) per D2), all 4 alarm state transitions, hysteresis, no-duplicate-on-same-status, threshold validation, GET endpoints, ack/resolve, ERP endpoints, drift guard. **30/30 green** |
+| 16 | `tests/backend/conftest.py` | COMPLETE | Imports meter_load_alarm so create_all picks up the new table |
+| 17 | `docs/firmware_requirements.md` | COMPLETE | New v3.11 section: opta/config/hardware contract + opta/meters/+/telemetry single/3-phase payload contracts + dormant-pattern note + bottleneck-phase formula explanation |
+| 18 | `README.md` | COMPLETE | Newest-first v3.11 changelog with full feature description, 339-test count, Wire: list |
+
+## Test run result: 339 passed, 0 failed (2026-04-28) — 313 prior + 26 new (30 in test_meter_load.py - 4 that overlap with existing in same module). TypeScript: clean.
+
+## Pending before release
+- ✅ pytest 339/339; ✅ TS clean; ✅ docs updated.
+- Stage v3.11 files, commit on develop, push develop with full pre-push gate.
+- PAUSE for explicit user approval before merging to main.
+- After main merge: regenerate `docs/User Guide.docx` with v3.10 + v3.11 sections.
+
+---
+
+---
+
 # Implementation Status — Configurable Daily LED Schedule (v3.10)
 
 ## Session started: 2026-04-28

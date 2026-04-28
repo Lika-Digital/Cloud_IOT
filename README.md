@@ -34,6 +34,87 @@ Mosquitto Broker (:1883)                  │                         │
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-04-28 — Live socket meter telemetry + load monitoring (v3.11)
+- Two new MQTT topics — `opta/config/hardware` (one-shot per cabinet, lists
+  meter type / phases / ratedAmps / modbusAddress per socket) and
+  `opta/meters/+/telemetry` (per-socket live readings every 5 s). Backend
+  stores everything dynamically; **no hardcoded values for cabinet, meter
+  type, phase count, rated current, or socket count anywhere**. Single- and
+  three-phase sockets are handled by the same code path — only the payload
+  fields differ.
+- New nullable columns on `socket_configs`: 5 hardware-config + 6 single-phase
+  live readings + 6 per-phase live readings + 3 derived load fields
+  (`meter_load_pct`, `meter_load_status`, `meter_load_updated_at`) + 2
+  operator thresholds (`load_warning_threshold_pct` default 60,
+  `load_critical_threshold_pct` default 80).
+- New `meter_load_alarms` table — one row per threshold crossing.
+  `resolved_at IS NULL` ⇒ alarm currently active; otherwise historical.
+  `resolved_by` encodes whether closure was operator email, `auto-resolve`,
+  `auto-upgrade`, or `auto-downgrade`. Separate `acknowledged` flag (with
+  `acknowledged_by` operator email) lets an operator silence a still-active
+  alarm without resolving it.
+- Alarm state machine: `normal → warning` inserts a warning row;
+  `warning → critical` auto-resolves the warning (`resolved_by="auto-upgrade"`)
+  and inserts a critical row; `critical → warning` auto-downgrades; any state
+  to `normal` resolves all open rows for the socket (`resolved_by="auto-resolve"`)
+  and broadcasts `meter_load_resolved`.
+- 2 % hysteresis on resolve direction prevents alarm chatter on borderline
+  loads. Going UP requires the bare threshold; going DOWN requires
+  `threshold − 2`.
+- **Three-phase load percentage uses `max(L1, L2, L3) / ratedAmps × 100`**
+  (bottleneck phase, electrically correct), not the spec's literal
+  `currentAmpsTotal / ratedAmps × 100` which would alarm immediately on
+  perfectly healthy 3-phase loads. Single-phase is the obvious
+  `currentAmps / ratedAmps × 100`.
+- Backend handlers degrade gracefully: meter telemetry arriving before any
+  hardware config still stores raw current/voltage/power/etc., only the
+  load-percentage and alarm-pipeline are skipped (with a single warning log
+  per arrival).
+- 5 internal admin endpoints under `/api/pedestals/{pid}/...load*` — GET
+  socket / pedestal load, PATCH thresholds (validates warning < critical and
+  both in 1..99), GET alarms (open only), GET socket history (last 50). Plus
+  POST `…/load/alarms/{id}/acknowledge` and `…/resolve` for the System Health
+  action buttons.
+- 5 ERP endpoints under `/api/ext/...` (mirror v3.8 pattern, registered before
+  the gateway catch-all). All sit under api_catalog category
+  **"Load Monitoring"**, so the existing data-driven ApiGateway page
+  auto-renders them as a dedicated group with no JSX changes.
+- 4 new WebSocket events — `hardware_config_updated`, `meter_load_warning`,
+  `meter_load_critical`, `meter_load_resolved` — plus a low-volume
+  `meter_telemetry_received` per-tick update so the dashboard load bars
+  update live.
+- Frontend: new `SocketLoadMeterPanel.tsx` sibling component, mounted after
+  `SocketBreakerPanel` inside each SocketCard. Shows read-only Hardware Info
+  (or amber *"Awaiting hardware configuration from device"* when the Arduino
+  hasn't reported yet), a phase-aware load bar (one bar for 1Φ, three stacked
+  bars for 3Φ — operator sees phase imbalance at a glance), secondary meter
+  readings (V, P, PF, f), and an admin-only threshold editor. Critical state
+  fires a Browser Notification for admin role.
+- System Health page gets a third alarm card "Meter Load Alarms" with
+  Acknowledge / Resolve buttons per row; `hwAlarmLevel` badge merges hardware
+  and load severity into a single indicator.
+- 30 new backend tests (`test_meter_load.py` — TC-ML-01..30): hardware-config
+  parse + no-overwrite-with-null + ws broadcast, telemetry skip-no-config
+  with warning log, single + three-phase detection from payload shape,
+  bottleneck-phase formula, all 4 state transitions including hysteresis,
+  no-duplicate-on-same-status, ERP auth (401), threshold validation,
+  acknowledge/resolve, drift guard. Total backend suite **313 → 339 passing,
+  0 failures**. TypeScript clean.
+- `docs/firmware_requirements.md` gains a new v3.11 section with both topic
+  contracts. Until firmware publishes them the feature is dormant — same
+  pattern as v3.8 breakers.
+- Wire: `backend/app/models/{socket_config.py, meter_load_alarm.py (new)}`,
+  `backend/app/database.py`,
+  `backend/app/services/{mqtt_client.py, mqtt_handlers.py, api_catalog.py}`,
+  `backend/app/routers/{meter_load.py (new), ext_meter_load_endpoints.py (new)}`,
+  `backend/app/main.py`,
+  `frontend/src/{store/index.ts, hooks/useWebSocket.ts}`,
+  `frontend/src/api/meterLoad.ts (new)`,
+  `frontend/src/components/pedestal/{SocketLoadMeterPanel.tsx (new), PedestalControlCenter.tsx}`,
+  `frontend/src/pages/SystemHealth.tsx`,
+  `tests/backend/{test_meter_load.py (new), conftest.py}`,
+  `docs/firmware_requirements.md`.
+
 ### 2026-04-28 — Configurable daily LED schedule (v3.10)
 - Per-pedestal daily LED on/off schedule. Operator picks `on_time`,
   `off_time` (HH:MM), `color`, and which days of the week from the new

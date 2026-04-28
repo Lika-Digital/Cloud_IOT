@@ -16,6 +16,7 @@ import { getValveConfigs, setValveConfig } from '../../api/valveConfig'
 import LedScheduleSection from './LedScheduleSection'
 import { SocketQrGrid } from './SocketQrGrid'
 import SocketBreakerPanel from './SocketBreakerPanel'
+import SocketLoadMeterPanel from './SocketLoadMeterPanel'
 import type { OptaSocketState, OptaWaterState, OptaLogEntry } from '../../store'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -224,6 +225,16 @@ function SocketCard({
       <SocketBreakerPanel
         pedestalId={pedestalId}
         socketId={socketId}
+        isAdmin={isAdmin}
+        onFeedback={onFeedback}
+      />
+
+      {/* v3.11 — meter Hardware Info + phase-aware load bars + threshold editor.
+          Sibling component, untouches the breaker panel above. */}
+      <SocketLoadMeterPanel
+        pedestalId={pedestalId}
+        socketId={socketId}
+        socketName={socketName}
         isAdmin={isAdmin}
         onFeedback={onFeedback}
       />

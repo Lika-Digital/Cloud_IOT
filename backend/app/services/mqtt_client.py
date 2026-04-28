@@ -35,6 +35,10 @@ TOPICS = [
     "opta/diagnostic",
     # v3.8 — per-socket breaker status; socket_id is taken from the topic path.
     "opta/breakers/+/status",
+    # v3.11 — cabinet hardware configuration (one shot per cabinet) + live
+    # per-socket meter telemetry every 5 s.
+    "opta/config/hardware",
+    "opta/meters/+/telemetry",
 ]
 
 

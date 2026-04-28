@@ -79,6 +79,12 @@ OPTA_DIAGNOSTIC_RE   = re.compile(r"opta/diagnostic")
 # v3.8 — per-socket breaker status; socket_id ("Q1"..."Q4") is in the topic path
 # and authoritative. The payload may also carry `socketId` as a sanity check.
 OPTA_BREAKER_RE      = re.compile(r"opta/breakers/([^/]+)/status")
+# v3.11 — cabinet hardware configuration (one-shot per cabinet) + live per-socket
+# meter telemetry every 5 s. Socket id ("Q1"..."Q4") is in the topic path on
+# /meters/; on /config/hardware the cabinetId comes from the payload (one
+# message describes every socket).
+OPTA_HW_CONFIG_RE    = re.compile(r"opta/config/hardware")
+OPTA_METER_RE        = re.compile(r"opta/meters/([^/]+)/telemetry")
 
 
 def _hw_warn(source: str, message: str, details: str | None = None):
@@ -334,6 +340,10 @@ async def handle_message(topic: str, payload: str):
             await _handle_opta_diagnostic(payload)
         elif m := OPTA_BREAKER_RE.match(topic):
             await _handle_opta_breaker_status(m.group(1), payload)
+        elif OPTA_HW_CONFIG_RE.match(topic):
+            await _handle_opta_hardware_config(payload)
+        elif m := OPTA_METER_RE.match(topic):
+            await _handle_opta_meter_telemetry(m.group(1), payload)
         # ── Marina cabinet firmware (real hardware) ──────────────────────────
         elif m := MARINA_SOCKET_RE.match(topic):
             await _handle_marina_socket(m.group(1), m.group(2), payload)
@@ -1714,6 +1724,364 @@ async def _handle_event_breaker_tripped(
         "[Breaker] TRIPPED pedestal=%d socket=%d cause=%s current=%s",
         pedestal_id, socket_id, trip_cause, current_at_trip,
     )
+
+
+# ── v3.11 — Hardware config + live meter telemetry ──────────────────────────
+
+# Hysteresis to avoid threshold-edge alarm chatter (D3). Only resolve a
+# warning/critical alarm when load drops this many percentage points BELOW
+# the threshold value.
+_LOAD_HYSTERESIS_PCT = 2.0
+
+
+def _classify_load(pct: float, prev_status: str, warn: int, crit: int) -> str:
+    """Bucket a load percentage into normal | warning | critical with
+    hysteresis on the resolve direction. Going UP into a state crosses the
+    bare threshold; coming DOWN out of it requires `threshold - hysteresis`."""
+    crit_in = float(crit)
+    warn_in = float(warn)
+    crit_out = crit_in - _LOAD_HYSTERESIS_PCT
+    warn_out = warn_in - _LOAD_HYSTERESIS_PCT
+
+    if prev_status == "critical":
+        if pct >= crit_out:
+            return "critical"
+        if pct >= warn_out:
+            return "warning"
+        return "normal"
+    if prev_status == "warning":
+        if pct >= crit_in:
+            return "critical"
+        if pct >= warn_out:
+            return "warning"
+        return "normal"
+    # prev_status in ("normal", "unknown") — bare upward thresholds.
+    if pct >= crit_in:
+        return "critical"
+    if pct >= warn_in:
+        return "warning"
+    return "normal"
+
+
+async def _handle_opta_hardware_config(payload: str) -> None:
+    """v3.11 — opta/config/hardware
+
+    One-shot per cabinet: lists meter type, phases, ratedAmps, modbusAddress
+    per socket plus a `valves` array we currently stash but do not yet use
+    (placeholder for a future feature). Same `no-overwrite-with-null` rule
+    as v3.8 breaker metadata — a missing key in a subsequent message
+    preserves the previous value (D12).
+    """
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError as e:
+        logger.warning("[HwConfig] Bad payload: %s", e)
+        return
+
+    cabinet_id = data.get("cabinetId", "") or _opta_cached_cabinet_id
+    if not cabinet_id:
+        logger.warning("[HwConfig] Missing cabinetId; ignoring")
+        return
+
+    sockets = data.get("sockets") or []
+    if not isinstance(sockets, list):
+        logger.warning("[HwConfig] sockets field is not a list; ignoring")
+        return
+
+    db = SessionLocal()
+    try:
+        pedestal_id = _cabinet_to_pedestal_id(db, cabinet_id)
+        if pedestal_id is None:
+            logger.warning("[HwConfig] could not resolve cabinet %s", cabinet_id)
+            return
+
+        from ..models.socket_config import SocketConfig
+        applied_sockets: list[dict] = []
+
+        for entry in sockets:
+            if not isinstance(entry, dict):
+                continue
+            sock_name = entry.get("socketId")
+            if not sock_name:
+                continue
+            try:
+                socket_id = _socket_name_to_id(sock_name)
+            except Exception:
+                continue
+
+            cfg = db.query(SocketConfig).filter(
+                SocketConfig.pedestal_id == pedestal_id,
+                SocketConfig.socket_id == socket_id,
+            ).first()
+            if cfg is None:
+                cfg = SocketConfig(
+                    pedestal_id=pedestal_id,
+                    socket_id=socket_id,
+                    auto_activate=False,
+                )
+                db.add(cfg)
+                db.flush()
+
+            # No-overwrite-with-null rule (D12). A field appearing as `null`
+            # in the payload IS treated as a write — it's an explicit "the
+            # firmware says this is unknown now". Only an *absent* key is
+            # preserved.
+            if "meterType" in entry:
+                cfg.meter_type = entry["meterType"]
+            if "phases" in entry:
+                cfg.phases = entry["phases"]
+            if "ratedAmps" in entry:
+                try:
+                    cfg.rated_amps = float(entry["ratedAmps"]) if entry["ratedAmps"] is not None else None
+                except (TypeError, ValueError):
+                    pass
+            if "modbusAddress" in entry:
+                cfg.modbus_address = entry["modbusAddress"]
+
+            cfg.hw_config_received_at = datetime.utcnow()
+
+            applied_sockets.append({
+                "socket_id": socket_id,
+                "socket_name": sock_name,
+                "meter_type": cfg.meter_type,
+                "phases": cfg.phases,
+                "rated_amps": cfg.rated_amps,
+                "modbus_address": cfg.modbus_address,
+                "hw_config_received_at": cfg.hw_config_received_at.isoformat(),
+            })
+
+        db.commit()
+    finally:
+        db.close()
+
+    logger.info(
+        "[HwConfig] cabinet=%s pedestal=%d sockets=%d firmware=%s",
+        cabinet_id, pedestal_id, len(applied_sockets), data.get("firmwareVersion", "?"),
+    )
+
+    await ws_manager.broadcast({
+        "event": "hardware_config_updated",
+        "data": {
+            "pedestal_id": pedestal_id,
+            "cabinet_id": cabinet_id,
+            "firmware_version": data.get("firmwareVersion"),
+            "sockets": applied_sockets,
+            "valves": data.get("valves", []),
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    })
+
+
+async def _handle_opta_meter_telemetry(socket_name: str, payload: str) -> None:
+    """v3.11 — opta/meters/{socketId}/telemetry (every 5 s).
+
+    Parses single- or three-phase payload generically based on which fields
+    are present (D5). Stores live values; computes load_pct using the
+    bottleneck-phase formula for 3-phase sockets (D2, electrically correct).
+    Manages the alarm state machine (D4) with 2 % hysteresis on resolve (D3).
+    """
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError as e:
+        logger.warning("[Meter] bad telemetry on %s: %s", socket_name, e)
+        return
+
+    cabinet_id = data.get("cabinetId", "") or _opta_cached_cabinet_id
+    if not cabinet_id:
+        return
+
+    try:
+        socket_id = _socket_name_to_id(socket_name)
+    except Exception:
+        return
+
+    # Detect phasing from which fields are present (no hardcoded socket id).
+    is_three_phase = "currentAmpsTotal" in data
+    is_single_phase = "currentAmps" in data and not is_three_phase
+    if not is_three_phase and not is_single_phase:
+        logger.warning("[Meter] %s payload has neither currentAmps nor currentAmpsTotal; skipping",
+                       socket_name)
+        return
+
+    db = SessionLocal()
+    try:
+        pedestal_id = _cabinet_to_pedestal_id(db, cabinet_id)
+        if pedestal_id is None:
+            return
+
+        from ..models.socket_config import SocketConfig
+        from ..models.meter_load_alarm import MeterLoadAlarm
+
+        cfg = db.query(SocketConfig).filter(
+            SocketConfig.pedestal_id == pedestal_id,
+            SocketConfig.socket_id == socket_id,
+        ).first()
+        if cfg is None:
+            cfg = SocketConfig(pedestal_id=pedestal_id, socket_id=socket_id, auto_activate=False)
+            db.add(cfg)
+            db.flush()
+
+        # Always store the raw live readings (D5).
+        if is_single_phase:
+            cfg.meter_current_amps  = data.get("currentAmps")
+            cfg.meter_voltage_v     = data.get("voltageV")
+            cfg.meter_power_kw      = data.get("powerKw")
+            cfg.meter_power_factor  = data.get("powerFactor")
+            cfg.meter_energy_kwh    = data.get("energyKwh")
+            cfg.meter_frequency_hz  = data.get("frequency")
+        else:
+            cfg.meter_current_amps  = data.get("currentAmpsTotal")
+            cfg.meter_current_l1    = data.get("currentAmpsL1")
+            cfg.meter_current_l2    = data.get("currentAmpsL2")
+            cfg.meter_current_l3    = data.get("currentAmpsL3")
+            cfg.meter_voltage_l1    = data.get("voltageL1")
+            cfg.meter_voltage_l2    = data.get("voltageL2")
+            cfg.meter_voltage_l3    = data.get("voltageL3")
+            cfg.meter_power_kw      = data.get("powerKwTotal")
+            cfg.meter_power_factor  = data.get("powerFactor")
+            cfg.meter_energy_kwh    = data.get("energyKwh")
+            cfg.meter_frequency_hz  = data.get("frequency")
+            # `meter_voltage_v` aggregate stays null for 3-phase rows.
+        cfg.meter_load_updated_at = datetime.utcnow()
+
+        # Load calculation requires rated_amps from hardware config (D5).
+        rated = cfg.rated_amps
+        if rated is None or rated <= 0:
+            cfg.meter_load_status = "unknown"
+            cfg.meter_load_pct = None
+            db.commit()
+            logger.warning(
+                "[Meter] telemetry received for %s but no hardware config available — skipping load calculation",
+                socket_name,
+            )
+            await ws_manager.broadcast({
+                "event": "meter_telemetry_received",
+                "data": {
+                    "pedestal_id": pedestal_id,
+                    "socket_id": socket_id,
+                    "phases": cfg.phases,
+                    "load_status": "unknown",
+                    "current_amps": cfg.meter_current_amps,
+                    "timestamp": datetime.utcnow().isoformat(),
+                },
+            })
+            return
+
+        # D2 — bottleneck phase for 3-phase, simple ratio for 1-phase.
+        if is_three_phase:
+            phase_currents = [
+                v for v in (cfg.meter_current_l1, cfg.meter_current_l2, cfg.meter_current_l3)
+                if v is not None
+            ]
+            current_for_load = max(phase_currents) if phase_currents else (cfg.meter_current_amps or 0.0)
+        else:
+            current_for_load = cfg.meter_current_amps or 0.0
+
+        load_pct = (float(current_for_load) / float(rated)) * 100.0
+        cfg.meter_load_pct = load_pct
+
+        prev_status = cfg.meter_load_status or "unknown"
+        warn = int(cfg.load_warning_threshold_pct or 60)
+        crit = int(cfg.load_critical_threshold_pct or 80)
+        new_status = _classify_load(load_pct, prev_status, warn, crit)
+        cfg.meter_load_status = new_status
+
+        # D4 — state machine.
+        broadcasts: list[dict] = []
+        snapshot_meter_type = cfg.meter_type
+        snapshot_phases = cfg.phases or (3 if is_three_phase else 1)
+        snapshot_rated = float(rated)
+
+        def _resolve_open(reason: str) -> int:
+            """Close every open MeterLoadAlarm row for this (pedestal,socket).
+            Returns the number resolved."""
+            now = datetime.utcnow()
+            opens = db.query(MeterLoadAlarm).filter(
+                MeterLoadAlarm.pedestal_id == pedestal_id,
+                MeterLoadAlarm.socket_id == socket_id,
+                MeterLoadAlarm.resolved_at.is_(None),
+            ).all()
+            for r in opens:
+                r.resolved_at = now
+                r.resolved_by = reason
+            return len(opens)
+
+        def _open_row(level: str) -> MeterLoadAlarm:
+            row = MeterLoadAlarm(
+                pedestal_id=pedestal_id,
+                socket_id=socket_id,
+                alarm_type=level,
+                current_amps=float(current_for_load),
+                rated_amps=snapshot_rated,
+                load_pct=load_pct,
+                phases=snapshot_phases,
+                meter_type=snapshot_meter_type,
+                triggered_at=datetime.utcnow(),
+            )
+            db.add(row)
+            return row
+
+        # State-machine matrix.
+        if prev_status != new_status:
+            if new_status == "warning" and prev_status in ("normal", "unknown"):
+                _open_row("warning")
+                broadcasts.append({"event": "meter_load_warning"})
+            elif new_status == "critical" and prev_status in ("normal", "unknown"):
+                _open_row("critical")
+                broadcasts.append({"event": "meter_load_critical"})
+            elif new_status == "critical" and prev_status == "warning":
+                _resolve_open("auto-upgrade")
+                _open_row("critical")
+                broadcasts.append({"event": "meter_load_critical"})
+            elif new_status == "warning" and prev_status == "critical":
+                _resolve_open("auto-downgrade")
+                _open_row("warning")
+                broadcasts.append({"event": "meter_load_warning"})
+            elif new_status == "normal":
+                resolved = _resolve_open("auto-resolve")
+                if resolved:
+                    broadcasts.append({"event": "meter_load_resolved"})
+
+        db.commit()
+    finally:
+        db.close()
+
+    # Build common WS payload.
+    payload_data = {
+        "pedestal_id": pedestal_id,
+        "socket_id": socket_id,
+        "current_amps": float(current_for_load),
+        "rated_amps": float(rated),
+        "load_pct": load_pct,
+        "phases": snapshot_phases,
+        "meter_type": snapshot_meter_type,
+        "load_status": new_status,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    if is_three_phase:
+        payload_data["current_l1"] = data.get("currentAmpsL1")
+        payload_data["current_l2"] = data.get("currentAmpsL2")
+        payload_data["current_l3"] = data.get("currentAmpsL3")
+
+    for b in broadcasts:
+        evt = b["event"]
+        if evt == "meter_load_critical":
+            payload_data["severity"] = "CRITICAL"
+        elif evt == "meter_load_warning":
+            payload_data["severity"] = "WARNING"
+        await ws_manager.broadcast({"event": evt, "data": dict(payload_data)})
+
+    # Always emit a low-volume telemetry tick so the dashboard sees live load_pct.
+    await ws_manager.broadcast({
+        "event": "meter_telemetry_received",
+        "data": payload_data,
+    })
+
+    if broadcasts:
+        logger.info(
+            "[Meter] pedestal=%d socket=%d load_pct=%.1f%% prev=%s new=%s rated=%.1fA",
+            pedestal_id, socket_id, load_pct, prev_status, new_status, rated,
+        )
 
 
 async def _handle_opta_diagnostic(payload: str):

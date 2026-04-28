@@ -10,6 +10,120 @@ whether an exception is safe.
 
 ---
 
+## v3.11 — Hardware config + meter telemetry topics (2026-04-28)
+
+### New publishes the firmware MUST add
+
+The backend in v3.11 subscribes to two new topics. Until the Arduino sketch
+publishes them, the load-monitoring feature is **dormant** (same pattern as
+v3.8 breakers): every SocketLoadMeterPanel will display *"Awaiting hardware
+configuration from device"* and the System Health page will list zero load
+alarms because no telemetry ever arrives.
+
+#### `opta/config/hardware` — one-shot per cabinet, retained recommended
+
+Publish on first MQTT connect AND in response to every diagnostic request.
+Required keys per socket: `socketId` (Q1..Q4), `phases` (1 or 3), `ratedAmps`
+(real, per-phase rating in amps). Optional but useful: `meterType`,
+`modbusAddress`. The backend stores whatever fields are present and never
+overwrites a previously-stored value with `null` on a later message that omits
+the key. So once you have published `meterType: "ABB D11 15-M 40"` you do not
+need to send it on every subsequent config message — but you may.
+
+```json
+{
+  "cabinetId": "MAR_KRK_ORM_01",
+  "firmwareVersion": "2.1.0",
+  "sockets": [
+    {"socketId": "Q1", "meterType": "ABB D11 15-M 40", "phases": 1, "ratedAmps": 16, "modbusAddress": 1},
+    {"socketId": "Q2", "meterType": "ABB D11 15-M 40", "phases": 1, "ratedAmps": 32, "modbusAddress": 2},
+    {"socketId": "Q3", "meterType": "ABB D11 15-M 40", "phases": 1, "ratedAmps": 32, "modbusAddress": 3},
+    {"socketId": "Q4", "meterType": "ABB D13 15-M 65", "phases": 3, "ratedAmps": 65, "modbusAddress": 4}
+  ],
+  "valves": [
+    {"valveId": "V1", "ratedLitersPerMin": 20},
+    {"valveId": "V2", "ratedLitersPerMin": 20}
+  ]
+}
+```
+
+**Recommendation:** publish with `retain=true` so a backend restart sees the
+configuration immediately, the same way `opta/status` already works. Without
+retain, the dashboard shows "Awaiting hardware configuration" for ~5 minutes
+after a restart.
+
+#### `opta/meters/{socketId}/telemetry` — every 5 s while powered
+
+The firmware decides single-phase vs three-phase **per socket**, based on
+which Modbus meter is wired to that socket's RS-485 address. The payload
+shape signals the phasing to the backend:
+
+- **Single phase** — include `currentAmps`. Backend interprets this as 1Φ.
+  ```json
+  {
+    "cabinetId": "MAR_KRK_ORM_01",
+    "socketId": "Q1",
+    "currentAmps": 14.7,
+    "voltageV": 231.2,
+    "powerKw": 3.39,
+    "powerFactor": 0.98,
+    "energyKwh": 1234.56,
+    "frequency": 50.0,
+    "ts": 12345678
+  }
+  ```
+
+- **Three phase** — include `currentAmpsTotal` (and per-phase L1/L2/L3).
+  Backend interprets this as 3Φ.
+  ```json
+  {
+    "cabinetId": "MAR_KRK_ORM_01",
+    "socketId": "Q4",
+    "currentAmpsL1": 12.1,
+    "currentAmpsL2": 11.8,
+    "currentAmpsL3": 12.3,
+    "currentAmpsTotal": 36.2,
+    "voltageL1": 231.0,
+    "voltageL2": 230.8,
+    "voltageL3": 231.5,
+    "powerKwTotal": 8.37,
+    "powerFactor": 0.97,
+    "energyKwh": 567.89,
+    "frequency": 50.0,
+    "ts": 12345678
+  }
+  ```
+
+**Important — the backend does NOT trust phase count from the topic name or
+the socket id.** It looks at the payload: `currentAmps` ⇒ 1Φ, `currentAmpsTotal`
+⇒ 3Φ. So Q1..Q4 can be any mix of single- and three-phase as long as the
+`opta/config/hardware` `phases` field matches what the meter actually reports.
+
+**Load percentage formula** (informational; firmware doesn't compute this):
+- 1Φ: `currentAmps / ratedAmps × 100`.
+- 3Φ: `max(L1, L2, L3) / ratedAmps × 100` — bottleneck phase. The backend
+  uses this even though the spec literal said total/rated; the spec was wrong
+  for IEC standard 3Φ rated current (it is per-phase, not summed).
+
+`ratedAmps` is interpreted as **per-phase rated current** for both 1Φ and 3Φ
+meters, matching every IEC breaker rating you'll find on a circuit breaker.
+
+### Recommended cadence
+
+- `opta/config/hardware` — once at connect, plus on diagnostic. Don't churn it.
+- `opta/meters/+/telemetry` — every 5 s while the cabinet is alive, regardless
+  of whether the socket is in an active session. The backend handles
+  before-config-arrived gracefully (stores raw values, skips load_pct), so
+  starting the telemetry loop early is fine.
+
+### Color reservation note (recap from v3.10)
+
+Backend still ships LED schedule color set `{green, blue, red, yellow}` only.
+`white` remains reserved until the firmware team confirms `handleLedCmd`
+accepts it. No change in v3.11.
+
+---
+
 ## v3.10 — LED color set + opta/cmd/led contract (2026-04-28)
 
 ### Backend ships `{green, blue, red, yellow}` only. `white` is reserved.

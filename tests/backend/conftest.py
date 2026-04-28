@@ -64,6 +64,7 @@ def setup_test_databases():
         from app.models import breaker_event  # noqa — v3.8
         from app.models import valve_config  # noqa — v3.9
         from app.models import led_schedule  # noqa — v3.10
+        from app.models import meter_load_alarm  # noqa — v3.11
         from app.auth import models, customer_models, contract_models, berth_models  # noqa
 
         Base.metadata.drop_all(bind=test_engine)

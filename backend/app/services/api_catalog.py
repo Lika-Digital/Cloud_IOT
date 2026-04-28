@@ -32,6 +32,13 @@ ENDPOINT_CATALOG = [
     {"id": "led_schedule.upsert",    "path": "/api/pedestals/{pedestal_id}/led-schedule",                       "method": "PUT",   "category": "Controls", "allow_bidirectional": True},
     {"id": "led_schedule.delete",    "path": "/api/pedestals/{pedestal_id}/led-schedule",                       "method": "DELETE","category": "Controls", "allow_bidirectional": True},
     {"id": "led_schedule.test",      "path": "/api/pedestals/{pedestal_id}/led-schedule/test",                  "method": "POST",  "category": "Controls", "allow_bidirectional": True},
+    # v3.11 — Load Monitoring (per-socket meter telemetry + alarms).
+    # All ERP-facing; the operator opts each one in via the API Gateway page.
+    {"id": "load.pedestal_get_ext",   "path": "/api/ext/pedestals/{pedestal_id}/load",                                 "method": "GET", "category": "Load Monitoring", "allow_bidirectional": False},
+    {"id": "load.socket_get_ext",     "path": "/api/ext/pedestals/{pedestal_id}/sockets/{socket_id}/load",             "method": "GET", "category": "Load Monitoring", "allow_bidirectional": False},
+    {"id": "load.marina_alarms_ext",  "path": "/api/ext/marinas/{marina_id}/load/alarms",                              "method": "GET", "category": "Load Monitoring", "allow_bidirectional": False},
+    {"id": "load.pedestal_alarms_ext","path": "/api/ext/pedestals/{pedestal_id}/load/alarms",                          "method": "GET", "category": "Load Monitoring", "allow_bidirectional": False},
+    {"id": "load.socket_history_ext", "path": "/api/ext/pedestals/{pedestal_id}/sockets/{socket_id}/load/history",     "method": "GET", "category": "Load Monitoring", "allow_bidirectional": False},
     # Mobile QR-claim + monitoring (v3.6)
     {"id": "mobile.qr_claim",        "path": "/api/mobile/qr/claim",                                            "method": "POST",  "category": "Mobile", "allow_bidirectional": True},
     {"id": "mobile.session_live",    "path": "/api/mobile/sessions/{session_id}/live",                          "method": "GET",   "category": "Mobile", "allow_bidirectional": False},
@@ -97,4 +104,9 @@ EVENT_CATALOG = [
     # v3.10 — fires on every LED state change (manual or scheduled). The
     # `source` field in the payload distinguishes them ("manual" | "scheduler").
     {"id": "led_changed",              "name": "LED State Changed",     "category": "Hardware"},
+    # v3.11 — load monitoring (4 events for the per-socket meter pipeline).
+    {"id": "hardware_config_updated",  "name": "Hardware Config Updated", "category": "Load Monitoring"},
+    {"id": "meter_load_warning",       "name": "Meter Load Warning",      "category": "Load Monitoring"},
+    {"id": "meter_load_critical",      "name": "Meter Load Critical",     "category": "Load Monitoring"},
+    {"id": "meter_load_resolved",      "name": "Meter Load Resolved",     "category": "Load Monitoring"},
 ]

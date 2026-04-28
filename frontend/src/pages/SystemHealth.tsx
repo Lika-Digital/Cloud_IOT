@@ -3,6 +3,10 @@ import {
   getHealthSummary, getErrorLogs, clearLogs, getHardwareStats,
   type HealthSummary, type ErrorLogEntry, type HardwareStats, type HardwareAlarm,
 } from '../api/systemHealth'
+import {
+  acknowledgeLoadAlarm, resolveLoadAlarm,
+  type MeterLoadAlarm,
+} from '../api/meterLoad'
 import { useStore } from '../store'
 
 type FilterCategory = 'all' | 'system' | 'hw'
@@ -19,7 +23,14 @@ export default function SystemHealth() {
   const [clearing, setClearing]       = useState(false)
   const [loadError, setLoadError]     = useState<string | null>(null)
   const [hwError, setHwError]         = useState<string | null>(null)
-  const { resetNewErrors, setHwAlarmLevel } = useStore()
+  const {
+    resetNewErrors, setHwAlarmLevel,
+    activeCriticalLoadAlarms, activeWarningLoadAlarms,
+  } = useStore()
+  // v3.11 — open meter load alarms (resolved_at IS NULL) per pedestal.
+  // Aggregated across all pedestals for the System Health view.
+  const [loadAlarms, setLoadAlarms] = useState<MeterLoadAlarm[]>([])
+  const [loadAlarmsBusyId, setLoadAlarmsBusyId] = useState<number | null>(null)
 
   // ── Error log polling (15s) ────────────────────────────────────────────────
   const loadLogs = useCallback(async () => {
@@ -46,29 +57,92 @@ export default function SystemHealth() {
       const stats = await getHardwareStats()
       setHw(stats)
       setHwError(null)
-      // Sync nav indicator based on highest alarm level
-      const highest = stats.alarms.find((a) => a.level === 'critical')
+      // Sync nav indicator based on highest alarm level — merge hardware
+      // stats and meter load alarms into one severity bucket (v3.11 D8).
+      const hwHighest = stats.alarms.find((a) => a.level === 'critical')
         ? 'critical'
         : stats.alarms.find((a) => a.level === 'warning')
           ? 'warning'
           : 'none'
-      setHwAlarmLevel(highest)
+      const loadCritical = useStore.getState().activeCriticalLoadAlarms.length > 0
+      const loadWarning  = useStore.getState().activeWarningLoadAlarms.length > 0
+      const merged: 'none' | 'warning' | 'critical' =
+        hwHighest === 'critical' || loadCritical ? 'critical'
+        : hwHighest === 'warning' || loadWarning ? 'warning'
+        : 'none'
+      setHwAlarmLevel(merged)
     } catch {
       setHwError('Hardware stats unavailable (psutil may not be installed on this host)')
     }
+  }, [setHwAlarmLevel])
+
+  // v3.11 — refresh open load alarms across all pedestals. Backend has no
+  // marina-wide internal endpoint, so we iterate the visible pedestals from
+  // the store. Light query — one row per open alarm — runs at 15 s cadence
+  // alongside error log polling.
+  const loadLoadAlarms = useCallback(async () => {
+    try {
+      const pedestals = useStore.getState().pedestals
+      if (!pedestals || pedestals.length === 0) {
+        setLoadAlarms([])
+        return
+      }
+      const { getPedestalLoadAlarms } = await import('../api/meterLoad')
+      const all: MeterLoadAlarm[] = []
+      for (const p of pedestals) {
+        try {
+          const r = await getPedestalLoadAlarms(p.id)
+          all.push(...r.alarms)
+        } catch { /* per-pedestal failures shouldn't kill the page */ }
+      }
+      // Newest first.
+      all.sort((a, b) => (b.triggered_at > a.triggered_at ? 1 : -1))
+      setLoadAlarms(all)
+    } catch { /* fine */ }
   }, [])
 
   useEffect(() => {
     resetNewErrors()
     loadLogs()
     loadHw()
-    const logInterval = setInterval(loadLogs, 15_000)
-    const hwInterval  = setInterval(loadHw,   10_000)
+    loadLoadAlarms()
+    const logInterval  = setInterval(loadLogs, 15_000)
+    const hwInterval   = setInterval(loadHw,   10_000)
+    const loadInterval = setInterval(loadLoadAlarms, 15_000)
     return () => {
       clearInterval(logInterval)
       clearInterval(hwInterval)
+      clearInterval(loadInterval)
     }
-  }, [loadLogs, loadHw])
+  }, [loadLogs, loadHw, loadLoadAlarms])
+
+  // Re-run hw merge whenever the load-alarm counts change so the badge
+  // promotes up immediately on a new WS critical/warning event.
+  useEffect(() => {
+    if (!hw) return
+    loadHw()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCriticalLoadAlarms.length, activeWarningLoadAlarms.length])
+
+  const handleAck = async (a: MeterLoadAlarm) => {
+    setLoadAlarmsBusyId(a.id)
+    try {
+      const updated = await acknowledgeLoadAlarm(a.pedestal_id, a.id)
+      setLoadAlarms((rows) => rows.map((r) => (r.id === a.id ? updated : r)))
+    } catch { /* backend surfaces */ }
+    finally { setLoadAlarmsBusyId(null) }
+  }
+
+  const handleResolve = async (a: MeterLoadAlarm) => {
+    if (!confirm(`Manually resolve load alarm on pedestal ${a.pedestal_id} Q${a.socket_id}?`)) return
+    setLoadAlarmsBusyId(a.id)
+    try {
+      await resolveLoadAlarm(a.pedestal_id, a.id)
+      // Drop from the open list — server returned with resolved_at set.
+      setLoadAlarms((rows) => rows.filter((r) => r.id !== a.id))
+    } catch { /* backend surfaces */ }
+    finally { setLoadAlarmsBusyId(null) }
+  }
 
   const handleClear = async () => {
     if (!confirm('Delete all error logs? This cannot be undone.')) return
@@ -134,6 +208,70 @@ export default function SystemHealth() {
               {' '}(threshold {a.threshold}{a.unit})
             </p>
           ))}
+        </div>
+      )}
+
+      {/* ── v3.11 Meter Load Alarms (separate card per D7) ──────────────────── */}
+      {loadAlarms.length > 0 && (
+        <div className="rounded-lg border border-orange-600/50 bg-orange-900/20 px-4 py-3 space-y-2">
+          <p className="text-orange-300 font-semibold text-sm flex items-center gap-2">
+            <span className="text-base">⚡</span>
+            METER LOAD ALARMS — {loadAlarms.filter((a) => !a.acknowledged).length} active, {loadAlarms.length} total
+          </p>
+          <div className="space-y-1">
+            {loadAlarms.map((a) => {
+              const isCritical = a.alarm_type === 'critical'
+              const dim = a.acknowledged ? 'opacity-50' : ''
+              return (
+                <div
+                  key={a.id}
+                  className={`flex items-center gap-3 text-xs px-2 py-1.5 rounded border ${
+                    isCritical
+                      ? 'bg-red-900/30 border-red-700/40'
+                      : 'bg-yellow-900/20 border-yellow-700/40'
+                  } ${dim}`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${
+                    isCritical ? 'bg-red-500 animate-pulse' : 'bg-yellow-400'
+                  }`} />
+                  <span className={`font-mono ${isCritical ? 'text-red-200' : 'text-yellow-200'}`}>
+                    {isCritical ? 'CRITICAL' : 'WARNING'}
+                  </span>
+                  <span className="text-gray-300">
+                    Pedestal {a.pedestal_id} Q{a.socket_id}
+                  </span>
+                  <span className="text-gray-400 font-mono">
+                    {a.meter_type ?? 'meter'}
+                    {' · '}
+                    {a.current_amps.toFixed(1)}A / {a.rated_amps.toFixed(0)}A
+                    {' · '}
+                    {a.load_pct.toFixed(0)}%
+                  </span>
+                  <span className="ml-auto text-gray-500 font-mono text-[11px]">
+                    {a.triggered_at.replace('T', ' ').slice(0, 19)}
+                  </span>
+                  {!a.acknowledged && (
+                    <button
+                      type="button"
+                      onClick={() => handleAck(a)}
+                      disabled={loadAlarmsBusyId === a.id}
+                      className="text-[11px] px-2 py-0.5 rounded border border-gray-600 text-gray-200 hover:bg-gray-700/60 disabled:opacity-40"
+                    >
+                      Acknowledge
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleResolve(a)}
+                    disabled={loadAlarmsBusyId === a.id}
+                    className="text-[11px] px-2 py-0.5 rounded border border-orange-700 text-orange-200 hover:bg-orange-800/50 disabled:opacity-40"
+                  >
+                    Resolve
+                  </button>
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
 

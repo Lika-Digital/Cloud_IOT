@@ -250,6 +250,65 @@ interface AppStore {
   addValveFlowWarning: (key: string) => void
   clearValveFlowWarning: (key: string) => void
 
+  // v3.11 — per-socket meter hardware config from `opta/config/hardware`.
+  // Keyed by `${pedestal_id}-${socket_id}`. Driven entirely by the
+  // `hardware_config_updated` WS event — never set manually.
+  socketHardwareConfig: Record<string, {
+    meter_type: string | null
+    phases: number | null
+    rated_amps: number | null
+    modbus_address: number | null
+    hw_config_received_at: string | null
+  }>
+  setHardwareConfig: (
+    pedestal_id: number,
+    socket_id: number,
+    patch: Partial<{
+      meter_type: string | null
+      phases: number | null
+      rated_amps: number | null
+      modbus_address: number | null
+      hw_config_received_at: string | null
+    }>,
+  ) => void
+
+  // v3.11 — per-socket live meter readings + load status. Keyed by
+  // `${pedestal_id}-${socket_id}`. Single-phase rows leave the L1/L2/L3
+  // fields null; three-phase rows populate them. Drives the load bar
+  // rendering on SocketLoadMeterPanel.
+  socketLoadStates: Record<string, {
+    current_amps: number | null
+    voltage_v: number | null
+    power_kw: number | null
+    power_factor: number | null
+    energy_kwh: number | null
+    frequency_hz: number | null
+    current_l1: number | null
+    current_l2: number | null
+    current_l3: number | null
+    voltage_l1: number | null
+    voltage_l2: number | null
+    voltage_l3: number | null
+    load_pct: number | null
+    load_status: 'normal' | 'warning' | 'critical' | 'unknown'
+    warning_threshold_pct: number
+    critical_threshold_pct: number
+    updated_at: string
+  }>
+  setLoadState: (
+    pedestal_id: number,
+    socket_id: number,
+    patch: Partial<AppStore['socketLoadStates'][string]>,
+  ) => void
+
+  // v3.11 — open meter load alarm keys. Mirrors the v3.8 activeBreakerAlarms
+  // pattern but split by severity so the System Health badge can pick the
+  // highest severity present.
+  activeCriticalLoadAlarms: string[]
+  activeWarningLoadAlarms: string[]
+  addLoadAlarm: (severity: 'warning' | 'critical', key: string) => void
+  clearLoadAlarm: (key: string) => void
+
   // v3.5 — transient "auto-activate skipped" warning per socket. Populated by
   // the `socket_auto_activate_skipped` WS event and auto-cleared after 30 s.
   socketAutoSkipReasons: Record<string, { reason: string; ts: number }>
@@ -510,6 +569,71 @@ export const useStore = create<AppStore>((set) => ({
     set((s) => (s.valveFlowWarnings.includes(key) ? s : { valveFlowWarnings: [...s.valveFlowWarnings, key] })),
   clearValveFlowWarning: (key) =>
     set((s) => ({ valveFlowWarnings: s.valveFlowWarnings.filter((k) => k !== key) })),
+
+  socketHardwareConfig: {},
+  setHardwareConfig: (pedestal_id, socket_id, patch) =>
+    set((s) => {
+      const key = `${pedestal_id}-${socket_id}`
+      const prev = s.socketHardwareConfig[key] ?? {
+        meter_type: null,
+        phases: null,
+        rated_amps: null,
+        modbus_address: null,
+        hw_config_received_at: null,
+      }
+      return {
+        socketHardwareConfig: {
+          ...s.socketHardwareConfig,
+          [key]: { ...prev, ...patch },
+        },
+      }
+    }),
+
+  socketLoadStates: {},
+  setLoadState: (pedestal_id, socket_id, patch) =>
+    set((s) => {
+      const key = `${pedestal_id}-${socket_id}`
+      const prev = s.socketLoadStates[key] ?? {
+        current_amps: null, voltage_v: null, power_kw: null,
+        power_factor: null, energy_kwh: null, frequency_hz: null,
+        current_l1: null, current_l2: null, current_l3: null,
+        voltage_l1: null, voltage_l2: null, voltage_l3: null,
+        load_pct: null, load_status: 'unknown' as const,
+        warning_threshold_pct: 60, critical_threshold_pct: 80,
+        updated_at: '',
+      }
+      return {
+        socketLoadStates: {
+          ...s.socketLoadStates,
+          [key]: { ...prev, ...patch, updated_at: new Date().toISOString() },
+        },
+      }
+    }),
+
+  activeCriticalLoadAlarms: [],
+  activeWarningLoadAlarms: [],
+  addLoadAlarm: (severity, key) =>
+    set((s) => {
+      if (severity === 'critical') {
+        const next = s.activeCriticalLoadAlarms.includes(key)
+          ? s.activeCriticalLoadAlarms
+          : [...s.activeCriticalLoadAlarms, key]
+        // Auto-promote: if it was on the warning list, remove it from there.
+        const w = s.activeWarningLoadAlarms.filter((k) => k !== key)
+        return { activeCriticalLoadAlarms: next, activeWarningLoadAlarms: w }
+      }
+      const next = s.activeWarningLoadAlarms.includes(key)
+        ? s.activeWarningLoadAlarms
+        : [...s.activeWarningLoadAlarms, key]
+      // Auto-demote: critical → warning means strip critical entry.
+      const c = s.activeCriticalLoadAlarms.filter((k) => k !== key)
+      return { activeWarningLoadAlarms: next, activeCriticalLoadAlarms: c }
+    }),
+  clearLoadAlarm: (key) =>
+    set((s) => ({
+      activeCriticalLoadAlarms: s.activeCriticalLoadAlarms.filter((k) => k !== key),
+      activeWarningLoadAlarms: s.activeWarningLoadAlarms.filter((k) => k !== key),
+    })),
 
   socketAutoSkipReasons: {},
   setSocketAutoSkipReason: (pedestal_id, socket_id, reason) =>

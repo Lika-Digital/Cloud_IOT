@@ -37,6 +37,33 @@ Test coverage map:
   TC-ML-29  ERP endpoint 401 on missing auth
   TC-ML-30  Drift guard — every backend `meter_*`/`hardware_config_updated`
             event has a frontend handler (run as part of full suite)
+
+v3.12 — 90% Auto-Stop Overload Protection (additive)
+  TC-ML-31  Auto-stop fires when load_pct >= 90 (boundary)
+  TC-ML-32  Auto-stop does NOT fire when load_pct = 89.9 (boundary)
+  TC-ML-33  Auto-stop publishes opta/cmd/socket/Q{n} with action="stop" and msgId="autostop-{ts}"
+  TC-ML-34  Auto-stop ends active electricity session with end_reason="auto_stop_overload"
+  TC-ML-35  Auto-stop inserts meter_load_alarms row with alarm_type="auto_stop"
+  TC-ML-36  Auto-stop sets SocketConfig.auto_stop_pending_ack=True
+  TC-ML-37  Auto-stop broadcasts meter_load_auto_stop with severity=AUTO_STOP + session_id
+  TC-ML-38  Auto-stop skipped when rated_amps is None (relies on TC-ML-05 fall-through)
+  TC-ML-39  Auto-stop does NOT fire a second time when prev_status=="auto_stop" (terminal)
+  TC-ML-40  Load drops below 90% after auto-stop does NOT change status away from auto_stop
+  TC-ML-41  approve_socket returns 409 when auto_stop_pending_ack=True
+  TC-ML-42  approve_socket works normally when auto_stop_pending_ack=False
+  TC-ML-43  direct_socket_cmd activate returns 409 when auto_stop_pending_ack=True
+  TC-ML-44  direct_socket_cmd stop works regardless of auto_stop_pending_ack
+  TC-ML-45  _auto_activate_precondition_check returns "overload alarm pending acknowledgment" (D8)
+  TC-ML-46  Acknowledge endpoint clears auto_stop_pending_ack
+  TC-ML-47  Acknowledge endpoint marks latest auto_stop alarm row with admin email
+  TC-ML-48  Acknowledge endpoint broadcasts meter_load_auto_stop_acknowledged
+  TC-ML-49  Acknowledge endpoint returns 409 when no auto-stop is pending
+  TC-ML-50  After acknowledge, the same socket can be re-activated normally
+  TC-ML-51  ERP acknowledge endpoint records acknowledged_by="erp-service" (D7)
+  TC-ML-52  ERP acknowledge endpoint requires _EP_AUTO_STOP_ACK to be enabled
+  TC-ML-53  ERP acknowledge endpoint 401 on missing/invalid auth
+  TC-ML-54  api_catalog has load.auto_stop_ack_ext entry under Load Monitoring
+  TC-ML-55  api_catalog has both meter_load_auto_stop* events under Load Monitoring
 """
 from __future__ import annotations
 
@@ -74,21 +101,28 @@ def _patch_routers_to_test_db():
 
 @pytest.fixture(autouse=True)
 def _reset_state():
-    """Each test starts with no open alarms on the test cabinet."""
+    """Each test starts with no open alarms, no leftover sessions, and a
+    cleared auto-stop latch on the test cabinet — required so v3.12 tests
+    don't leak state into earlier v3.11 tests run later in the suite."""
     from app.models.meter_load_alarm import MeterLoadAlarm
     from app.models.pedestal_config import PedestalConfig
     from app.models.socket_config import SocketConfig
+    from app.models.session import Session as _Session
     db = _TestSession()
     try:
         cfg = db.query(PedestalConfig).filter_by(opta_client_id=CABINET).first()
         if cfg is not None:
             db.query(MeterLoadAlarm).filter_by(pedestal_id=cfg.pedestal_id).delete(synchronize_session=False)
+            # Wipe any leftover sessions seeded by v3.12 auto-stop tests so
+            # the next test's session lookup starts clean.
+            db.query(_Session).filter_by(pedestal_id=cfg.pedestal_id).delete(synchronize_session=False)
             # Reset SocketConfig meter fields back to clean state.
             for sc in db.query(SocketConfig).filter_by(pedestal_id=cfg.pedestal_id).all():
                 sc.meter_load_status = "unknown"
                 sc.meter_load_pct = None
                 sc.load_warning_threshold_pct = 60
                 sc.load_critical_threshold_pct = 80
+                sc.auto_stop_pending_ack = False   # v3.12 — clear latch
             db.commit()
     finally:
         db.close()
@@ -628,3 +662,569 @@ def test_api_catalog_has_load_entries():
     evt_ids = {e["id"] for e in EVENT_CATALOG}
     assert {"hardware_config_updated", "meter_load_warning",
             "meter_load_critical", "meter_load_resolved"}.issubset(evt_ids)
+
+
+# ─── v3.12 — 90% auto-stop overload protection ───────────────────────────────
+
+def _seed_active_session(pedestal_id: int, socket_id: int) -> int:
+    """Insert a synthetic active electricity session so the auto-stop branch
+    has something to complete. Returns the session id."""
+    from app.models.session import Session as _Session
+    db = _TestSession()
+    try:
+        s = _Session(
+            pedestal_id=pedestal_id,
+            socket_id=socket_id,
+            type="electricity",
+            status="active",
+            started_at=datetime.utcnow(),
+        )
+        db.add(s)
+        db.commit()
+        db.refresh(s)
+        return s.id
+    finally:
+        db.close()
+
+
+def _capture_mqtt_publishes() -> tuple[list[tuple[str, str]], object]:
+    """Return (captured_list, patch_context). Caller uses `with patch_context: ...`."""
+    captured: list[tuple[str, str]] = []
+
+    def fake_publish(topic, payload):
+        captured.append((topic, payload))
+
+    from unittest.mock import MagicMock
+    fake_service = MagicMock()
+    fake_service.publish = fake_publish
+    return captured, patch("app.services.mqtt_client.mqtt_service", fake_service)
+
+
+def test_autostop_fires_at_or_above_90_pct():
+    """TC-ML-31 — load_pct >= 90% triggers auto-stop sequence."""
+    pid = _ensure_cabinet()
+    _seed_hw_config(pid, 1, meter_type="ABB", phases=1, rated_amps=32.0)
+
+    captured, mqtt_patch = _capture_mqtt_publishes()
+    with mqtt_patch:
+        # 32A * 0.91 = 29.12A → 91.0% (above 90)
+        broadcasts = _trip_to(91, pid)
+
+    assert any(b.get("event") == "meter_load_auto_stop" for b in broadcasts)
+    cfg = _get_socket_cfg(pid, 1)
+    assert cfg.meter_load_status == "auto_stop"
+
+
+def test_autostop_does_not_fire_at_89_9_pct():
+    """TC-ML-32 — load_pct = 89.9% must NOT trigger (must be exactly the
+    spec's `>= 90` line). Use 32A * 0.899 = 28.768A directly."""
+    pid = _ensure_cabinet()
+    _seed_hw_config(pid, 1, meter_type="ABB", phases=1, rated_amps=32.0)
+
+    captured, mqtt_patch = _capture_mqtt_publishes()
+    with mqtt_patch:
+        broadcasts = _simulate("opta/meters/Q1/telemetry", {
+            "cabinetId": CABINET, "socketId": "Q1",
+            "currentAmps": 32.0 * 0.899,  # 89.9% — below the threshold
+            "voltageV": 230, "powerKw": 6.6,
+        })
+
+    assert not any(b.get("event") == "meter_load_auto_stop" for b in broadcasts)
+    cfg = _get_socket_cfg(pid, 1)
+    # Should be critical (89.9 > 80%) but NOT auto_stop.
+    assert cfg.meter_load_status == "critical"
+    assert bool(cfg.auto_stop_pending_ack) is False
+    # No autostop-* MQTT publish.
+    assert not any("autostop-" in p for _, p in captured)
+
+
+def test_autostop_publishes_correct_mqtt_payload():
+    """TC-ML-33 — publish on opta/cmd/socket/Q{n} with action=stop + autostop-{ts} msgId."""
+    pid = _ensure_cabinet()
+    _seed_hw_config(pid, 1, meter_type="ABB", phases=1, rated_amps=32.0)
+
+    captured, mqtt_patch = _capture_mqtt_publishes()
+    with mqtt_patch:
+        _trip_to(95, pid)
+
+    autostop_pubs = [(t, p) for t, p in captured if t == "opta/cmd/socket/Q1"]
+    assert len(autostop_pubs) == 1
+    payload = json.loads(autostop_pubs[0][1])
+    assert payload["action"] == "stop"
+    assert payload["cabinetId"] == CABINET
+    assert payload["msgId"].startswith("autostop-")
+
+
+def test_autostop_completes_active_session_with_end_reason():
+    """TC-ML-34 — active electricity session is completed with end_reason='auto_stop_overload'."""
+    pid = _ensure_cabinet()
+    _seed_hw_config(pid, 1, meter_type="ABB", phases=1, rated_amps=32.0)
+    sid = _seed_active_session(pid, 1)
+
+    captured, mqtt_patch = _capture_mqtt_publishes()
+    with mqtt_patch:
+        _trip_to(95, pid)
+
+    from app.models.session import Session as _Session
+    db = _TestSession()
+    try:
+        s = db.get(_Session, sid)
+        assert s.status == "completed"
+        assert s.end_reason == "auto_stop_overload"
+    finally:
+        db.close()
+
+
+def test_autostop_creates_alarm_row_with_alarm_type_auto_stop():
+    """TC-ML-35 — meter_load_alarms row inserted with alarm_type='auto_stop'."""
+    pid = _ensure_cabinet()
+    _seed_hw_config(pid, 1, meter_type="ABB", phases=1, rated_amps=32.0)
+
+    captured, mqtt_patch = _capture_mqtt_publishes()
+    with mqtt_patch:
+        _trip_to(95, pid)
+
+    from app.models.meter_load_alarm import MeterLoadAlarm
+    db = _TestSession()
+    try:
+        rows = db.query(MeterLoadAlarm).filter_by(
+            pedestal_id=pid, socket_id=1, alarm_type="auto_stop", resolved_at=None,
+        ).all()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.acknowledged is False
+        assert row.load_pct == pytest.approx(95.0, rel=1e-2)
+        assert row.rated_amps == pytest.approx(32.0)
+    finally:
+        db.close()
+
+
+def test_autostop_sets_pending_ack_latch():
+    """TC-ML-36 — SocketConfig.auto_stop_pending_ack flips True."""
+    pid = _ensure_cabinet()
+    _seed_hw_config(pid, 1, meter_type="ABB", phases=1, rated_amps=32.0)
+
+    captured, mqtt_patch = _capture_mqtt_publishes()
+    with mqtt_patch:
+        _trip_to(95, pid)
+
+    cfg = _get_socket_cfg(pid, 1)
+    assert bool(cfg.auto_stop_pending_ack) is True
+
+
+def test_autostop_broadcast_payload_has_severity_and_session_id():
+    """TC-ML-37 — meter_load_auto_stop event carries severity=AUTO_STOP and the ended session_id."""
+    pid = _ensure_cabinet()
+    _seed_hw_config(pid, 1, meter_type="ABB", phases=1, rated_amps=32.0)
+    sid = _seed_active_session(pid, 1)
+
+    captured, mqtt_patch = _capture_mqtt_publishes()
+    with mqtt_patch:
+        broadcasts = _trip_to(95, pid)
+
+    auto_stops = [b for b in broadcasts if b.get("event") == "meter_load_auto_stop"]
+    assert len(auto_stops) == 1
+    d = auto_stops[0]["data"]
+    assert d["pedestal_id"] == pid
+    assert d["socket_id"] == 1
+    assert d["severity"] == "AUTO_STOP"
+    assert d["session_id"] == sid
+    assert d["load_pct"] == pytest.approx(95.0, rel=1e-2)
+
+
+def test_autostop_terminal_does_not_fire_again():
+    """TC-ML-39 — when prev_status='auto_stop', subsequent ticks at >= 90%
+    do NOT publish another stop, do NOT add another alarm row, do NOT
+    broadcast another auto_stop event."""
+    pid = _ensure_cabinet()
+    _seed_hw_config(pid, 1, meter_type="ABB", phases=1, rated_amps=32.0)
+
+    captured, mqtt_patch = _capture_mqtt_publishes()
+    with mqtt_patch:
+        _trip_to(95, pid)               # initial trip
+        # Second tick still at 95% — terminal state, no new effects.
+        broadcasts = _trip_to(95, pid)
+
+    assert not any(b.get("event") == "meter_load_auto_stop" for b in broadcasts)
+    autostop_pubs = [(t, p) for t, p in captured if "autostop-" in p]
+    assert len(autostop_pubs) == 1   # only the first trip published
+
+    from app.models.meter_load_alarm import MeterLoadAlarm
+    db = _TestSession()
+    try:
+        rows = db.query(MeterLoadAlarm).filter_by(
+            pedestal_id=pid, socket_id=1, alarm_type="auto_stop", resolved_at=None,
+        ).all()
+        assert len(rows) == 1     # still just the original row
+    finally:
+        db.close()
+
+
+def test_autostop_terminal_persists_when_load_drops_below_90():
+    """TC-ML-40 — D1: auto_stop is terminal. After the trip, even if load
+    drops to 0%, status stays auto_stop until the operator's ack endpoint
+    clears the latch."""
+    pid = _ensure_cabinet()
+    _seed_hw_config(pid, 1, meter_type="ABB", phases=1, rated_amps=32.0)
+
+    captured, mqtt_patch = _capture_mqtt_publishes()
+    with mqtt_patch:
+        _trip_to(95, pid)   # auto-stop
+        _trip_to(40, pid)   # load drops back into normal range
+
+    cfg = _get_socket_cfg(pid, 1)
+    assert cfg.meter_load_status == "auto_stop"
+    assert bool(cfg.auto_stop_pending_ack) is True
+
+
+def _seed_socket_state(pedestal_id: int, socket_id: int, **fields) -> None:
+    """Insert/update a SocketState row so the controls.py guards have a row to read."""
+    from app.models.pedestal_config import SocketState
+    db = _TestSession()
+    try:
+        st = db.query(SocketState).filter_by(pedestal_id=pedestal_id, socket_id=socket_id).first()
+        if st is None:
+            st = SocketState(pedestal_id=pedestal_id, socket_id=socket_id)
+            db.add(st)
+        for k, v in fields.items():
+            setattr(st, k, v)
+        db.commit()
+    finally:
+        db.close()
+
+
+def _set_auto_stop_latch(pedestal_id: int, socket_id: int, value: bool) -> None:
+    from app.models.socket_config import SocketConfig
+    db = _TestSession()
+    try:
+        sc = db.query(SocketConfig).filter_by(pedestal_id=pedestal_id, socket_id=socket_id).first()
+        if sc is None:
+            sc = SocketConfig(pedestal_id=pedestal_id, socket_id=socket_id, auto_activate=False)
+            db.add(sc)
+        sc.auto_stop_pending_ack = value
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_approve_socket_returns_409_when_auto_stop_pending_ack(client, auth_headers):
+    """TC-ML-41 — admin approve endpoint blocked while latch is set."""
+    pid = _ensure_cabinet()
+    _seed_socket_state(pid, 1, operator_status="pending", connected=True)
+    _set_auto_stop_latch(pid, 1, True)
+
+    r = client.post(f"/api/controls/sockets/{pid}/1/approve", headers=auth_headers)
+    assert r.status_code == 409
+    assert "automatically stopped" in r.json()["detail"].lower()
+    assert "acknowledge" in r.json()["detail"].lower()
+
+
+def test_approve_socket_works_when_latch_cleared(client, auth_headers):
+    """TC-ML-42 — once the latch is cleared the normal approve path resumes."""
+    pid = _ensure_cabinet()
+    _seed_socket_state(pid, 1, operator_status="pending", connected=True)
+    _set_auto_stop_latch(pid, 1, False)
+
+    with patch("app.routers.controls.mqtt_service.publish"):
+        r = client.post(f"/api/controls/sockets/{pid}/1/approve", headers=auth_headers)
+
+    # 200 (session created+activated) is the success path.
+    assert r.status_code == 200, r.text
+
+
+def test_direct_socket_cmd_activate_returns_409_when_latch_set(client, auth_headers):
+    """TC-ML-43 — direct admin activate also guarded."""
+    pid = _ensure_cabinet()
+    _seed_socket_state(pid, 1, connected=True)
+    _set_auto_stop_latch(pid, 1, True)
+
+    with patch("app.routers.controls.mqtt_service.publish"):
+        r = client.post(
+            f"/api/controls/pedestal/{pid}/socket/Q1/cmd",
+            json={"action": "activate"},
+            headers=auth_headers,
+        )
+    assert r.status_code == 409
+    assert "automatically stopped" in r.json()["detail"].lower()
+
+
+def test_direct_socket_cmd_stop_works_when_latch_set(client, auth_headers):
+    """TC-ML-44 — stop is intentionally NOT guarded; operator can always stop."""
+    pid = _ensure_cabinet()
+    _seed_socket_state(pid, 1, connected=True)
+    _set_auto_stop_latch(pid, 1, True)
+
+    with patch("app.routers.controls.mqtt_service.publish"):
+        r = client.post(
+            f"/api/controls/pedestal/{pid}/socket/Q1/cmd",
+            json={"action": "stop"},
+            headers=auth_headers,
+        )
+    assert r.status_code == 200, r.text
+    assert r.json()["action"] == "stop"
+
+
+def test_auto_activate_precondition_returns_overload_reason_when_latch_set():
+    """TC-ML-45 — D8: _auto_activate_precondition_check skips with the
+    documented reason string when auto_stop_pending_ack is True. This
+    guards the auto-activation path that fires from UserPluggedIn."""
+    pid = _ensure_cabinet()
+    _seed_socket_state(pid, 1, connected=True)
+    _set_auto_stop_latch(pid, 1, True)
+
+    # Make all earlier checks pass: door closed, fresh heartbeat, no faults,
+    # no diagnostic, no active session. Door state lives on PedestalConfig.
+    from app.models.pedestal_config import PedestalConfig
+    from datetime import datetime as _dt
+    db = _TestSession()
+    try:
+        pc = db.query(PedestalConfig).filter_by(pedestal_id=pid).first()
+        if pc is not None:
+            pc.door_state = "closed"
+            db.commit()
+    finally:
+        db.close()
+
+    # Stamp the in-memory heartbeat dict so the heartbeat check passes.
+    from app.services import mqtt_handlers as _mh
+    _mh.last_heartbeat[pid] = _dt.utcnow()
+    # Clear any leftover diagnostic lockout / faults from earlier tests.
+    _mh.last_diagnostic_lockout_at.pop(pid, None)
+    for k in list(_mh.socket_fault_state.keys()):
+        if k[0] == pid:
+            _mh.socket_fault_state.pop(k, None)
+
+    db = _TestSession()
+    try:
+        with patch("app.services.mqtt_handlers.SessionLocal", _TestSession):
+            reason = _mh._auto_activate_precondition_check(db, pid, 1)
+    finally:
+        db.close()
+    assert reason == "overload alarm pending acknowledgment"
+
+
+def _trigger_auto_stop(pedestal_id: int, socket_id: int = 1) -> None:
+    """Drive the socket into auto_stop state via a 95% telemetry tick.
+    Used by the ack-endpoint tests so they exercise the real state."""
+    _seed_hw_config(pedestal_id, socket_id, meter_type="ABB", phases=1, rated_amps=32.0)
+    captured, mqtt_patch = _capture_mqtt_publishes()
+    with mqtt_patch:
+        _trip_to(95, pedestal_id, socket_id)
+
+
+def test_acknowledge_endpoint_clears_latch(client, auth_headers):
+    """TC-ML-46 — POST .../auto-stop/acknowledge sets auto_stop_pending_ack=False."""
+    pid = _ensure_cabinet()
+    _trigger_auto_stop(pid, 1)
+    assert _get_socket_cfg(pid, 1).auto_stop_pending_ack is True
+
+    r = client.post(
+        f"/api/pedestals/{pid}/sockets/1/load/auto-stop/acknowledge",
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "acknowledged"
+    assert body["socket_id"] == 1
+
+    cfg = _get_socket_cfg(pid, 1)
+    assert bool(cfg.auto_stop_pending_ack) is False
+    assert cfg.meter_load_status != "auto_stop"
+
+
+def test_acknowledge_endpoint_marks_alarm_with_admin_email(client, auth_headers):
+    """TC-ML-47 — alarm row gets acknowledged=True with admin email."""
+    pid = _ensure_cabinet()
+    _trigger_auto_stop(pid, 1)
+
+    r = client.post(
+        f"/api/pedestals/{pid}/sockets/1/load/auto-stop/acknowledge",
+        headers=auth_headers,
+    )
+    assert r.status_code == 200
+
+    from app.models.meter_load_alarm import MeterLoadAlarm
+    db = _TestSession()
+    try:
+        rows = db.query(MeterLoadAlarm).filter_by(
+            pedestal_id=pid, socket_id=1, alarm_type="auto_stop",
+        ).order_by(MeterLoadAlarm.id.desc()).all()
+        assert rows[0].acknowledged is True
+        assert rows[0].acknowledged_by == "admin@test.local"
+        assert rows[0].acknowledged_at is not None
+    finally:
+        db.close()
+
+
+def test_acknowledge_endpoint_broadcasts_event(client, auth_headers):
+    """TC-ML-48 — meter_load_auto_stop_acknowledged broadcast emitted."""
+    pid = _ensure_cabinet()
+    _trigger_auto_stop(pid, 1)
+
+    captured: list[dict] = []
+
+    async def capture(msg):
+        captured.append(msg)
+
+    with patch("app.routers.meter_load.ws_manager.broadcast", side_effect=capture):
+        r = client.post(
+            f"/api/pedestals/{pid}/sockets/1/load/auto-stop/acknowledge",
+            headers=auth_headers,
+        )
+    assert r.status_code == 200
+
+    acks = [m for m in captured if m.get("event") == "meter_load_auto_stop_acknowledged"]
+    assert len(acks) == 1
+    d = acks[0]["data"]
+    assert d["pedestal_id"] == pid
+    assert d["socket_id"] == 1
+    assert d["acknowledged_by"] == "admin@test.local"
+    assert d["alarm_id"] is not None
+    assert d["load_status"] != "auto_stop"
+
+
+def test_acknowledge_endpoint_returns_409_when_nothing_pending(client, auth_headers):
+    """TC-ML-49 — 409 when the latch isn't set."""
+    pid = _ensure_cabinet()
+    # Make sure there is a SocketConfig row but the latch is clear.
+    _seed_hw_config(pid, 1, meter_type="ABB", phases=1, rated_amps=32.0)
+
+    r = client.post(
+        f"/api/pedestals/{pid}/sockets/1/load/auto-stop/acknowledge",
+        headers=auth_headers,
+    )
+    assert r.status_code == 409
+
+
+def test_socket_can_be_reactivated_after_acknowledge(client, auth_headers):
+    """TC-ML-50 — after ack, the approve flow no longer returns 409."""
+    pid = _ensure_cabinet()
+    _trigger_auto_stop(pid, 1)
+    _seed_socket_state(pid, 1, operator_status="pending", connected=True)
+
+    # Pre-ack: approve is blocked.
+    r1 = client.post(f"/api/controls/sockets/{pid}/1/approve", headers=auth_headers)
+    assert r1.status_code == 409
+
+    # Ack.
+    r2 = client.post(
+        f"/api/pedestals/{pid}/sockets/1/load/auto-stop/acknowledge",
+        headers=auth_headers,
+    )
+    assert r2.status_code == 200
+
+    # Post-ack: approve succeeds.
+    with patch("app.routers.controls.mqtt_service.publish"):
+        r3 = client.post(f"/api/controls/sockets/{pid}/1/approve", headers=auth_headers)
+    assert r3.status_code == 200, r3.text
+
+
+def test_erp_auto_stop_acknowledge_records_erp_service(client):
+    """TC-ML-51 — ERP-driven ack records acknowledged_by='erp-service' (D7).
+    Verifies the audit trail can distinguish ERP from operator acks."""
+    pid = _ensure_cabinet()
+    _trigger_auto_stop(pid, 1)
+    _enable_ext_endpoints(["load.auto_stop_ack_ext"])
+
+    r = client.post(
+        f"/api/ext/pedestals/{pid}/sockets/1/load/auto-stop/acknowledge",
+        headers={"Authorization": f"Bearer {_make_ext_jwt()}"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "acknowledged"
+    assert body["socket_id"] == 1
+
+    cfg = _get_socket_cfg(pid, 1)
+    assert bool(cfg.auto_stop_pending_ack) is False
+
+    from app.models.meter_load_alarm import MeterLoadAlarm
+    db = _TestSession()
+    try:
+        alarm = (
+            db.query(MeterLoadAlarm)
+            .filter_by(pedestal_id=pid, socket_id=1, alarm_type="auto_stop")
+            .order_by(MeterLoadAlarm.id.desc())
+            .first()
+        )
+        assert alarm is not None
+        assert alarm.acknowledged is True
+        assert alarm.acknowledged_by == "erp-service"
+    finally:
+        db.close()
+
+
+def test_erp_auto_stop_acknowledge_503_when_endpoint_disabled(client):
+    """TC-ML-52 — disabled per-endpoint toggle returns 503 like the other ERP routes."""
+    pid = _ensure_cabinet()
+    _trigger_auto_stop(pid, 1)
+    # Enable a DIFFERENT endpoint to prove the toggle is per-endpoint.
+    _enable_ext_endpoints(["load.pedestal_get_ext"])
+
+    r = client.post(
+        f"/api/ext/pedestals/{pid}/sockets/1/load/auto-stop/acknowledge",
+        headers={"Authorization": f"Bearer {_make_ext_jwt()}"},
+    )
+    assert r.status_code == 503
+
+
+def test_erp_auto_stop_acknowledge_401_on_missing_auth(client):
+    """TC-ML-53 — no Authorization header returns 401."""
+    pid = _ensure_cabinet()
+    _enable_ext_endpoints(["load.auto_stop_ack_ext"])
+    r = client.post(f"/api/ext/pedestals/{pid}/sockets/1/load/auto-stop/acknowledge")
+    assert r.status_code == 401
+
+
+def test_autostop_supersedes_open_warning_critical_rows():
+    """When transitioning critical → auto_stop, any open warning/critical
+    rows are resolved with reason='auto-stop-supersedes' so the alarm
+    history is consistent."""
+    pid = _ensure_cabinet()
+    _seed_hw_config(pid, 1, meter_type="ABB", phases=1, rated_amps=32.0)
+
+    captured, mqtt_patch = _capture_mqtt_publishes()
+    with mqtt_patch:
+        _trip_to(85, pid)   # opens a critical row
+        _trip_to(95, pid)   # auto-stop
+
+    from app.models.meter_load_alarm import MeterLoadAlarm
+    db = _TestSession()
+    try:
+        crit_rows = db.query(MeterLoadAlarm).filter_by(
+            pedestal_id=pid, socket_id=1, alarm_type="critical",
+        ).all()
+        assert len(crit_rows) == 1
+        assert crit_rows[0].resolved_at is not None
+        assert crit_rows[0].resolved_by == "auto-stop-supersedes"
+
+        autostop_open = db.query(MeterLoadAlarm).filter_by(
+            pedestal_id=pid, socket_id=1, alarm_type="auto_stop", resolved_at=None,
+        ).all()
+        assert len(autostop_open) == 1
+    finally:
+        db.close()
+
+
+# ─── v3.12 catalog drift guards ─────────────────────────────────────────────
+
+def test_api_catalog_has_auto_stop_ack_endpoint():
+    """TC-ML-54 — load.auto_stop_ack_ext registered under Load Monitoring."""
+    from app.services.api_catalog import ENDPOINT_CATALOG
+    matches = [e for e in ENDPOINT_CATALOG if e["id"] == "load.auto_stop_ack_ext"]
+    assert len(matches) == 1
+    e = matches[0]
+    assert e["category"] == "Load Monitoring"
+    assert e["method"] == "POST"
+    assert e["path"].endswith("/auto-stop/acknowledge")
+
+
+def test_api_catalog_has_auto_stop_events():
+    """TC-ML-55 — both auto-stop events registered under Load Monitoring."""
+    from app.services.api_catalog import EVENT_CATALOG
+    ids = {e["id"] for e in EVENT_CATALOG}
+    assert "meter_load_auto_stop" in ids
+    assert "meter_load_auto_stop_acknowledged" in ids
+    for e in EVENT_CATALOG:
+        if e["id"].startswith("meter_load_auto_stop"):
+            assert e["category"] == "Load Monitoring"

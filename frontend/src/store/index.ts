@@ -290,7 +290,8 @@ interface AppStore {
     voltage_l2: number | null
     voltage_l3: number | null
     load_pct: number | null
-    load_status: 'normal' | 'warning' | 'critical' | 'unknown'
+    // v3.12 — `auto_stop` added.
+    load_status: 'normal' | 'warning' | 'critical' | 'auto_stop' | 'unknown'
     warning_threshold_pct: number
     critical_threshold_pct: number
     updated_at: string
@@ -308,6 +309,26 @@ interface AppStore {
   activeWarningLoadAlarms: string[]
   addLoadAlarm: (severity: 'warning' | 'critical', key: string) => void
   clearLoadAlarm: (key: string) => void
+
+  // v3.12 — auto-stop overload protection. The latch blocks re-activation
+  // until an admin acknowledges, regardless of live load_pct (D1).
+  // pendingAutoStopAlarms collects rich payload data per socket so the
+  // System Health "Auto-Stop Alarms" section can render without an extra
+  // REST round-trip. Keyed by `${pedestal_id}-${socket_id}` consistently.
+  autoStopPendingAck: Record<string, boolean>
+  setAutoStopPendingAck: (pedestal_id: number, socket_id: number, value: boolean) => void
+  pendingAutoStopAlarms: Array<{
+    key: string                // `${pedestal_id}-${socket_id}`
+    pedestal_id: number
+    socket_id: number
+    current_amps: number | null
+    rated_amps: number | null
+    load_pct: number | null
+    session_id: number | null
+    triggered_at: string
+  }>
+  addAutoStopAlarm: (alarm: AppStore['pendingAutoStopAlarms'][number]) => void
+  acknowledgeAutoStopAlarm: (pedestal_id: number, socket_id: number) => void
 
   // v3.5 — transient "auto-activate skipped" warning per socket. Populated by
   // the `socket_auto_activate_skipped` WS event and auto-cleared after 30 s.
@@ -349,8 +370,11 @@ interface AppStore {
   resetNewErrors: () => void
 
   // Hardware alarm level (for nav indicator and WS events)
-  hwAlarmLevel: 'none' | 'warning' | 'critical'
-  setHwAlarmLevel: (level: 'none' | 'warning' | 'critical') => void
+  // v3.12 — `auto_stop` added: takes precedence over `critical` in the
+  // nav badge so an unack'd 90% overload trip is the most prominent thing
+  // an operator sees on the sidebar (D9 + spec).
+  hwAlarmLevel: 'none' | 'warning' | 'critical' | 'auto_stop'
+  setHwAlarmLevel: (level: 'none' | 'warning' | 'critical' | 'auto_stop') => void
 
   // Berth occupancy
   berthOccupancy: BerthStatus[]
@@ -634,6 +658,36 @@ export const useStore = create<AppStore>((set) => ({
       activeCriticalLoadAlarms: s.activeCriticalLoadAlarms.filter((k) => k !== key),
       activeWarningLoadAlarms: s.activeWarningLoadAlarms.filter((k) => k !== key),
     })),
+
+  // v3.12 — auto-stop overload state.
+  autoStopPendingAck: {},
+  setAutoStopPendingAck: (pedestal_id, socket_id, value) =>
+    set((s) => ({
+      autoStopPendingAck: { ...s.autoStopPendingAck, [`${pedestal_id}-${socket_id}`]: value },
+    })),
+  pendingAutoStopAlarms: [],
+  addAutoStopAlarm: (alarm) =>
+    set((s) => {
+      // Replace any prior unack'd entry for the same socket so the System
+      // Health panel always shows the freshest snapshot. Also strip any
+      // open warning/critical entries on this key — the auto-stop alarm
+      // supersedes them in the UI just as it does in the backend.
+      const filtered = s.pendingAutoStopAlarms.filter((a) => a.key !== alarm.key)
+      return {
+        pendingAutoStopAlarms: [...filtered, alarm],
+        autoStopPendingAck: { ...s.autoStopPendingAck, [alarm.key]: true },
+        activeCriticalLoadAlarms: s.activeCriticalLoadAlarms.filter((k) => k !== alarm.key),
+        activeWarningLoadAlarms: s.activeWarningLoadAlarms.filter((k) => k !== alarm.key),
+      }
+    }),
+  acknowledgeAutoStopAlarm: (pedestal_id, socket_id) =>
+    set((s) => {
+      const key = `${pedestal_id}-${socket_id}`
+      return {
+        pendingAutoStopAlarms: s.pendingAutoStopAlarms.filter((a) => a.key !== key),
+        autoStopPendingAck: { ...s.autoStopPendingAck, [key]: false },
+      }
+    }),
 
   socketAutoSkipReasons: {},
   setSocketAutoSkipReason: (pedestal_id, socket_id, reason) =>

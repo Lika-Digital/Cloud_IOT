@@ -339,6 +339,20 @@ async def approve_socket(
     if existing and existing.status == "active":
         raise HTTPException(status_code=409, detail="Socket already has an active session")
 
+    # v3.12 — block re-activation when an auto-stop overload alarm is
+    # awaiting operator acknowledgment. The latch is cleared only by the
+    # acknowledge endpoint, not by the load dropping back below 90%.
+    from ..models.socket_config import SocketConfig as _SocketConfig
+    sc = db.query(_SocketConfig).filter(
+        _SocketConfig.pedestal_id == pedestal_id,
+        _SocketConfig.socket_id == socket_id,
+    ).first()
+    if sc is not None and getattr(sc, "auto_stop_pending_ack", False):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Socket was automatically stopped due to overload. Acknowledge the alarm before re-activating.",
+        )
+
     session = session_service.create_pending(db, pedestal_id, socket_id, "electricity")
     session_service.activate(db, session)
 
@@ -525,6 +539,20 @@ async def direct_socket_cmd(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Socket has no plug inserted",
+            )
+        # v3.12 — block re-activation while an auto-stop overload alarm is
+        # awaiting operator acknowledgment. Stop commands are intentionally
+        # NOT guarded — the operator can always stop a socket regardless of
+        # alarm state.
+        from ..models.socket_config import SocketConfig as _SocketConfig
+        sc = db.query(_SocketConfig).filter(
+            _SocketConfig.pedestal_id == pedestal_id,
+            _SocketConfig.socket_id == socket_id,
+        ).first()
+        if sc is not None and getattr(sc, "auto_stop_pending_ack", False):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Socket was automatically stopped due to overload. Acknowledge the alarm before re-activating.",
             )
 
     cabinet_id = _get_cabinet_id(db, pedestal_id)

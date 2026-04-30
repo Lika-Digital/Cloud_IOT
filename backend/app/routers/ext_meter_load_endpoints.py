@@ -6,20 +6,22 @@ mirror `ext_pedestal_endpoints.py` (v3.3) and `ext_breaker_endpoints.py`
 (v3.8) — same `_check_ext_auth` + `_endpoint_enabled` flow.
 
 Routes:
-  GET /api/ext/pedestals/{pedestal_id}/load
-  GET /api/ext/pedestals/{pedestal_id}/sockets/{socket_id}/load
-  GET /api/ext/marinas/{marina_id}/load/alarms
-  GET /api/ext/pedestals/{pedestal_id}/load/alarms
-  GET /api/ext/pedestals/{pedestal_id}/sockets/{socket_id}/load/history
+  GET  /api/ext/pedestals/{pedestal_id}/load
+  GET  /api/ext/pedestals/{pedestal_id}/sockets/{socket_id}/load
+  GET  /api/ext/marinas/{marina_id}/load/alarms
+  GET  /api/ext/pedestals/{pedestal_id}/load/alarms
+  GET  /api/ext/pedestals/{pedestal_id}/sockets/{socket_id}/load/history
+  POST /api/ext/pedestals/{pedestal_id}/sockets/{socket_id}/load/auto-stop/acknowledge  (v3.12)
 """
 from __future__ import annotations
 
 import hmac
 import json
 import logging
+from datetime import datetime
 
 import jwt as pyjwt
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ..config import settings
@@ -29,7 +31,8 @@ from ..models.meter_load_alarm import MeterLoadAlarm
 from ..models.pedestal import Pedestal
 from ..models.pedestal_config import PedestalConfig
 from ..models.socket_config import SocketConfig
-from .meter_load import serialize_alarm, serialize_load_state
+from ..services.websocket_manager import ws_manager
+from .meter_load import perform_auto_stop_acknowledge, serialize_alarm, serialize_load_state
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["ext-meter-load"])
@@ -39,6 +42,7 @@ _EP_SOCKET_LOAD   = "load.socket_get_ext"
 _EP_MARINA_ALARMS = "load.marina_alarms_ext"
 _EP_PED_ALARMS    = "load.pedestal_alarms_ext"
 _EP_HISTORY       = "load.socket_history_ext"
+_EP_AUTO_STOP_ACK = "load.auto_stop_ack_ext"   # v3.12
 
 
 # ── Auth + toggle helpers (copied 1:1 from ext_breaker_endpoints) ──────────
@@ -247,3 +251,49 @@ async def ext_socket_load_history(pedestal_id: int, socket_id: int, request: Req
         })
     finally:
         db.close()
+
+
+# ── 6. v3.12 — ERP-driven auto-stop alarm acknowledgment ────────────────────
+
+@router.post("/api/ext/pedestals/{pedestal_id}/sockets/{socket_id}/load/auto-stop/acknowledge")
+async def ext_auto_stop_acknowledge(pedestal_id: int, socket_id: int, request: Request):
+    """ERP twin of the internal acknowledge endpoint. Same atomic semantics
+    (D5) — clears the latch and acks the latest open auto-stop alarm row.
+    Records `acknowledged_by="erp-service"` per D7 so audit trails can
+    distinguish between operator-driven and ERP-driven acks. Broadcasts
+    the same `meter_load_auto_stop_acknowledged` event so dashboards
+    update in real time regardless of which channel triggered the ack."""
+    _, err = _check_ext_auth(request)
+    if err:
+        return err
+    if not _endpoint_enabled(_EP_AUTO_STOP_ACK):
+        return _feature_not_available()
+
+    db = SessionLocal()
+    try:
+        if db.get(Pedestal, pedestal_id) is None:
+            return JSONResponse({"detail": "Pedestal not found"}, status_code=404)
+        try:
+            cfg, alarm, new_status = perform_auto_stop_acknowledge(
+                db, pedestal_id, socket_id, actor_label="erp-service",
+            )
+        except HTTPException as e:
+            return JSONResponse({"detail": e.detail}, status_code=e.status_code)
+    finally:
+        db.close()
+
+    await ws_manager.broadcast({
+        "event": "meter_load_auto_stop_acknowledged",
+        "data": {
+            "pedestal_id": pedestal_id,
+            "socket_id": socket_id,
+            "alarm_id": alarm.id if alarm is not None else None,
+            "acknowledged_by": "erp-service",
+            "acknowledged_at": (alarm.acknowledged_at.isoformat()
+                                 if alarm is not None and alarm.acknowledged_at else None),
+            "load_status": new_status,
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    })
+
+    return JSONResponse({"status": "acknowledged", "socket_id": socket_id})

@@ -39,6 +39,8 @@ ENDPOINT_CATALOG = [
     {"id": "load.marina_alarms_ext",  "path": "/api/ext/marinas/{marina_id}/load/alarms",                              "method": "GET", "category": "Load Monitoring", "allow_bidirectional": False},
     {"id": "load.pedestal_alarms_ext","path": "/api/ext/pedestals/{pedestal_id}/load/alarms",                          "method": "GET", "category": "Load Monitoring", "allow_bidirectional": False},
     {"id": "load.socket_history_ext", "path": "/api/ext/pedestals/{pedestal_id}/sockets/{socket_id}/load/history",     "method": "GET", "category": "Load Monitoring", "allow_bidirectional": False},
+    # v3.12 — auto-stop overload protection: ERP-driven acknowledgment.
+    {"id": "load.auto_stop_ack_ext",  "path": "/api/ext/pedestals/{pedestal_id}/sockets/{socket_id}/load/auto-stop/acknowledge", "method": "POST", "category": "Load Monitoring", "allow_bidirectional": True},
     # Mobile QR-claim + monitoring (v3.6)
     {"id": "mobile.qr_claim",        "path": "/api/mobile/qr/claim",                                            "method": "POST",  "category": "Mobile", "allow_bidirectional": True},
     {"id": "mobile.session_live",    "path": "/api/mobile/sessions/{session_id}/live",                          "method": "GET",   "category": "Mobile", "allow_bidirectional": False},
@@ -109,4 +111,7 @@ EVENT_CATALOG = [
     {"id": "meter_load_warning",       "name": "Meter Load Warning",      "category": "Load Monitoring"},
     {"id": "meter_load_critical",      "name": "Meter Load Critical",     "category": "Load Monitoring"},
     {"id": "meter_load_resolved",      "name": "Meter Load Resolved",     "category": "Load Monitoring"},
+    # v3.12 — 90% auto-stop overload protection.
+    {"id": "meter_load_auto_stop",     "name": "Meter Load Auto-Stop",        "category": "Load Monitoring"},
+    {"id": "meter_load_auto_stop_acknowledged", "name": "Auto-Stop Acknowledged", "category": "Load Monitoring"},
 ]

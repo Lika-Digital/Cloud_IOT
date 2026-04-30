@@ -22,7 +22,7 @@ export default function Layout() {
     return () => clearInterval(interval)
   }, [isAdmin])
 
-  type NavItem = { to: string; label: string; icon: string; badge: number; hwAlarm?: 'none' | 'warning' | 'critical' }
+  type NavItem = { to: string; label: string; icon: string; badge: number; hwAlarm?: 'none' | 'warning' | 'critical' | 'auto_stop' }
   const NAV_ITEMS: NavItem[] = [
     { to: '/dashboard', label: 'Dashboard', icon: '⚡', badge: 0 },
     { to: '/analytics', label: 'Analytics', icon: '📊', badge: 0 },
@@ -71,8 +71,15 @@ export default function Layout() {
               <span className="flex-1">{item.label}</span>
               {item.hwAlarm && item.hwAlarm !== 'none' && (
                 <span className={`w-2.5 h-2.5 rounded-full animate-pulse flex-shrink-0 ${
+                  // v3.12 — auto_stop is the highest severity (rendered as a
+                  // brighter red ring so it's distinct from a regular critical).
+                  item.hwAlarm === 'auto_stop' ? 'bg-red-500 ring-2 ring-red-300' :
                   item.hwAlarm === 'critical' ? 'bg-red-500' : 'bg-yellow-400'
-                }`} title={`HW ${item.hwAlarm} alarm active`} />
+                }`} title={
+                  item.hwAlarm === 'auto_stop'
+                    ? 'Socket auto-stopped — overload alarm pending acknowledgment'
+                    : `HW ${item.hwAlarm} alarm active`
+                } />
               )}
               {item.badge > 0 && (
                 <span className="bg-red-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">

@@ -34,6 +34,104 @@ Mosquitto Broker (:1883)                  │                         │
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-04-30 — 90 % auto-stop overload protection (v3.12)
+- Adds a third threshold tier on top of v3.11 load monitoring: when meter
+  telemetry shows a socket reaching **90 % of `rated_amps`**, the backend
+  automatically ends the active session, publishes a stop command on
+  `opta/cmd/socket/Q{n}` (same payload shape as the operator's direct
+  command), and writes a persistent alarm. The 60 % / 80 % thresholds and
+  their state machine are completely untouched.
+- New `socket_configs.auto_stop_pending_ack` boolean (default `false`).
+  Set atomically by the auto-stop sequence; cleared only by the new
+  acknowledge endpoint, never by the load dropping back below 90 %.
+  Migration is idempotent ALTER TABLE per the existing pattern.
+- Auto-stop is **terminal**: once `meter_load_status` flips to
+  `auto_stop`, the existing classifier is bypassed for that socket
+  until an admin acknowledges. Live readings still update every tick;
+  only the state-machine transitions are suspended.
+- New session `end_reason="auto_stop_overload"` distinguishes the
+  protective stop from operator stop or `breaker_trip`.
+- New `meter_load_alarms.alarm_type="auto_stop"` row created on every
+  trip. Pre-existing open `warning` / `critical` rows for the same
+  socket are auto-resolved with `resolved_by="auto-stop-supersedes"`
+  so the alarm history stays consistent.
+- Re-activation guard added in three places:
+  `POST /api/controls/sockets/{pid}/{sid}/approve`,
+  `POST /api/controls/pedestal/{pid}/socket/{Q}/cmd` (action `activate`
+  only — `stop` stays unguarded so the operator can always stop), and
+  `_maybe_auto_activate` (the v3.5 plug-in auto-fire). All three return
+  HTTP 409 / log skip-reason `"overload alarm pending acknowledgment"`
+  while the latch is set.
+- New socket-scoped acknowledge endpoint
+  `POST /api/pedestals/{pid}/sockets/{sid}/load/auto-stop/acknowledge`
+  (admin only). Atomic transaction: clears the latch, marks the latest
+  open auto-stop row acknowledged with the admin's email, reclassifies
+  `meter_load_status` from the live `load_pct` (treats prev_status as
+  `unknown` so the operator's ack is a clean restart with no hysteresis
+  carryover). Returns `{"status":"acknowledged","socket_id":N}`.
+- ERP twin at `/api/ext/.../auto-stop/acknowledge` mirrors the internal
+  semantics but records `acknowledged_by="erp-service"` so the audit
+  trail can distinguish operator from ERP-driven acks. Registered as
+  `load.auto_stop_ack_ext` under api_catalog category "Load Monitoring".
+- Two new WebSocket events: `meter_load_auto_stop` (severity
+  `AUTO_STOP`, payload includes the ended `session_id`) and
+  `meter_load_auto_stop_acknowledged`. Both registered in EVENT_CATALOG
+  so the External API webhook can opt into them.
+- Frontend `LoadStatus` union extended with `'auto_stop'` (D9 — TS
+  errors at every render path force explicit handling). New store
+  fields `autoStopPendingAck` and `pendingAutoStopAlarms` plus
+  `setAutoStopPendingAck` / `addAutoStopAlarm` /
+  `acknowledgeAutoStopAlarm` actions.
+- `SocketLoadMeterPanel.tsx` gets a prominent red banner — "⚡ AUTO-STOP
+  — OVERLOAD PROTECTION ACTIVATED" — with the stop-time amps/percentage
+  readout and an admin-only "Acknowledge & Enable Re-activation"
+  button. Click triggers a `window.confirm` with the spec's safety copy
+  ("Are you sure you want to acknowledge this overload alarm? Ensure
+  the boat has reduced its power consumption…") before posting.
+- Control Center Activate button is disabled with tooltip *"Acknowledge
+  the overload alarm first"* whenever `autoStopPendingAck[key]` is
+  true, on top of the existing plug-inserted guard.
+- System Health page adds a fourth alarm card "AUTO-STOP ALARMS"
+  rendered above the v3.11 "Meter Load Alarms" card. Each row shows
+  pedestal+socket id, current/rated amps at trip, percentage, optional
+  ended session id, timestamp, status text ("Pending acknowledgment"
+  vs "Acknowledged"), and admin Acknowledge button. Existing v3.11
+  card filters out auto_stop rows so they're not duplicated.
+- Nav badge `hwAlarmLevel` extended with `'auto_stop'` — takes
+  precedence over `'critical'` so an unacknowledged 90 % trip is the
+  most prominent indicator on the sidebar (red dot with a brighter
+  red-300 ring).
+- Admin role gets a Browser Notification on `meter_load_auto_stop`
+  with the ⚡ emoji and the load percentage.
+- 25 new backend tests (`test_meter_load.py` — TC-ML-31..55):
+  - 90 % boundary fires / 89.9 % does not fire / terminal state
+    short-circuits a re-trip / load drop below 90 % keeps status
+    auto_stop until ack
+  - MQTT publish payload (topic, action, msgId, cabinetId)
+  - Session completion with `end_reason="auto_stop_overload"`
+  - Alarm row insertion with `alarm_type="auto_stop"`
+  - Latch flips True; broadcast severity / session_id present
+  - Open warning/critical superseded with `auto-stop-supersedes`
+  - 409 from `approve_socket` and `direct_socket_cmd` activate;
+    stop unaffected; `_auto_activate_precondition_check` returns
+    the documented skip reason
+  - Acknowledge endpoint (internal) clears latch, marks alarm with
+    admin email, broadcasts `meter_load_auto_stop_acknowledged`,
+    409 when nothing pending, allows re-activate after ack
+  - ERP acknowledge records `erp-service`, 503 when toggle off,
+    401 missing auth
+  - api_catalog drift guards for the new endpoint + events
+  Total backend suite **339 → 364 passing, 0 failures**. TypeScript
+  clean (the `LoadStatus` union extension forced explicit handling
+  in `STATUS_BAR_COLOR` / `STATUS_TEXT` / `STATUS_BADGE_CLASS` and
+  the nav-badge `hwAlarmLevel` map — exactly the safety net D9 was
+  designed to provide).
+- The implementation strictly never hardcodes a `rated_amps` value
+  anywhere — the 90 % calculation derives entirely from
+  `SocketConfig.rated_amps` populated by `opta/config/hardware`
+  during pedestal discovery, and the auto-stop branch is skipped
+  with a warning log when `rated_amps` is null.
+
 ### 2026-04-28 — Live socket meter telemetry + load monitoring (v3.11)
 - Two new MQTT topics — `opta/config/hardware` (one-shot per cabinet, lists
   meter type / phases / ratedAmps / modbusAddress per socket) and

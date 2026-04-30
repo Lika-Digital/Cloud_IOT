@@ -42,6 +42,8 @@ export function useWebSocket() {
     setLoadState,
     addLoadAlarm,
     clearLoadAlarm,
+    addAutoStopAlarm,
+    acknowledgeAutoStopAlarm,
   } = useStore()
   const { role } = useAuthStore()
 
@@ -505,6 +507,47 @@ export function useWebSocket() {
           const d = msg.data
           if (typeof d?.pedestal_id === 'number' && typeof d?.socket_id === 'number') {
             clearLoadAlarm(`${d.pedestal_id}-${d.socket_id}`)
+          }
+          break
+        }
+        case 'meter_load_auto_stop': {
+          // v3.12 — 90% threshold tripped an automatic socket stop. The
+          // backend has already published the stop command and ended the
+          // session; this handler updates the dashboard latch + collects
+          // alarm data for the System Health panel and fires an admin
+          // Browser Notification (highest severity).
+          const d = msg.data
+          if (typeof d?.pedestal_id === 'number' && typeof d?.socket_id === 'number') {
+            const key = `${d.pedestal_id}-${d.socket_id}`
+            addAutoStopAlarm({
+              key,
+              pedestal_id: d.pedestal_id,
+              socket_id: d.socket_id,
+              current_amps: typeof d.current_amps === 'number' ? d.current_amps : null,
+              rated_amps: typeof d.rated_amps === 'number' ? d.rated_amps : null,
+              load_pct: typeof d.load_pct === 'number' ? d.load_pct : null,
+              session_id: typeof d.session_id === 'number' ? d.session_id : null,
+              triggered_at: (typeof d.timestamp === 'string' ? d.timestamp : new Date().toISOString()),
+            })
+            if (role === 'admin'
+                && typeof Notification !== 'undefined'
+                && Notification.permission === 'granted') {
+              const loadPct = typeof d.load_pct === 'number' ? `${d.load_pct.toFixed(0)}%` : 'over 90%'
+              new Notification('⚡ Socket auto-stopped — overload protection', {
+                body: `Pedestal ${d.pedestal_id} socket Q${d.socket_id} stopped at ${loadPct} of rated capacity`,
+                icon: '/vite.svg',
+              })
+            }
+          }
+          break
+        }
+        case 'meter_load_auto_stop_acknowledged': {
+          // v3.12 — operator (or ERP) cleared the latch. Drop the alarm
+          // from the System Health panel and stop blocking the socket's
+          // Activate button in Control Center.
+          const d = msg.data
+          if (typeof d?.pedestal_id === 'number' && typeof d?.socket_id === 'number') {
+            acknowledgeAutoStopAlarm(d.pedestal_id, d.socket_id)
           }
           break
         }

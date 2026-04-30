@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '../../store'
 import {
+  acknowledgeAutoStop,
   getSocketLoad,
   patchLoadThresholds,
   type LoadStatus,
@@ -26,24 +27,31 @@ interface Props {
 }
 
 const STATUS_BAR_COLOR: Record<LoadStatus, string> = {
-  normal:   'bg-green-500',
-  warning:  'bg-yellow-500',
-  critical: 'bg-red-500 animate-pulse',
-  unknown:  'bg-gray-500',
+  normal:    'bg-green-500',
+  warning:   'bg-yellow-500',
+  critical:  'bg-red-500 animate-pulse',
+  // v3.12 — solid red with strong pulse to distinguish from `critical`
+  // (which also pulses but is a yellow→red transition state). The
+  // `auto_stop` bar is rendered at 90 %+ fill regardless of live amps
+  // because the socket has been forcibly de-energised.
+  auto_stop: 'bg-red-600 ring-2 ring-red-400 animate-pulse',
+  unknown:   'bg-gray-500',
 }
 
 const STATUS_TEXT: Record<LoadStatus, string> = {
-  normal:   'Normal',
-  warning:  'High load',
-  critical: 'CRITICAL load — act now',
-  unknown:  'Unknown',
+  normal:    'Normal',
+  warning:   'High load',
+  critical:  'CRITICAL load — act now',
+  auto_stop: 'AUTO-STOP — overload protection',
+  unknown:   'Unknown',
 }
 
 const STATUS_BADGE_CLASS: Record<LoadStatus, string> = {
-  normal:   'bg-green-900/40 border-green-700/60 text-green-300',
-  warning:  'bg-yellow-900/40 border-yellow-700/60 text-yellow-200',
-  critical: 'bg-red-900/40 border-red-700/60 text-red-200 animate-pulse',
-  unknown:  'bg-gray-800 border-gray-700 text-gray-400',
+  normal:    'bg-green-900/40 border-green-700/60 text-green-300',
+  warning:   'bg-yellow-900/40 border-yellow-700/60 text-yellow-200',
+  critical:  'bg-red-900/40 border-red-700/60 text-red-200 animate-pulse',
+  auto_stop: 'bg-red-950 border-red-500 text-red-100 animate-pulse',
+  unknown:   'bg-gray-800 border-gray-700 text-gray-400',
 }
 
 function fmtNum(v: number | null | undefined, digits = 1, suffix = ''): string {
@@ -78,10 +86,17 @@ export default function SocketLoadMeterPanel({
   const hwCfg = useStore((s) => s.socketHardwareConfig[key])
   const live = useStore((s) => s.socketLoadStates[key])
   const setLoadState = useStore((s) => s.setLoadState)
+  // v3.12 — auto-stop latch + recent alarm payload.
+  const autoStopPending = useStore((s) => s.autoStopPendingAck[key] ?? false)
+  const autoStopAlarm = useStore((s) =>
+    s.pendingAutoStopAlarms.find((a) => a.key === key) ?? null,
+  )
+  const acknowledgeAutoStopAlarm = useStore((s) => s.acknowledgeAutoStopAlarm)
 
   const [warnInput, setWarnInput] = useState<number>(60)
   const [critInput, setCritInput] = useState<number>(80)
   const [busy, setBusy] = useState(false)
+  const [ackBusy, setAckBusy] = useState(false)
 
   // Initial fetch — populates store via setLoadState even if no WS event has arrived yet.
   useEffect(() => {
@@ -121,6 +136,29 @@ export default function SocketLoadMeterPanel({
   const totalAmps = live?.current_amps ?? null
   const loadPct = live?.load_pct ?? null
 
+  const handleAcknowledgeAutoStop = async () => {
+    // Match the spec confirmation copy exactly so the operator sees the
+    // safety reminder before unblocking re-activation.
+    const ok = window.confirm(
+      'Are you sure you want to acknowledge this overload alarm? Ensure the boat has reduced its power consumption before re-activating the socket.',
+    )
+    if (!ok) return
+    setAckBusy(true)
+    try {
+      await acknowledgeAutoStop(pedestalId, socketId)
+      // Optimistic local state update — the WS broadcast that follows
+      // will land the same change but having it immediate avoids a
+      // visible lag between click and banner disappearing.
+      acknowledgeAutoStopAlarm(pedestalId, socketId)
+      onFeedback(`load-${socketName}-autostop-ack`, 'success', 'Auto-stop alarm acknowledged — socket can be re-activated')
+    } catch (err) {
+      const e = err as { response?: { data?: { detail?: string } } }
+      onFeedback(`load-${socketName}-autostop-ack`, 'error', e?.response?.data?.detail ?? 'Acknowledge failed')
+    } finally {
+      setAckBusy(false)
+    }
+  }
+
   const handleSaveThresholds = async () => {
     if (warnInput < 1 || warnInput > 99 || critInput < 1 || critInput > 99) {
       onFeedback(`load-${socketName}-thresh`, 'error', 'Thresholds must be between 1 and 99')
@@ -157,10 +195,53 @@ export default function SocketLoadMeterPanel({
           className={`text-[10px] font-medium px-2 py-0.5 rounded border ${STATUS_BADGE_CLASS[status]}`}
           aria-live="polite"
         >
-          {status === 'critical' ? '🔴 ' : status === 'warning' ? '⚠️ ' : ''}
+          {status === 'auto_stop' ? '⚡ ' :
+           status === 'critical' ? '🔴 ' :
+           status === 'warning'  ? '⚠️ ' : ''}
           {STATUS_TEXT[status]}
         </span>
       </div>
+
+      {/* v3.12 — Auto-stop overload banner. Rendered when the latch is
+          set so an operator returning to the page after the WS event
+          fired still sees it. Acknowledge is admin-only and resets both
+          the dashboard latch and the backend SocketConfig flag. */}
+      {autoStopPending && (
+        <div
+          className="rounded-md border-2 border-red-500 bg-red-950/50 p-3 space-y-2 text-red-100"
+          role="alert"
+          aria-live="assertive"
+        >
+          <p className="text-sm font-bold">
+            ⚡ AUTO-STOP — OVERLOAD PROTECTION ACTIVATED
+          </p>
+          <p className="text-[12px] leading-snug">
+            Socket stopped automatically at{' '}
+            <span className="font-mono">
+              {fmtNum(autoStopAlarm?.load_pct ?? loadPct, 0, '%')}
+            </span>{' '}
+            of rated capacity{' '}
+            <span className="font-mono text-red-200">
+              ({fmtNum(autoStopAlarm?.current_amps ?? totalAmps, 1, 'A')} /{' '}
+              {fmtNum(autoStopAlarm?.rated_amps ?? ratedAmps, 0, 'A')})
+            </span>
+            .
+          </p>
+          <p className="text-[12px] text-red-200/90">
+            Investigate the load before re-activating.
+          </p>
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={handleAcknowledgeAutoStop}
+              disabled={ackBusy}
+              className="text-xs px-3 py-1 rounded bg-red-600 hover:bg-red-500 text-white font-medium disabled:opacity-40"
+            >
+              {ackBusy ? 'Acknowledging…' : 'Acknowledge & Enable Re-activation'}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Hardware Info — read only. v3.11 D1. */}
       <div className="text-[11px] space-y-0.5">

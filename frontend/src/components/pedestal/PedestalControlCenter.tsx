@@ -114,6 +114,10 @@ function SocketCard({
   const [qrOpen, setQrOpen] = useState(false)
 
   const socketId = Number(socketName.replace('Q', ''))
+  // v3.12 — when the auto-stop latch is set the Activate button must be
+  // disabled until an admin acknowledges the alarm via SocketLoadMeterPanel.
+  // The backend enforces the same guard; this is the UX side.
+  const autoStopPending = useStore((s) => s.autoStopPendingAck[`${pedestalId}-${socketId}`] ?? false)
   // Prefer the unified socket_state_changed broadcast when we have it —
   // otherwise fall back to the raw Opta firmware state string.
   const firmwareState = socketState?.state ?? 'idle'
@@ -274,10 +278,16 @@ function SocketCard({
               <CmdButton
                 label="Activate"
                 color="green"
-                disabled={!isPending || loading !== null}
+                disabled={!isPending || loading !== null || autoStopPending}
                 loading={loading === 'activate'}
                 onClick={() => sendCmd('activate')}
-                title={isIdle ? 'No plug inserted' : (isPending ? pendingTip : undefined)}
+                title={
+                  autoStopPending
+                    ? 'Acknowledge the overload alarm first'
+                    : isIdle ? 'No plug inserted'
+                    : isPending ? pendingTip
+                    : undefined
+                }
               />
             )}
           </div>

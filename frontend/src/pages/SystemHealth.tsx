@@ -26,6 +26,7 @@ export default function SystemHealth() {
   const {
     resetNewErrors, setHwAlarmLevel,
     activeCriticalLoadAlarms, activeWarningLoadAlarms,
+    pendingAutoStopAlarms, acknowledgeAutoStopAlarm,
   } = useStore()
   // v3.11 — open meter load alarms (resolved_at IS NULL) per pedestal.
   // Aggregated across all pedestals for the System Health view.
@@ -66,8 +67,11 @@ export default function SystemHealth() {
           : 'none'
       const loadCritical = useStore.getState().activeCriticalLoadAlarms.length > 0
       const loadWarning  = useStore.getState().activeWarningLoadAlarms.length > 0
-      const merged: 'none' | 'warning' | 'critical' =
-        hwHighest === 'critical' || loadCritical ? 'critical'
+      // v3.12 — auto_stop trumps critical for the nav badge.
+      const autoStopActive = useStore.getState().pendingAutoStopAlarms.length > 0
+      const merged: 'none' | 'warning' | 'critical' | 'auto_stop' =
+        autoStopActive ? 'auto_stop'
+        : hwHighest === 'critical' || loadCritical ? 'critical'
         : hwHighest === 'warning' || loadWarning ? 'warning'
         : 'none'
       setHwAlarmLevel(merged)
@@ -117,12 +121,14 @@ export default function SystemHealth() {
   }, [loadLogs, loadHw, loadLoadAlarms])
 
   // Re-run hw merge whenever the load-alarm counts change so the badge
-  // promotes up immediately on a new WS critical/warning event.
+  // promotes up immediately on a new WS critical/warning event. v3.12 —
+  // auto-stop alarms also trigger the recompute so the badge upgrades
+  // straight to the highest severity without waiting for the 10s tick.
   useEffect(() => {
     if (!hw) return
     loadHw()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCriticalLoadAlarms.length, activeWarningLoadAlarms.length])
+  }, [activeCriticalLoadAlarms.length, activeWarningLoadAlarms.length, pendingAutoStopAlarms.length])
 
   const handleAck = async (a: MeterLoadAlarm) => {
     setLoadAlarmsBusyId(a.id)
@@ -157,6 +163,12 @@ export default function SystemHealth() {
 
   const criticalAlarms = hw?.alarms.filter((a) => a.level === 'critical') ?? []
   const warningAlarms  = hw?.alarms.filter((a) => a.level === 'warning')  ?? []
+  // v3.12 — auto-stop alarms surfaced as a distinct fourth category. Pulls
+  // both from REST (loadAlarms filtered) for persistence across reloads
+  // AND from the WS-driven store (pendingAutoStopAlarms) for live session_id.
+  const autoStopAlarmsRest = loadAlarms.filter((a) => a.alarm_type === 'auto_stop')
+  const sessionIdByKey: Record<string, number | null> = {}
+  for (const p of pendingAutoStopAlarms) sessionIdByKey[p.key] = p.session_id
 
   return (
     <div className="space-y-6">
@@ -180,6 +192,77 @@ export default function SystemHealth() {
           {clearing ? 'Clearing…' : 'Clear All Logs'}
         </button>
       </div>
+
+      {/* ── v3.12 Auto-Stop Alarms (highest severity, above critical) ───── */}
+      {autoStopAlarmsRest.length > 0 && (
+        <div className="rounded-lg border-2 border-red-500 bg-red-950/40 px-4 py-3 space-y-2">
+          <p className="text-red-100 font-bold text-sm flex items-center gap-2">
+            <span className="text-base">⚡</span>
+            AUTO-STOP ALARMS — {autoStopAlarmsRest.filter((a) => !a.acknowledged).length} pending acknowledgment
+          </p>
+          <div className="space-y-1">
+            {autoStopAlarmsRest.map((a) => {
+              const key = `${a.pedestal_id}-${a.socket_id}`
+              const sessionId = sessionIdByKey[key]
+              const dim = a.acknowledged ? 'opacity-60' : ''
+              return (
+                <div
+                  key={a.id}
+                  className={`flex flex-wrap items-center gap-3 text-xs px-2 py-1.5 rounded border bg-red-900/40 border-red-600/60 ${dim}`}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                  <span className="font-mono text-red-200 font-bold">AUTO-STOP</span>
+                  <span className="text-red-100">
+                    Pedestal {a.pedestal_id} Q{a.socket_id}
+                  </span>
+                  <span className="text-red-200/90 font-mono">
+                    {a.meter_type ?? 'meter'}
+                    {' · '}
+                    {a.current_amps.toFixed(1)}A / {a.rated_amps.toFixed(0)}A
+                    {' · '}
+                    {a.load_pct.toFixed(0)}%
+                  </span>
+                  {sessionId != null && (
+                    <span className="text-red-300/80 font-mono">
+                      session #{sessionId}
+                    </span>
+                  )}
+                  <span className="ml-auto text-red-300/70 font-mono text-[11px]">
+                    {a.triggered_at.replace('T', ' ').slice(0, 19)}
+                  </span>
+                  <span className={a.acknowledged ? 'text-gray-400 text-[11px]' : 'text-red-200 font-bold text-[11px]'}>
+                    {a.acknowledged ? 'Acknowledged' : 'Pending acknowledgment'}
+                  </span>
+                  {!a.acknowledged && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const ok = window.confirm(
+                          'Are you sure you want to acknowledge this overload alarm? Ensure the boat has reduced its power consumption before re-activating the socket.',
+                        )
+                        if (!ok) return
+                        setLoadAlarmsBusyId(a.id)
+                        try {
+                          const { acknowledgeAutoStop } = await import('../api/meterLoad')
+                          await acknowledgeAutoStop(a.pedestal_id, a.socket_id)
+                          // Optimistic — match the panel's local state update.
+                          acknowledgeAutoStopAlarm(a.pedestal_id, a.socket_id)
+                          setLoadAlarms((rows) => rows.filter((r) => r.id !== a.id))
+                        } catch { /* backend surfaces */ }
+                        finally { setLoadAlarmsBusyId(null) }
+                      }}
+                      disabled={loadAlarmsBusyId === a.id}
+                      className="text-[11px] px-2 py-0.5 rounded bg-red-600 hover:bg-red-500 text-white font-medium disabled:opacity-40"
+                    >
+                      Acknowledge
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* ── Hardware alarm banners ─────────────────────────────────────────── */}
       {criticalAlarms.length > 0 && (
@@ -211,15 +294,17 @@ export default function SystemHealth() {
         </div>
       )}
 
-      {/* ── v3.11 Meter Load Alarms (separate card per D7) ──────────────────── */}
-      {loadAlarms.length > 0 && (
+      {/* ── v3.11 Meter Load Alarms (separate card per D7).
+              v3.12 — auto_stop rows are rendered above in their own card,
+              so this list excludes them to avoid duplication. */}
+      {loadAlarms.filter((a) => a.alarm_type !== 'auto_stop').length > 0 && (
         <div className="rounded-lg border border-orange-600/50 bg-orange-900/20 px-4 py-3 space-y-2">
           <p className="text-orange-300 font-semibold text-sm flex items-center gap-2">
             <span className="text-base">⚡</span>
-            METER LOAD ALARMS — {loadAlarms.filter((a) => !a.acknowledged).length} active, {loadAlarms.length} total
+            METER LOAD ALARMS — {loadAlarms.filter((a) => a.alarm_type !== 'auto_stop' && !a.acknowledged).length} active, {loadAlarms.filter((a) => a.alarm_type !== 'auto_stop').length} total
           </p>
           <div className="space-y-1">
-            {loadAlarms.map((a) => {
+            {loadAlarms.filter((a) => a.alarm_type !== 'auto_stop').map((a) => {
               const isCritical = a.alarm_type === 'critical'
               const dim = a.acknowledged ? 'opacity-50' : ''
               return (

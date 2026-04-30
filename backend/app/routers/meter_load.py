@@ -28,6 +28,7 @@ from ..database import get_db
 from ..models.meter_load_alarm import MeterLoadAlarm
 from ..models.pedestal import Pedestal
 from ..models.socket_config import SocketConfig
+from ..services.websocket_manager import ws_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/pedestals", tags=["meter-load"])
@@ -265,3 +266,111 @@ def resolve_alarm(
     db.commit()
     db.refresh(a)
     return serialize_alarm(a)
+
+
+# ── v3.12 — Auto-stop overload alarm acknowledgment ─────────────────────────
+
+def _post_ack_load_status(cfg: SocketConfig) -> str:
+    """Reclassify the socket's load_status after the auto-stop latch clears.
+    Matches `_classify_load` in mqtt_handlers but uses prev_status="unknown"
+    so the operator's ack is a clean restart — no hysteresis carryover."""
+    pct = cfg.meter_load_pct
+    if pct is None:
+        return "unknown"
+    warn = int(cfg.load_warning_threshold_pct or 60)
+    crit = int(cfg.load_critical_threshold_pct or 80)
+    # Defer to the canonical classifier so any future tweak stays in one place.
+    from ..services.mqtt_handlers import _classify_load
+    return _classify_load(float(pct), "unknown", warn, crit)
+
+
+def perform_auto_stop_acknowledge(
+    db: DBSession,
+    pedestal_id: int,
+    socket_id: int,
+    actor_label: str,
+) -> tuple[SocketConfig, MeterLoadAlarm | None, str]:
+    """Atomic ack used by both the internal admin endpoint and the ERP
+    twin (Step 5). Clears the latch on SocketConfig AND closes the latest
+    open auto_stop alarm row in a single transaction. Returns the row
+    triple (cfg, alarm, new_load_status) for the caller to broadcast +
+    serialize. Raises HTTPException(404) when the socket or open alarm
+    does not exist."""
+    cfg = _get_socket_or_404(db, pedestal_id, socket_id)
+
+    if not getattr(cfg, "auto_stop_pending_ack", False):
+        raise HTTPException(
+            status_code=409,
+            detail="No auto-stop alarm is pending acknowledgment for this socket.",
+        )
+
+    # Find the most recent open auto-stop alarm for this socket (D4).
+    alarm = (
+        db.query(MeterLoadAlarm)
+        .filter(
+            MeterLoadAlarm.pedestal_id == pedestal_id,
+            MeterLoadAlarm.socket_id == socket_id,
+            MeterLoadAlarm.alarm_type == "auto_stop",
+            MeterLoadAlarm.resolved_at.is_(None),
+            MeterLoadAlarm.acknowledged.is_(False),
+        )
+        .order_by(MeterLoadAlarm.id.desc())
+        .first()
+    )
+
+    now = datetime.utcnow()
+    if alarm is not None:
+        alarm.acknowledged = True
+        alarm.acknowledged_at = now
+        alarm.acknowledged_by = actor_label
+
+    new_status = _post_ack_load_status(cfg)
+    cfg.auto_stop_pending_ack = False
+    cfg.meter_load_status = new_status
+
+    db.commit()
+    if alarm is not None:
+        db.refresh(alarm)
+    db.refresh(cfg)
+    return cfg, alarm, new_status
+
+
+@router.post("/{pedestal_id}/sockets/{socket_id}/load/auto-stop/acknowledge")
+async def acknowledge_auto_stop(
+    pedestal_id: int,
+    socket_id: int,
+    db: DBSession = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """v3.12 — operator acknowledges a 90% auto-stop alarm.
+
+    Atomic in one transaction (D5):
+      1. Clear `SocketConfig.auto_stop_pending_ack`
+      2. Mark the latest open auto-stop alarm row acknowledged with the
+         admin's email as `acknowledged_by`
+      3. Reset `meter_load_status` to whatever the live load justifies
+         (the latch was the only thing forcing it to `auto_stop`)
+
+    Then broadcasts `meter_load_auto_stop_acknowledged` so the dashboard
+    can clear its banner without waiting for the next telemetry tick.
+    """
+    _get_pedestal_or_404(db, pedestal_id)
+    cfg, alarm, new_status = perform_auto_stop_acknowledge(
+        db, pedestal_id, socket_id, actor_label=user.email,
+    )
+
+    await ws_manager.broadcast({
+        "event": "meter_load_auto_stop_acknowledged",
+        "data": {
+            "pedestal_id": pedestal_id,
+            "socket_id": socket_id,
+            "alarm_id": alarm.id if alarm is not None else None,
+            "acknowledged_by": user.email,
+            "acknowledged_at": (alarm.acknowledged_at.isoformat()
+                                 if alarm is not None and alarm.acknowledged_at else None),
+            "load_status": new_status,
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    })
+
+    return {"status": "acknowledged", "socket_id": socket_id}

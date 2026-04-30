@@ -83,6 +83,13 @@ class SocketConfig(Base):
     load_warning_threshold_pct  = Column(Integer, nullable=False, default=60)
     load_critical_threshold_pct = Column(Integer, nullable=False, default=80)
 
+    # v3.12 — auto-stop overload protection latch. Set to True when the
+    # 90% threshold trips an automatic socket stop; blocks both manual
+    # operator activation and auto-activation until an admin acknowledges
+    # the alarm via the dedicated endpoint. Cleared back to False only by
+    # the acknowledge flow — load dropping below 90% does NOT clear it.
+    auto_stop_pending_ack       = Column(Boolean, nullable=False, default=False)
+
     __table_args__ = (
         UniqueConstraint("pedestal_id", "socket_id", name="uq_socket_config"),
     )

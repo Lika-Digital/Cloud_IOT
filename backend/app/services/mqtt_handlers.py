@@ -870,6 +870,17 @@ def _auto_activate_precondition_check(db, pedestal_id: int, socket_id: int) -> s
     if last_diag and (datetime.utcnow() - last_diag).total_seconds() < _DIAGNOSTIC_LOCKOUT_S:
         return "diagnostic in progress"
 
+    # 6. v3.12 — auto-stop overload alarm pending acknowledgment (D8). Blocks
+    # auto-activation until an admin acknowledges via the dedicated endpoint.
+    # Mirrors the manual-activate guard in routers/controls.py::approve_socket.
+    from ..models.socket_config import SocketConfig
+    sc = db.query(SocketConfig).filter(
+        SocketConfig.pedestal_id == pedestal_id,
+        SocketConfig.socket_id == socket_id,
+    ).first()
+    if sc is not None and getattr(sc, "auto_stop_pending_ack", False):
+        return "overload alarm pending acknowledgment"
+
     return None
 
 
@@ -1983,64 +1994,176 @@ async def _handle_opta_meter_telemetry(socket_name: str, payload: str) -> None:
         prev_status = cfg.meter_load_status or "unknown"
         warn = int(cfg.load_warning_threshold_pct or 60)
         crit = int(cfg.load_critical_threshold_pct or 80)
-        new_status = _classify_load(load_pct, prev_status, warn, crit)
-        cfg.meter_load_status = new_status
 
-        # D4 — state machine.
+        # Common state used by every branch below.
         broadcasts: list[dict] = []
+        auto_stop_session_id: int | None = None
         snapshot_meter_type = cfg.meter_type
         snapshot_phases = cfg.phases or (3 if is_three_phase else 1)
         snapshot_rated = float(rated)
 
-        def _resolve_open(reason: str) -> int:
-            """Close every open MeterLoadAlarm row for this (pedestal,socket).
-            Returns the number resolved."""
+        # v3.12 — Auto-stop is terminal (D1). Once the latch is set, status
+        # stays `auto_stop` and the existing state machine is bypassed until
+        # an admin acknowledges via the dedicated endpoint. We still update
+        # the live readings (already done above) and emit the per-tick
+        # telemetry broadcast at the bottom of the function so the dashboard
+        # sees current load_pct even while suspended.
+        if prev_status == "auto_stop":
+            new_status = "auto_stop"
+            cfg.meter_load_status = "auto_stop"
+
+        # v3.12 — New 90% threshold crossing. Steps 1-7 from the spec, all
+        # persisted in the surrounding db.commit() at the bottom of this
+        # branch so a crash mid-sequence cannot leave the latch and the
+        # session in inconsistent states.
+        elif load_pct >= 90.0:
+            new_status = "auto_stop"
+
+            # Step 1 — status + latch.
+            cfg.meter_load_status = "auto_stop"
+            cfg.auto_stop_pending_ack = True
+
+            # Step 2 — complete any active electricity session for this socket.
+            from ..models.session import Session as _Session
+            active = (
+                db.query(_Session)
+                .filter(
+                    _Session.pedestal_id == pedestal_id,
+                    _Session.socket_id == socket_id,
+                    _Session.type == "electricity",
+                    _Session.status.in_(["pending", "active"]),
+                )
+                .first()
+            )
+            if active is not None:
+                try:
+                    session_service.complete(db, active, end_reason="auto_stop_overload")
+                    auto_stop_session_id = active.id
+                except Exception as e:
+                    logger.warning("[AutoStop] failed to stop session %d: %s", active.id, e)
+                else:
+                    broadcasts.append({
+                        "event": "session_completed",
+                        "data": {
+                            "session_id": active.id,
+                            "pedestal_id": pedestal_id,
+                            "socket_id": socket_id,
+                            "energy_kwh": active.energy_kwh,
+                            "end_reason": "auto_stop_overload",
+                            "timestamp": datetime.utcnow().isoformat(),
+                        },
+                    })
+
+            # Step 3 — publish stop command on opta/cmd/socket/{Q1..Q4}.
+            # Reuses the exact direct_socket_cmd payload shape so firmware
+            # cannot tell whether the operator or the safety system asked.
+            try:
+                from .mqtt_client import mqtt_service
+                ts_ms = int(datetime.utcnow().timestamp() * 1000)
+                mqtt_service.publish(
+                    f"opta/cmd/socket/{socket_name}",
+                    json.dumps({
+                        "msgId": f"autostop-{ts_ms}",
+                        "cabinetId": cabinet_id,
+                        "action": "stop",
+                    }),
+                )
+            except Exception as e:
+                logger.warning("[AutoStop] MQTT publish failed for %s: %s", socket_name, e)
+
+            # Resolve any open warning/critical rows — they are superseded
+            # by the protective auto-stop. Auto-stop alarms themselves are
+            # NOT auto-resolved; the operator's ack endpoint owns that.
             now = datetime.utcnow()
             opens = db.query(MeterLoadAlarm).filter(
                 MeterLoadAlarm.pedestal_id == pedestal_id,
                 MeterLoadAlarm.socket_id == socket_id,
                 MeterLoadAlarm.resolved_at.is_(None),
+                MeterLoadAlarm.alarm_type.in_(["warning", "critical"]),
             ).all()
             for r in opens:
                 r.resolved_at = now
-                r.resolved_by = reason
-            return len(opens)
+                r.resolved_by = "auto-stop-supersedes"
 
-        def _open_row(level: str) -> MeterLoadAlarm:
-            row = MeterLoadAlarm(
+            # Step 4 — alarm row with new alarm_type "auto_stop".
+            db.add(MeterLoadAlarm(
                 pedestal_id=pedestal_id,
                 socket_id=socket_id,
-                alarm_type=level,
+                alarm_type="auto_stop",
                 current_amps=float(current_for_load),
                 rated_amps=snapshot_rated,
                 load_pct=load_pct,
                 phases=snapshot_phases,
                 meter_type=snapshot_meter_type,
                 triggered_at=datetime.utcnow(),
-            )
-            db.add(row)
-            return row
+            ))
 
-        # State-machine matrix.
-        if prev_status != new_status:
-            if new_status == "warning" and prev_status in ("normal", "unknown"):
-                _open_row("warning")
-                broadcasts.append({"event": "meter_load_warning"})
-            elif new_status == "critical" and prev_status in ("normal", "unknown"):
-                _open_row("critical")
-                broadcasts.append({"event": "meter_load_critical"})
-            elif new_status == "critical" and prev_status == "warning":
-                _resolve_open("auto-upgrade")
-                _open_row("critical")
-                broadcasts.append({"event": "meter_load_critical"})
-            elif new_status == "warning" and prev_status == "critical":
-                _resolve_open("auto-downgrade")
-                _open_row("warning")
-                broadcasts.append({"event": "meter_load_warning"})
-            elif new_status == "normal":
-                resolved = _resolve_open("auto-resolve")
-                if resolved:
-                    broadcasts.append({"event": "meter_load_resolved"})
+            # Step 6 — meter_load_auto_stop broadcast queued; the session_id
+            # of the just-ended session is attached during dispatch.
+            broadcasts.append({"event": "meter_load_auto_stop"})
+
+            # Step 7 — log so the event is visible in journalctl.
+            logger.warning(
+                "[AutoStop] OVERLOAD pedestal=%d socket=%s current=%.2fA rated=%.2fA load_pct=%.1f%% session=%s",
+                pedestal_id, socket_name,
+                float(current_for_load), snapshot_rated, load_pct,
+                auto_stop_session_id,
+            )
+
+        else:
+            # Existing 60%/80% state machine — UNCHANGED per D2.
+            new_status = _classify_load(load_pct, prev_status, warn, crit)
+            cfg.meter_load_status = new_status
+
+            def _resolve_open(reason: str) -> int:
+                """Close every open MeterLoadAlarm row for this (pedestal,socket).
+                Returns the number resolved."""
+                now = datetime.utcnow()
+                opens = db.query(MeterLoadAlarm).filter(
+                    MeterLoadAlarm.pedestal_id == pedestal_id,
+                    MeterLoadAlarm.socket_id == socket_id,
+                    MeterLoadAlarm.resolved_at.is_(None),
+                ).all()
+                for r in opens:
+                    r.resolved_at = now
+                    r.resolved_by = reason
+                return len(opens)
+
+            def _open_row(level: str) -> MeterLoadAlarm:
+                row = MeterLoadAlarm(
+                    pedestal_id=pedestal_id,
+                    socket_id=socket_id,
+                    alarm_type=level,
+                    current_amps=float(current_for_load),
+                    rated_amps=snapshot_rated,
+                    load_pct=load_pct,
+                    phases=snapshot_phases,
+                    meter_type=snapshot_meter_type,
+                    triggered_at=datetime.utcnow(),
+                )
+                db.add(row)
+                return row
+
+            # State-machine matrix.
+            if prev_status != new_status:
+                if new_status == "warning" and prev_status in ("normal", "unknown"):
+                    _open_row("warning")
+                    broadcasts.append({"event": "meter_load_warning"})
+                elif new_status == "critical" and prev_status in ("normal", "unknown"):
+                    _open_row("critical")
+                    broadcasts.append({"event": "meter_load_critical"})
+                elif new_status == "critical" and prev_status == "warning":
+                    _resolve_open("auto-upgrade")
+                    _open_row("critical")
+                    broadcasts.append({"event": "meter_load_critical"})
+                elif new_status == "warning" and prev_status == "critical":
+                    _resolve_open("auto-downgrade")
+                    _open_row("warning")
+                    broadcasts.append({"event": "meter_load_warning"})
+                elif new_status == "normal":
+                    resolved = _resolve_open("auto-resolve")
+                    if resolved:
+                        broadcasts.append({"event": "meter_load_resolved"})
 
         db.commit()
     finally:
@@ -2065,10 +2188,19 @@ async def _handle_opta_meter_telemetry(socket_name: str, payload: str) -> None:
 
     for b in broadcasts:
         evt = b["event"]
+        # session_completed has its own pre-built data dict — broadcast as-is.
+        if evt == "session_completed":
+            await ws_manager.broadcast(b)
+            continue
         if evt == "meter_load_critical":
             payload_data["severity"] = "CRITICAL"
         elif evt == "meter_load_warning":
             payload_data["severity"] = "WARNING"
+        elif evt == "meter_load_auto_stop":
+            # v3.12 — severity tag plus the session_id of the ended session
+            # so dashboards can deep-link to the audit trail.
+            payload_data["severity"] = "AUTO_STOP"
+            payload_data["session_id"] = auto_stop_session_id
         await ws_manager.broadcast({"event": evt, "data": dict(payload_data)})
 
     # Always emit a low-volume telemetry tick so the dashboard sees live load_pct.

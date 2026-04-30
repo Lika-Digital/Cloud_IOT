@@ -1,3 +1,75 @@
+# Implementation Status — 90% Auto-Stop Overload Protection (v3.12)
+
+## Session started: 2026-04-30
+
+Feature scope: extends the v3.11 load monitoring with a third threshold tier
+at 90% of `rated_amps` that triggers an **automatic socket stop** without
+operator action. When meter telemetry crosses 90%, the backend ends the
+active session with `end_reason="auto_stop_overload"`, publishes a stop
+command on `opta/cmd/socket/Q{n}`, raises a persistent alarm in
+`meter_load_alarms` with `alarm_type="auto_stop"`, sets a new
+`SocketConfig.auto_stop_pending_ack` latch that blocks all re-activation
+paths (manual + auto), and broadcasts `meter_load_auto_stop`. The latch
+only clears when an admin calls a new socket-scoped acknowledge endpoint
+(internal + ERP variants). 60% / 80% behaviour is untouched.
+
+**Approved design decisions (2026-04-30):**
+- D1 — auto-stop is **terminal**. `meter_load_status` stays `auto_stop`
+  until the acknowledge endpoint is called. Load dropping below 90%
+  does NOT auto-clear.
+- D2 — dedicated 90% branch at the **top** of the threshold logic in
+  `_handle_opta_meter_telemetry`. Existing 60%/80% state machine
+  completely untouched. When `prev_status == "auto_stop"` the handler
+  is a no-op for that tick.
+- D3 — reuse `meter_load_alarms` table; new `alarm_type="auto_stop"`.
+- D4 — socket-scoped acknowledge endpoint:
+  `POST /api/pedestals/{pedestal_id}/sockets/{socket_id}/load/auto-stop/acknowledge`.
+  Looks up the latest unack'd auto-stop alarm row internally.
+- D5 — acknowledge is one atomic transaction: clears
+  `auto_stop_pending_ack` AND acks the alarm row.
+- D7 — ERP path records `acknowledged_by="erp-service"` (literal string).
+- D8 — `_maybe_auto_activate` in mqtt_handlers also guards on
+  `auto_stop_pending_ack`; logs `"Auto-activation skipped: overload
+  alarm pending acknowledgment"`.
+- D9 — extend `LoadStatus` union with `'auto_stop'`. TypeScript compile
+  errors force every render path to handle it explicitly.
+- D10 — no pre-push hook changes; existing `tests/run_tests.sh`
+  auto-discovers new cases.
+
+### Files — Status
+
+| # | File | Status | Notes |
+|---|------|--------|-------|
+| 1 | `backend/app/models/socket_config.py` | COMPLETE | Added `auto_stop_pending_ack: Boolean(nullable=False, default=False)` after `load_critical_threshold_pct`. New latch gates re-activation until admin acknowledges 90%-threshold auto-stop. Cleared only by ack endpoint, never by load dropping below 90%. |
+| 2 | `backend/app/database.py` | COMPLETE | Appended migration entry `("socket_configs", "auto_stop_pending_ack", "INTEGER NOT NULL DEFAULT 0")` to `_migrate_schema()`. Idempotent ALTER TABLE for existing pedestal.db installations. |
+| 3 | `backend/app/services/mqtt_handlers.py` | COMPLETE | (a) `_auto_activate_precondition_check` got 6th check returning `"overload alarm pending acknowledgment"` when `SocketConfig.auto_stop_pending_ack` is True (D8). (b) `_handle_opta_meter_telemetry` restructured around prev_status: terminal `auto_stop` short-circuit + new top-level `load_pct >= 90` branch executing Steps 1-7 atomically. Existing 60%/80% state machine moved into `else` branch — bytes-equal to the v3.11 version. New broadcast loop branches handle `session_completed` (pre-built dict) and `meter_load_auto_stop` (severity=AUTO_STOP + session_id). Also resolves any open warning/critical alarm rows with reason="auto-stop-supersedes" to keep alarm history consistent. |
+| 3a | `tests/backend/test_meter_load.py` | COMPLETE | Added test_seed_active_session helper, _capture_mqtt_publishes helper, plus 10 new cases (TC-ML-31..40 + auto-stop-supersedes). Updated `_reset_state` autouse fixture to also wipe leftover sessions and clear `auto_stop_pending_ack` between tests. |
+| 3b | `tests/backend/test_ws_event_catalog.py` | TEMP-EDIT | `meter_load_auto_stop` and `meter_load_auto_stop_acknowledged` added to INTERNAL_EVENTS with a comment marking them as "in-progress wire-up — remove in Step 7". Test guard otherwise blocks broadcast-without-handler. |
+| 4 | `backend/app/routers/controls.py` | COMPLETE | Two guards added: `approve_socket` (admin approve flow) and `direct_socket_cmd` (admin direct activate). Both raise 409 with "Socket was automatically stopped due to overload. Acknowledge the alarm before re-activating." Stop action in direct_socket_cmd intentionally NOT guarded — operator can always stop a socket. Tests TC-ML-41..45 added (5 cases) covering both endpoints + the D8 auto-activate path. |
+| 5 | `backend/app/routers/meter_load.py` | COMPLETE | Added `POST /{pedestal_id}/sockets/{socket_id}/load/auto-stop/acknowledge`. Helper `perform_auto_stop_acknowledge(db, pedestal_id, socket_id, actor_label)` shared with the ERP router (Step 5). Atomic transaction (D5): clears `auto_stop_pending_ack`, marks the most recent open auto-stop alarm row acknowledged (with admin email), reclassifies `meter_load_status` from current load_pct (treats prev_status as "unknown" — no hysteresis carryover so the operator's ack is a clean restart). Returns 409 when no auto-stop is pending. Broadcasts `meter_load_auto_stop_acknowledged` with payload {pedestal_id, socket_id, alarm_id, acknowledged_by, acknowledged_at, load_status, timestamp}. Returns `{"status": "acknowledged", "socket_id": socket_id}`. ws_manager moved to module-level import. Tests TC-ML-46..50 added (5 cases). |
+| 6 | `backend/app/routers/ext_meter_load_endpoints.py` | COMPLETE | Added `POST /api/ext/pedestals/{pedestal_id}/sockets/{socket_id}/load/auto-stop/acknowledge`. Reuses `perform_auto_stop_acknowledge` helper from meter_load.py. Records `acknowledged_by="erp-service"` per D7. Same broadcast event as internal endpoint so dashboards update in real time regardless of channel. New `_EP_AUTO_STOP_ACK = "load.auto_stop_ack_ext"` constant + per-endpoint toggle. Module-level ws_manager import. Tests TC-ML-51..53 (3 cases) for ack-records-erp-service, 503 when toggle disabled, 401 missing auth. |
+| 7 | `backend/app/services/api_catalog.py` | COMPLETE | Added `load.auto_stop_ack_ext` ENDPOINT_CATALOG entry (POST, allow_bidirectional=True, category="Load Monitoring") + 2 EVENT_CATALOG entries (`meter_load_auto_stop`, `meter_load_auto_stop_acknowledged`, both category="Load Monitoring"). Drift-guard tests TC-ML-54/55 (2 cases) confirm registration. Catalog AST drift guard in test_ws_event_catalog.py automatically picks up the events because backend now broadcasts them and frontend now handles them. |
+| 8 | `frontend/src/api/meterLoad.ts` | COMPLETE | LoadStatus union extended to `'normal' \| 'warning' \| 'critical' \| 'auto_stop' \| 'unknown'` per D9. MeterLoadAlarm.alarm_type union extended with `'auto_stop'`. New `acknowledgeAutoStop(pedestalId, socketId)` axios helper hitting the internal endpoint. |
+| 9 | `frontend/src/store/index.ts` | COMPLETE | LoadStatus union extended in socketLoadStates type. New `autoStopPendingAck: Record<string, boolean>` + `pendingAutoStopAlarms: Array<{key, pedestal_id, socket_id, current_amps, rated_amps, load_pct, session_id, triggered_at}>`. Actions: setAutoStopPendingAck, addAutoStopAlarm (also strips superseded warning/critical alarm keys), acknowledgeAutoStopAlarm (drops from pending list + clears latch). |
+| 10 | `frontend/src/hooks/useWebSocket.ts` | COMPLETE | New cases `meter_load_auto_stop` (calls addAutoStopAlarm + admin Browser Notification with ⚡ emoji) and `meter_load_auto_stop_acknowledged` (calls acknowledgeAutoStopAlarm). Destructured both new actions from useStore. |
+| 10a | `frontend/src/components/pedestal/SocketLoadMeterPanel.tsx` | PARTIAL (Step 7) | Added `auto_stop` entries to STATUS_BAR_COLOR / STATUS_TEXT / STATUS_BADGE_CLASS so the type-strict Record satisfies the new union member. Banner + Acknowledge UI to be added in Step 8. |
+| 10b | `tests/backend/test_ws_event_catalog.py` | COMPLETE (revert) | Removed the temporary INTERNAL_EVENTS marker for the two auto-stop events now that frontend has real `case` handlers. Drift guard back to its v3.11 strict semantics. |
+| 11 | `frontend/src/components/pedestal/SocketLoadMeterPanel.tsx` | COMPLETE | Reads `autoStopPendingAck[key]` and `pendingAutoStopAlarms` from store. New banner block (rendered when latch=true) with "⚡ AUTO-STOP — OVERLOAD PROTECTION ACTIVATED" headline, current/rated amps + load_pct text, "Investigate the load before re-activating." reminder, and admin-only "Acknowledge & Enable Re-activation" button. Click triggers a window.confirm with the spec's exact safety copy ("Are you sure you want to acknowledge this overload alarm? Ensure the boat has reduced its power consumption before re-activating the socket."), then POSTs to the acknowledge endpoint and optimistically calls acknowledgeAutoStopAlarm in the store. STATUS_BAR_COLOR/STATUS_TEXT/STATUS_BADGE_CLASS already extended in Step 7; the badge now also shows ⚡ icon when status === 'auto_stop'. |
+| 12 | `frontend/src/components/pedestal/PedestalControlCenter.tsx` | COMPLETE | Activate button discovered here (D6 resolved). Reads `autoStopPendingAck[${pedestalId}-${socketId}]` from store. `disabled` extended to `!isPending \|\| loading \|\| autoStopPending`. Tooltip prefers "Acknowledge the overload alarm first" over the existing plug-state tooltips when latch is set. Stop button intentionally untouched — operator can always stop. |
+| 13 | `frontend/src/pages/SystemHealth.tsx` | COMPLETE | Added "AUTO-STOP ALARMS" card above all other alarm cards (red border-2, distinct visual weight). Each row shows severity dot, AUTO-STOP label, pedestal+socket id, current/rated amps, load_pct, optional session id (overlaid from pendingAutoStopAlarms when WS payload was captured), timestamp, status text ("Pending acknowledgment" red bold vs "Acknowledged" grey), and admin Acknowledge button (with same window.confirm safety copy as the panel). Existing v3.11 Meter Load Alarms card filters out auto_stop entries to avoid duplication. loadHw merge logic extended to treat any pendingAutoStopAlarms entry as the highest severity, promoting nav badge to 'auto_stop'. Re-merge useEffect dep list extended so badge updates instantly on WS event. |
+| 13a | `frontend/src/store/index.ts` | COMPLETE (Step 9 follow-up) | hwAlarmLevel union extended from `'none' \| 'warning' \| 'critical'` to include `'auto_stop'`. |
+| 13b | `frontend/src/components/layout/Layout.tsx` | COMPLETE | NavItem.hwAlarm union extended; auto_stop badge rendered as red dot with red-300 ring and distinct tooltip "Socket auto-stopped — overload alarm pending acknowledgment". |
+| 14 | `tests/backend/test_meter_load.py` | COMPLETE | 25 new TC-ML-31..55 cases (Steps 2/3/4/5/6 tests merged into a single file in step order). New helpers: `_seed_active_session`, `_capture_mqtt_publishes`, `_seed_socket_state`, `_set_auto_stop_latch`, `_trigger_auto_stop`. Existing `_reset_state` autouse fixture extended to wipe leftover sessions and clear auto_stop_pending_ack between tests. |
+| 15 | `README.md` | COMPLETE | v3.12 changelog entry inserted at the top of "## Changelog", newest-first per project convention. Documents all backend + frontend touchpoints, design decisions D1/D7/D8/D9 in plain operator-readable terms, the 25-test delta (339 → 364), and explicitly notes the no-hardcoded-rated_amps invariant. |
+
+### Section currently being worked on: Step 11 — COMMIT + PUSH (in progress)
+### Final test counts: 364/364 backend pytest passing. TypeScript clean.
+### Awaiting: explicit user approval before merging develop → main with CLOUD_IOT_RELEASE=1.
+
+---
+
+---
+
 # Implementation Status — Live Socket Meter Telemetry + Load Monitoring (v3.11)
 
 ## Session started: 2026-04-28

@@ -24,7 +24,11 @@ api.interceptors.response.use(
   },
 )
 
-export type LoadStatus = 'normal' | 'warning' | 'critical' | 'unknown'
+// v3.12 — `auto_stop` added: terminal state set when a 90% overload
+// triggers an automatic socket stop. Stays until the operator
+// acknowledges via the dedicated endpoint. The store + every render
+// path that switches on LoadStatus must handle this case.
+export type LoadStatus = 'normal' | 'warning' | 'critical' | 'auto_stop' | 'unknown'
 
 export interface SocketLoadState {
   pedestal_id: number
@@ -58,7 +62,9 @@ export interface MeterLoadAlarm {
   id: number
   pedestal_id: number
   socket_id: number
-  alarm_type: 'warning' | 'critical'
+  // v3.12 — 'auto_stop' added; rows of this type are written when the
+  // 90% threshold triggers an automatic socket stop.
+  alarm_type: 'warning' | 'critical' | 'auto_stop'
   current_amps: number
   rated_amps: number
   load_pct: number
@@ -111,4 +117,14 @@ export const acknowledgeLoadAlarm = (pedestalId: number, alarmId: number) =>
 export const resolveLoadAlarm = (pedestalId: number, alarmId: number) =>
   api.post<MeterLoadAlarm>(
     `/pedestals/${pedestalId}/load/alarms/${alarmId}/resolve`,
+  ).then((r) => r.data)
+
+// v3.12 — operator (or admin via UI) acknowledges the auto-stop alarm,
+// which clears the SocketConfig.auto_stop_pending_ack latch and unblocks
+// re-activation. Server returns {status, socket_id}. ERP callers use the
+// /api/ext/.../auto-stop/acknowledge twin (not exposed here — the dashboard
+// only ever calls the internal admin endpoint).
+export const acknowledgeAutoStop = (pedestalId: number, socketId: number) =>
+  api.post<{ status: string; socket_id: number }>(
+    `/pedestals/${pedestalId}/sockets/${socketId}/load/auto-stop/acknowledge`,
   ).then((r) => r.data)

@@ -147,6 +147,11 @@ def _migrate_schema():
         ("socket_configs", "meter_load_updated_at",       "DATETIME"),
         ("socket_configs", "load_warning_threshold_pct",  "INTEGER NOT NULL DEFAULT 60"),
         ("socket_configs", "load_critical_threshold_pct", "INTEGER NOT NULL DEFAULT 80"),
+        # v3.12 — auto-stop overload protection latch. True when the 90%
+        # threshold tripped an automatic stop and is awaiting operator
+        # acknowledgment. Cleared only by the acknowledge endpoint, never
+        # by load dropping back below the threshold.
+        ("socket_configs", "auto_stop_pending_ack",       "INTEGER NOT NULL DEFAULT 0"),
     ]
 
     with engine.connect() as conn:

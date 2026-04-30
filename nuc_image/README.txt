@@ -139,9 +139,38 @@ STEP 6 — CLONE THE REPOSITORY
     git pull origin main
 
 
-STEP 7 — RUN THE INSTALL SCRIPT
+STEP 6.5 — *** REPORT THE UBUNTU VERSION (REQUIRED) ***
 
+  Before running the install script, ALWAYS verify which Ubuntu release
+  this NUC is running. There is a separate installer for each major
+  release because Python and toolchain versions differ.
+
+    cat /etc/os-release | grep -E '^(VERSION_ID|VERSION_CODENAME)='
+    python3 --version
+
+  Pick the matching install script from the table:
+
+    +-----------------------+-------------------------+--------------------------------+
+    | Ubuntu version        | Default Python          | Install script                 |
+    +-----------------------+-------------------------+--------------------------------+
+    | 24.04 LTS  (noble)    | Python 3.12             | ubuntu-install.sh              |
+    | 26.04 LTS  (resolute) | Python 3.14             | ubuntu-install-26.04.sh        |
+    +-----------------------+-------------------------+--------------------------------+
+
+  If your release is NOT in the table above, STOP and report the
+  VERSION_ID + python3 --version output to the developer. Do NOT run
+  any installer without a matching script — pinned dependencies will
+  fail to source-build on Python versions the script was not tested
+  against, leaving the NUC half-configured.
+
+
+STEP 7 — RUN THE INSTALL SCRIPT (matching the version found in STEP 6.5)
+
+  Ubuntu 24.04 LTS:
     sudo bash nuc_image/ubuntu-install.sh
+
+  Ubuntu 26.04 LTS:
+    sudo bash nuc_image/ubuntu-install-26.04.sh
 
   The script runs an interactive wizard. Answer each prompt:
 

@@ -695,6 +695,25 @@ The NUC is provisioned from a pre-built ISO (`nuc_image/cloud-iot-nuc-v2.0.iso`)
 The install script handles everything: Python venv, systemd services, nginx, Docker/MQTT.
 Do NOT run setup steps manually on an already-provisioned NUC.
 
+> **⚠ Before running ANY first-time install — report the Ubuntu version.**
+> Python and apt-package availability change between releases, so each
+> Ubuntu version has its own tested installer. Run these on the NUC first:
+> ```bash
+> cat /etc/os-release | grep -E '^(VERSION_ID|VERSION_CODENAME)='
+> python3 --version
+> ```
+> Then pick the matching script:
+>
+> | Ubuntu version | Default Python | Install script |
+> |---|---|---|
+> | 24.04 LTS (noble) | 3.12 | `nuc_image/ubuntu-install.sh` |
+> | 26.04 LTS (resolute) | 3.14 | `nuc_image/ubuntu-install-26.04.sh` |
+>
+> If your release is not in the table, **stop** and report the
+> `VERSION_ID` + `python3 --version` output before running anything.
+> Pinned dependencies will fail to source-build on untested Python
+> versions and leave the NUC half-configured.
+
 ```bash
 # Optional: Enable ML inference (Laplacian fallback works without it)
 echo "USE_ML_MODELS=true" | sudo tee -a /opt/cloud-iot/backend/.env

@@ -50,7 +50,7 @@ with a regression test** so the same mistake can't reappear in future work.
 
 | # | Issue | Why blocked |
 |---|-------|-------------|
-| Billing | Session billing flows through `opta/events` (`TelemetryUpdate`/`SessionEnded`), **not** the live `opta/meters` path. Handler reads `energyKwhTotal`/`volumeLTotal`; if the firmware event keys differ, invoices bill **ZERO**. | The idle MQTT dump had no `opta/events`. Capture `opta/events` during a real session (plug in → draw power → stop) and compare field names first. |
+| Billing | Session billing flows through `opta/events` (`TelemetryUpdate`/`SessionEnded`), **not** the live `opta/meters` path. Handler reads `energyKwhTotal`/`volumeLTotal`; if the firmware event keys differ, invoices bill **ZERO**. **⚠️ This is a live, unverified risk shipped in the v3.13/v3.14 release — billing must not be relied upon until confirmed.** | The idle MQTT dump had no `opta/events`. Capture `opta/events` during a real session (plug in → draw power → stop) and compare field names first. |
 | 6 | **BreakerTripped cause = NULL.** Handler reads `tripCause`/`currentAtTrip`; a binary contract doc reportedly says `breaker.cause`. | Markdown contract doesn't specify the event JSON; no live trip captured; existing tests use `tripCause`. Capture a real BreakerTripped event or read the source contract first. |
 
 ### Higher-risk / larger changes (separate, careful)
@@ -83,7 +83,7 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
-### 2026-06-10 — Database & data-integrity hardening (v3.14)
+### 2026-06-10 — Database & data-integrity hardening (v3.14) — `30cb125`
 
 Follow-on to v3.13. All confirmed, low-risk fixes — each impact-analysed before
 coding, each shipping a regression test so the mistake cannot return:
@@ -108,7 +108,14 @@ coding, each shipping a regression test so the mistake cannot return:
 
 Full backend suite **376 → 383 passing**, 0 failures.
 
-### 2026-06-10 — Disk-safety hardening: retention, disk guard, breaker fix (v3.13)
+> ⚠️ **Billing risk note (carried by this release).** The `complete()` clamp
+> prevents *over*-billing only. The separate *under*-billing / **bills-zero**
+> risk — the firmware `opta/events` field-name mismatch (`energyKwhTotal` /
+> `volumeLTotal` / `energyKwh`), see **Known Issues → Billing** — ships
+> **UNVERIFIED** in this release. It must be confirmed on the NUC by capturing
+> `opta/events` during a live session before billing is relied upon.
+
+### 2026-06-10 — Disk-safety hardening: retention, disk guard, breaker fix (v3.13) — `9045ad0`
 
 This release bounds on-disk growth so the NUC cannot silently fill its disk,
 and fixes the `opta/breakers` ingestion contract. Three independent changes:

@@ -319,6 +319,27 @@ def _water_name_to_id(name: str) -> int:
     return int(digits) if digits else 1
 
 
+def _coerce_bool(value):
+    """Coerce a firmware-reported flag to a real bool for Boolean DB columns.
+
+    The Opta sends RCD presence as the strings "yes"/"no" (also seen: "true"/
+    "false", "1"/"0"). SQLAlchemy/SQLite reject a raw string for a Boolean
+    column ("Not a boolean value: 'no'"), so normalise here. Passes None and
+    real bools through unchanged; returns None for unrecognised values so an
+    unknown flag stays NULL rather than crashing.
+    """
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    s = str(value).strip().lower()
+    if s in ("yes", "true", "1", "on"):
+        return True
+    if s in ("no", "false", "0", "off"):
+        return False
+    return None
+
+
 async def handle_message(topic: str, payload: str):
     try:
         # ── Opta firmware (cabinetId in payload) ─────────────────────────────
@@ -1555,16 +1576,18 @@ async def _handle_opta_breaker_status(socket_name: str, payload: str):
     if not cabinet_id:
         return
 
-    # Sanity check — log if payload disagrees with topic path.
-    payload_socket = data.get("socketId")
+    # Sanity check — log if payload disagrees with topic path. Real Opta firmware
+    # sends `outletId`; older/marina payloads send `socketId`. Accept either.
+    payload_socket = data.get("outletId") or data.get("socketId")
     if payload_socket and payload_socket != socket_name:
         logger.warning(
-            "[Breaker] payload socketId=%s disagrees with topic socket_name=%s — trusting topic",
+            "[Breaker] payload outletId/socketId=%s disagrees with topic socket_name=%s — trusting topic",
             payload_socket, socket_name,
         )
 
-    breaker_state = data.get("breakerState", "unknown")
-    trip_cause    = data.get("tripCause")   # May be None when breaker is closed.
+    # Real firmware sends `state`; legacy payloads send `breakerState`. Accept both.
+    breaker_state = data.get("state") or data.get("breakerState") or "unknown"
+    trip_cause    = data.get("tripCause") or data.get("cause")  # None when closed.
     socket_id     = _socket_name_to_id(socket_name)
 
     db = SessionLocal()
@@ -1604,14 +1627,16 @@ async def _handle_opta_breaker_status(socket_name: str, payload: str):
         # `in data` check handles explicit `null` values (treated as written) and
         # absent keys (treated as no-change). This preserves history across
         # firmware messages that omit the metadata block.
-        if "breakerType" in data:
-            cfg.breaker_type = data["breakerType"]
+        # Real firmware sends `type`; legacy sends `breakerType`. Accept either.
+        if "type" in data or "breakerType" in data:
+            cfg.breaker_type = data.get("type", data.get("breakerType"))
         if "rating" in data:
             cfg.breaker_rating = data["rating"]
         if "poles" in data:
             cfg.breaker_poles = data["poles"]
         if "rcd" in data:
-            cfg.breaker_rcd = data["rcd"]
+            # Firmware sends "yes"/"no" strings; column is Boolean. Coerce.
+            cfg.breaker_rcd = _coerce_bool(data["rcd"])
         if "rcdSensitivity" in data:
             cfg.breaker_rcd_sensitivity = data["rcdSensitivity"]
 
@@ -1626,10 +1651,10 @@ async def _handle_opta_breaker_status(socket_name: str, payload: str):
             "socket_id": socket_id,
             "breaker_state": breaker_state,
             "trip_cause": trip_cause,
-            "breaker_type": data.get("breakerType"),
+            "breaker_type": data.get("type", data.get("breakerType")),
             "breaker_rating": data.get("rating"),
             "breaker_poles": data.get("poles"),
-            "breaker_rcd": data.get("rcd"),
+            "breaker_rcd": _coerce_bool(data.get("rcd")),
             "breaker_rcd_sensitivity": data.get("rcdSensitivity"),
             "timestamp": datetime.utcnow().isoformat(),
         },

@@ -34,7 +34,60 @@ Mosquitto Broker (:1883)                  │                         │
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
-### 2026-04-30 — 90 % auto-stop overload protection (v3.12)
+### 2026-06-10 — Disk-safety hardening: retention, disk guard, breaker fix (v3.13)
+
+This release bounds on-disk growth so the NUC cannot silently fill its disk,
+and fixes the `opta/breakers` ingestion contract. Three independent changes:
+
+**1. Telemetry & operational-log retention (7-day purge).**
+- New `backend/app/services/retention_service.py` → `purge_old_data()` deletes
+  **telemetry and operational logs older than 7 days**, mirroring the existing
+  `error_log_service.purge_old_logs()` pattern. Run once on startup and hourly
+  via the new `_data_retention_purge()` task in `main.py`.
+- Pruned: `sensor_readings`, `auto_activation_log`, **resolved** `meter_load_alarms`,
+  **acknowledged** `active_alarms`. Open alarms and in-flight rows are kept.
+- **Never touched** (business/legal/forensic): `sessions`, `invoices`, signed
+  `contracts`, `customers`, `chat_messages`, `breaker_events`.
+- Safe for billing/history/analytics: session `energy_kwh`/`water_liters` totals
+  are persisted on the `sessions` row (and snapshotted onto `invoices`) at
+  completion, so downstream consumers read the totals, not the raw readings.
+- Guard: `sensor_readings` belonging to a still-open (`pending`/`active`) session
+  are never pruned, so an in-progress session crossing the cutoff is unaffected.
+- Tests: new `tests/backend/test_retention.py` (2 tests) — old-vs-recent deletion,
+  open-session guard, resolved/acknowledged-only selectivity, business records kept.
+
+**2. Disk-space write guard + clear-cache action.**
+- New `backend/app/services/disk_guard.py` — a cached free-space check
+  (`shutil.disk_usage`, cached 30 s, threshold **500 MB**). `session_service.add_reading()`
+  now consults it: when the disk is nearly full it **refuses to store the reading
+  and raises a throttled hardware alarm** ("Storage nearly full — clear cached
+  data") instead of crashing on ENOSPC or dropping telemetry silently. The
+  session keeps running. Fails **open** — if the disk can't be measured, writes
+  are allowed.
+- New admin endpoints in `routers/system_health.py`:
+  - `GET /api/system/cache` — telemetry-buffer row count + disk free space / `low_space`.
+  - `POST /api/system/cache/clear` — frees space now by clearing the
+    `sensor_readings` buffer (preserving open-session rows; business records
+    untouched). Backed by `retention_service.clear_telemetry_buffer()`.
+- Tests: new `tests/backend/test_disk_guard.py` (8 tests) — threshold flip,
+  fail-open on measurement error, `add_reading` skips on full disk, and both
+  cache endpoints (incl. admin-only enforcement).
+
+**3. `opta/breakers` handler — real-firmware contract fix.**
+- The handler read `breakerState` / `breakerType` / `socketId` and wrote `rcd`
+  straight into a Boolean column. Real Opta firmware (cabinet `MAR_KRK_ORM_01`)
+  sends `state` / `type` / `outletId` and `rcd` as the **string** `"yes"`/`"no"`
+  — so in production breaker state was always `"unknown"`, type/RCD never
+  recorded, and every message threw `TypeError: Not a boolean value: 'no'`
+  (continuous error-log spam).
+- `_handle_opta_breaker_status` now accepts **both** contracts (`state`||`breakerState`,
+  `type`||`breakerType`, `outletId`||`socketId`) and coerces `rcd` via a new
+  `_coerce_bool()` helper (`"yes"/"no"/"true"/"false"/1/0` → bool; unknown → NULL).
+  Backward-compatible: existing payloads keep working.
+- Frontend already types `breaker_rcd: boolean | null` — no change needed.
+- Tests: existing 17 breaker tests stay green; **2 new** real-firmware cases
+  (`test_breaker_monitoring.py` TC-BR-22/23) lock in `state`/`type`/`outletId`
+  parsing and `rcd:"no"→False` / `rcd:"yes"→True` coercion without crashing.
 - Adds a third threshold tier on top of v3.11 load monitoring: when meter
   telemetry shows a socket reaching **90 % of `rated_amps`**, the backend
   automatically ends the active session, publishes a stop command on

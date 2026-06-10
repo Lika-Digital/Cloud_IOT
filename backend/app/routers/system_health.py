@@ -3,8 +3,11 @@ from typing import Optional
 from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
+from sqlalchemy.orm import Session as DBSession
 from ..auth.dependencies import require_admin
 from ..auth.models import User
+from ..database import get_db
+from ..models.sensor_reading import SensorReading
 from ..services.error_log_service import get_logs, get_summary, clear_all_logs, purge_old_logs
 from ..services.alarm_service import get_active_alarms, get_active_alarm_count
 from ..services.mqtt_client import mqtt_service
@@ -126,6 +129,37 @@ def clear_logs(_: User = Depends(require_admin)):
 def manual_purge(_: User = Depends(require_admin)):
     purge_old_logs()
     return {"message": "Purge complete"}
+
+
+# ─── Cache / disk-buffer management (v3.13) ──────────────────────────────────
+
+@router.get("/cache")
+def cache_status(db: DBSession = Depends(get_db), _: User = Depends(require_admin)):
+    """Telemetry-buffer size + disk free space, so the operator knows when to
+    clear cached data."""
+    from ..services.disk_guard import disk_status, MIN_FREE_BYTES
+    rows = db.query(SensorReading).count()
+    d = disk_status()
+    mb = lambda b: round(b / 1024 / 1024, 1) if b is not None else None
+    return {
+        "sensor_readings": rows,
+        "disk_free_mb": mb(d["free"]),
+        "disk_total_mb": mb(d["total"]),
+        "disk_free_pct": round(d["free_pct"], 1) if d["free_pct"] is not None else None,
+        "min_free_mb": mb(MIN_FREE_BYTES),
+        "low_space": d["low_space"],
+    }
+
+
+@router.post("/cache/clear")
+def clear_cache(db: DBSession = Depends(get_db), _: User = Depends(require_admin)):
+    """Free disk space now: clear the telemetry buffer (sensor_readings),
+    preserving rows tied to a still-open session. Business records are untouched."""
+    from ..services.retention_service import clear_telemetry_buffer
+    from ..services.disk_guard import invalidate
+    deleted = clear_telemetry_buffer(db)
+    invalidate()  # next disk check re-reads free space
+    return {"deleted": deleted, "message": f"Cleared {deleted} buffered telemetry rows"}
 
 
 # ─── Training storage endpoint ────────────────────────────────────────────────

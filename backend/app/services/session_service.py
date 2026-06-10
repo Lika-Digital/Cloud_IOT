@@ -168,7 +168,16 @@ class SessionService:
         reading_type: str,
         value: float,
         unit: str,
-    ) -> SensorReading:
+    ) -> SensorReading | None:
+        # v3.13 — disk-space guard. When the disk is nearly full, refuse to
+        # buffer new telemetry instead of crashing on ENOSPC or losing data
+        # silently. A throttled hardware alarm tells the operator to free space
+        # or use the clear-cache action; the session itself keeps running.
+        from .disk_guard import has_free_space, note_storage_full
+        if not has_free_space():
+            note_storage_full(lambda m: _log("hw", "session_service", m))
+            return None
+
         reading = SensorReading(
             session_id=session_id,
             pedestal_id=pedestal_id,

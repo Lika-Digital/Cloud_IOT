@@ -615,3 +615,54 @@ def test_api_catalog_has_breaker_entries():
     for e in ENDPOINT_CATALOG:
         if e["id"].startswith("breakers."):
             assert e["category"] == "Breaker Management"
+
+
+# ── TC-BR-22/23: REAL Opta firmware contract (v3.13) ─────────────────────────
+# Live firmware (cabinet MAR_KRK_ORM_01) publishes opta/breakers/Q*/status as:
+#   {"cabinetId","outletId","state","type","rating","poles":int,"rcd":"yes"|"no","ts"}
+# — i.e. `state`/`type`/`outletId` (not breakerState/breakerType/socketId) and
+# `rcd` as a STRING. The handler must read those keys and coerce `rcd` to a real
+# bool (the Boolean column rejected the raw "no" string → TypeError every msg).
+
+def test_breaker_status_real_firmware_contract():
+    payload = {
+        "cabinetId": CABINET,
+        "outletId": "Q3",
+        "state": "tripped",
+        "type": "MCB",
+        "rating": "C",
+        "poles": 3,
+        "rcd": "no",
+        "ts": "1970-01-01T00:00:08Z",
+    }
+    broadcasts = _simulate("opta/breakers/Q3/status", payload)
+
+    pid = _pedestal_id_for_cabinet()
+    cfg = _get_socket_config(pid, 3)
+    assert cfg is not None
+    assert cfg.breaker_state == "tripped"       # read from `state`
+    assert cfg.breaker_type == "MCB"            # read from `type`
+    assert cfg.breaker_rating == "C"
+    assert cfg.breaker_rcd is False             # "no" coerced to bool, no crash
+
+    # Broadcast carries the corrected, coerced values.
+    changed = [b for b in broadcasts if b.get("event") == "breaker_state_changed"]
+    assert changed and changed[0]["data"]["breaker_rcd"] is False
+    assert changed[0]["data"]["breaker_type"] == "MCB"
+
+
+def test_breaker_status_rcd_yes_coerced_true():
+    _simulate("opta/breakers/Q4/status", {
+        "cabinetId": CABINET,
+        "outletId": "Q4",
+        "state": "closed",
+        "type": "RCBO",
+        "rating": "B",
+        "poles": 1,
+        "rcd": "yes",
+    })
+    pid = _pedestal_id_for_cabinet()
+    cfg = _get_socket_config(pid, 4)
+    assert cfg.breaker_rcd is True              # "yes" coerced to bool
+    assert cfg.breaker_state == "closed"
+    assert cfg.breaker_type == "RCBO"

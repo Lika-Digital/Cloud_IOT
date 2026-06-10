@@ -72,6 +72,17 @@ async def _hourly_log_purge():
             logger.warning(f"Hourly log purge failed: {e}")
 
 
+async def _data_retention_purge():
+    """Purge telemetry + operational logs older than 7 days, every hour (v3.13)."""
+    while True:
+        await asyncio.sleep(3600)
+        try:
+            from .services.retention_service import purge_old_data
+            purge_old_data()
+        except Exception as e:
+            logger.warning(f"Data retention purge failed: {e}")
+
+
 async def _pending_session_watchdog():
     """
     Every 10 s: find sessions stuck in 'pending' longer than PENDING_TIMEOUT_SECONDS
@@ -271,6 +282,13 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
+    # v3.13 — one-shot telemetry/operational-log retention purge on startup.
+    try:
+        from .services.retention_service import purge_old_data
+        purge_old_data()
+    except Exception:
+        pass
+
     # Startup check: verify DB is reachable
     try:
         with engine.connect() as conn:
@@ -455,6 +473,7 @@ async def lifespan(app: FastAPI):
     from .services.frame_buffer import run_frame_buffer
     from .services.storage_monitor import run_storage_monitor
     cleanup_task         = asyncio.create_task(_hourly_log_purge())
+    retention_task       = asyncio.create_task(_data_retention_purge())
     watchdog_task        = asyncio.create_task(_pending_session_watchdog())
     socket_pending_task  = asyncio.create_task(_socket_pending_watchdog())
     comm_loss_task       = asyncio.create_task(_comm_loss_watchdog())
@@ -471,6 +490,7 @@ async def lifespan(app: FastAPI):
 
     logger.info("Shutting down...")
     cleanup_task.cancel()
+    retention_task.cancel()
     watchdog_task.cancel()
     socket_pending_task.cancel()
     comm_loss_task.cancel()

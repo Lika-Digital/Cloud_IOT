@@ -113,15 +113,21 @@ class SessionService:
             .filter(SensorReading.session_id == session.id)
             .all()
         )
+        # v3.14 — clamp out-of-range readings before max() so a single corrupt
+        # telemetry packet (e.g. a garbage 9999 kWh spike) cannot be billed.
+        # Uses the same sanity bounds as the startup backfill for consistency.
+        from ..database import _MAX_SANE_KWH_PER_SESSION, _MAX_SANE_LITERS_PER_SESSION
         if session.type == "electricity":
-            kwh_readings = [r.value for r in readings if r.type == "kwh_total"]
+            kwh_readings = [r.value for r in readings
+                            if r.type == "kwh_total" and r.value < _MAX_SANE_KWH_PER_SESSION]
             if kwh_readings:
                 # Firmware sends session-cumulative energy (resets to 0 at session
                 # start, rises to session total). Final value = max, which also
                 # covers short sessions where only the SessionEnded reading exists.
                 session.energy_kwh = max(kwh_readings)
         elif session.type == "water":
-            liter_readings = [r.value for r in readings if r.type == "total_liters"]
+            liter_readings = [r.value for r in readings
+                              if r.type == "total_liters" and r.value < _MAX_SANE_LITERS_PER_SESSION]
             if liter_readings:
                 session.water_liters = max(liter_readings)
 

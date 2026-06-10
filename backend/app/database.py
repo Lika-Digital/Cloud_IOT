@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from .config import settings
 
@@ -7,6 +7,30 @@ engine = create_engine(
     connect_args={"check_same_thread": False},
     pool_pre_ping=True,   # verify connection is alive before use; auto-recycles stale ones
 )
+
+
+def apply_sqlite_pragmas(target_engine):
+    """v3.14 — set WAL + busy_timeout on every new SQLite connection.
+
+    WAL lets readers and the writer proceed concurrently, so the MQTT write
+    loop no longer blocks dashboard reads. busy_timeout makes a contended write
+    wait up to 5 s instead of failing immediately with 'database is locked'.
+    synchronous=NORMAL is the safe, faster durability level under WAL.
+
+    Note: foreign_keys is deliberately NOT enabled here — the startup
+    `DELETE FROM pedestals` would violate the (cascade-less) FKs. Enabling FK
+    enforcement is tracked separately in the README roadmap.
+    """
+    @event.listens_for(target_engine, "connect")
+    def _set_sqlite_pragma(dbapi_conn, _record):
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=5000")
+        cur.execute("PRAGMA synchronous=NORMAL")
+        cur.close()
+
+
+apply_sqlite_pragmas(engine)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -179,6 +203,21 @@ def _migrate_schema():
             "CREATE UNIQUE INDEX IF NOT EXISTS ux_session_one_active_per_socket "
             "ON sessions(pedestal_id, socket_id, type) "
             "WHERE status IN ('pending', 'active')"
+        ))
+        conn.commit()
+
+        # v3.14 — hot-path indexes on the high-volume sensor_readings table.
+        # complete() filters by session_id on every session close; analytics +
+        # the v3.13 retention prune filter by (pedestal_id, timestamp). On an
+        # existing NUC DB these are added here; fresh DBs get them via the model
+        # __table_args__. Idempotent.
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_sensor_readings_session "
+            "ON sensor_readings(session_id)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_sensor_readings_pedestal_time "
+            "ON sensor_readings(pedestal_id, timestamp)"
         ))
         conn.commit()
 

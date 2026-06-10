@@ -30,9 +30,83 @@ Mosquitto Broker (:1883)                  │                         │
 
 ---
 
+## Known Issues & Planned Corrections
+
+Audited backlog of issues not yet fixed (read-only audit 2026-06-10). Every fix
+follows the same rule used for v3.13/v3.14: **impact-analyse first, then ship
+with a regression test** so the same mistake can't reappear in future work.
+
+### Ready to implement (confirmed, backend-only)
+
+| # | Issue | Impact | Risk | Location |
+|---|-------|--------|------|----------|
+| C | **Water-valve stop matches wrong session.** `get_active_for_socket(.., None)` has no `session_type` filter, and water sessions use TWO `socket_id` conventions (customer-initiated = `NULL`, firmware = 1/2). The naive fix regresses customer water-stop — needs a water-aware query handling both, plus tests for each. | Med — water control/billing correctness | Med | `controls.py:624` |
+| A | **Auto-reject publishes invalid command.** `opta/cmd/socket/Q{n}` gets `{"cmd":"disable"}`; firmware wants `{"action":"stop"}`, so a "rejected" socket can stay energized. LATENT on the NUC: `operator_status='pending'` is only set by the legacy `pedestal/...` path, not the Opta auto-start path. | Low (latent) / High if pending used | Low | `mqtt_handlers.py:2739` |
+| H1 | **Tracebacks collapsed.** Top-level MQTT handler `except` logs one line; switch to `logger.exception` to make every future handler bug diagnosable. | Low (dev quality) | Low | `mqtt_handlers.py:~379` |
+| L1 | **False zero-flow alarms.** Water reading `type`/`socket_id` mismatch between the two water paths makes the zero-flow watchdog raise false `valve_flow_warning`. | Low | Low | `mqtt_handlers.py:1204` vs `2434` |
+| M4 | **Spurious diagnostic error.** `_handle_opta_diagnostic` log uses `p['id']` → "diagnostic error" on a malformed item even when the diagnostic succeeded. | Low | Low | `mqtt_handlers.py:~2285` |
+
+### Needs verification before any code (do NOT fix blind)
+
+| # | Issue | Why blocked |
+|---|-------|-------------|
+| Billing | Session billing flows through `opta/events` (`TelemetryUpdate`/`SessionEnded`), **not** the live `opta/meters` path. Handler reads `energyKwhTotal`/`volumeLTotal`; if the firmware event keys differ, invoices bill **ZERO**. | The idle MQTT dump had no `opta/events`. Capture `opta/events` during a real session (plug in → draw power → stop) and compare field names first. |
+| 6 | **BreakerTripped cause = NULL.** Handler reads `tripCause`/`currentAtTrip`; a binary contract doc reportedly says `breaker.cause`. | Markdown contract doesn't specify the event JSON; no live trip captured; existing tests use `tripCause`. Capture a real BreakerTripped event or read the source contract first. |
+
+### Higher-risk / larger changes (separate, careful)
+
+| # | Issue | Why deferred |
+|---|-------|-------------|
+| FK | `PRAGMA foreign_keys=ON` not enabled. 11 tables FK to `pedestals` with no `ON DELETE CASCADE`, and `main.py:308` runs `DELETE FROM pedestals` every startup → enabling FK breaks boot. Needs cascade strategy + startup-clear rework. | High risk; SQLite table rebuilds. |
+| Loop | MQTT handlers do blocking SQLite commits on the asyncio loop → stalls under load; move to `run_in_executor`/threadpool. | High-risk refactor; WAL (v3.14) already mitigates most lock errors. |
+
+### Firmware-side (not backend — Arduino Opta sketch)
+
+| # | Issue | Fix |
+|---|-------|-----|
+| HWcfg | `opta/config/hardware` is truncated at ~502 bytes (MQTT buffer too small) → sockets never initialize, `rated_amps` missing, **90% overload protection dormant**. | Increase the firmware MQTT buffer to ≥1024 B (e.g. PubSubClient `setBufferSize`) and publish `retain=true`. |
+
+### Deferred by design — isolated-LAN NUC (single NUC + Opta + sensors)
+
+Accepted on an isolated single-NUC LAN; revisit if the LAN is shared or anything
+is exposed via the Cloudflare tunnel:
+
+- Static `JWT_SECRET` + `admin1234` seed in `.env` (rotate per-install if exposed).
+- MQTT broker anonymous, no TLS/ACL (LAN-scoped).
+- `GET /api/camera/{id}/stream` has no auth guard (`camera.py:64`).
+- OTP brute-forceable (6-digit, no per-user lockout, IP from spoofable `X-Forwarded-For`).
+- External API key is a 10-year JWT controlling bidirectional control endpoints.
+
+---
+
 ## Changelog
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
+
+### 2026-06-10 — Database & data-integrity hardening (v3.14)
+
+Follow-on to v3.13. All confirmed, low-risk fixes — each impact-analysed before
+coding, each shipping a regression test so the mistake cannot return:
+
+- **`sensor_readings` hot-path indexes.** Added `ix_sensor_readings_session`
+  (`session_id`) and `ix_sensor_readings_pedestal_time` (`pedestal_id, timestamp`).
+  `complete()` filtered this high-volume table by `session_id` on every session
+  close with no index (full scan); analytics and the v3.13 retention prune filter
+  by `(pedestal_id, timestamp)`. Declared on the model (fresh DBs) + idempotent
+  `CREATE INDEX IF NOT EXISTS` migration (existing NUC DBs). This also makes the
+  every-boot backfill fast, so no gating was needed. Tests: `test_db_indexes.py` (2).
+- **SQLite WAL + `busy_timeout`.** New `apply_sqlite_pragmas()` puts every
+  connection on both engines into `journal_mode=WAL`, `busy_timeout=5000`,
+  `synchronous=NORMAL`. The MQTT write loop no longer blocks dashboard reads, and
+  a contended write waits up to 5 s instead of failing with `database is locked`.
+  FK enforcement deliberately **not** enabled (would break the startup
+  `DELETE FROM pedestals` — see Known Issues). Tests: `test_db_pragmas.py` (2).
+- **Over-bill clamp in `complete()`.** Session totals now exclude readings above
+  the existing `_MAX_SANE_KWH/LITERS` bounds before `max()`, so a single corrupt
+  telemetry packet (e.g. a 9999 kWh spike) cannot be billed. Tests:
+  `test_complete_clamp.py` (3).
+
+Full backend suite **376 → 383 passing**, 0 failures.
 
 ### 2026-06-10 — Disk-safety hardening: retention, disk guard, breaker fix (v3.13)
 

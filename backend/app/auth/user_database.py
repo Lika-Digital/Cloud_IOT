@@ -16,6 +16,10 @@ user_engine = create_engine(
     connect_args={"check_same_thread": False},
 )
 
+# v3.14 — same WAL + busy_timeout PRAGMAs as pedestal.db (see database.py).
+from ..database import apply_sqlite_pragmas  # noqa: E402
+apply_sqlite_pragmas(user_engine)
+
 UserSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=user_engine)
 
 

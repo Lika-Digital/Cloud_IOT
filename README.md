@@ -83,6 +83,30 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-06-13 — Fix `cloud-iot upgrade` venv corruption on Python 3.14 (v3.20)
+
+The `cloud-iot upgrade` CLI destroyed the Python venv on every run and could not
+reinstall it on the Ubuntu 26.04 / Python 3.14 NUC. Root causes: (1) it ran
+`rm -rf .venv` but never recreated the venv before calling `.venv/bin/pip`
+(→ `pip: No such file or directory`); (2) it installed the strict
+`requirements.txt` whose `numpy==2.1.2` / `scikit-learn==1.5.2` / `pydantic==2.9`
+pins have no cp314 wheels; (3) it restarted the backend even when pip failed.
+
+- The management CLI is now a **version-controlled standalone file**
+  (`nuc_image/cloud-iot`) instead of a heredoc embedded in each installer. Both
+  `ubuntu-install.sh` and `ubuntu-install-26.04.sh` deploy it via
+  `install -m 0755`. Future CLI fixes are a one-line edit + `cp` (no reinstall).
+- The `upgrade` path now: recreates the venv **only if pip is missing** (no more
+  needless full re-downloads), detects the Python version and **relaxes the
+  numpy/pydantic/scikit-learn/Pillow pins on Python ≥ 3.13** (same logic the
+  fresh-install path uses), installs with `--prefer-binary`, and **aborts without
+  restarting the backend if pip fails**.
+- The ISO firstboot overlay CLI (`overlay/.../install-cloud-iot.sh`) has no
+  `upgrade` command and is unaffected.
+- To update an already-running NUC without a reinstall:
+  `git -C ~/Cloud_IOT pull origin main` then
+  `sudo cp ~/Cloud_IOT/nuc_image/cloud-iot /usr/local/bin/cloud-iot`.
+
 ### 2026-06-13 — TOTP two-factor with OTP fallback (v3.19) — `16c6d4e`
 
 Adds authenticator-app (TOTP, RFC 6238) two-factor as the primary second factor,

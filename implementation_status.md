@@ -1,3 +1,30 @@
+# Implementation Status — Fix `cloud-iot upgrade` venv corruption on Python 3.14 (v3.20)
+
+## 2026-06-13 — NUC upgrade-tooling fix (post-incident)
+
+Context: deploying v3.19 to the NUC, `sudo cloud-iot upgrade` gutted the venv
+(pip + uvicorn gone → crash loop). Root cause: the CLI's `upgrade` path did
+`rm -rf .venv` with no recreation, installed strict pins with no cp314 wheels,
+and restarted on pip failure. Recovered by hand (relaxed-pin venv rebuild);
+this entry is the permanent fix.
+
+Files:
+- `nuc_image/cloud-iot` (NEW) — management CLI extracted to a version-controlled
+  standalone file. Fixed `upgrade`: recreate venv only if pip missing; detect
+  Python version + relax numpy/pydantic/scikit-learn/Pillow pins on ≥3.13;
+  `pip install --prefer-binary`; abort (no restart) on pip failure. `bash -n` OK.
+- `nuc_image/ubuntu-install-26.04.sh` — replaced embedded CLI heredoc with
+  `install -m 0755 "${REPO_DIR}/nuc_image/cloud-iot" ...`. `bash -n` OK.
+- `nuc_image/ubuntu-install.sh` — same replacement. `bash -n` OK.
+- `README.md` — v3.20 changelog entry.
+- ISO firstboot overlay CLI left as-is (no `upgrade` command, unaffected).
+
+STATUS: complete + validated locally. AWAITING APPROVAL to commit + push to main.
+NUC deploy after merge: `git -C ~/Cloud_IOT pull origin main` then
+`sudo cp ~/Cloud_IOT/nuc_image/cloud-iot /usr/local/bin/cloud-iot`.
+
+---
+
 # Implementation Status — TOTP 2FA with OTP Fallback (v3.19)
 
 ## Session started: 2026-06-13

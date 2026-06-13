@@ -83,7 +83,7 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
-### 2026-06-13 — TOTP two-factor with OTP fallback (v3.19)
+### 2026-06-13 — TOTP two-factor with OTP fallback (v3.19) — `16c6d4e`
 
 Adds authenticator-app (TOTP, RFC 6238) two-factor as the primary second factor,
 with the existing email/log OTP preserved as an always-available fallback. **2FA

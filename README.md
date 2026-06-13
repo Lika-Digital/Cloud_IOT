@@ -83,7 +83,7 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
-### 2026-06-13 — Fix `cloud-iot upgrade` venv corruption on Python 3.14 (v3.20)
+### 2026-06-13 — Fix `cloud-iot upgrade` venv corruption on Python 3.14 (v3.20) — `703724a`
 
 The `cloud-iot upgrade` CLI destroyed the Python venv on every run and could not
 reinstall it on the Ubuntu 26.04 / Python 3.14 NUC. Root causes: (1) it ran
@@ -1175,6 +1175,89 @@ sudo chown -R cloud_iot:cloud_iot /opt/cloud-iot/backend/app
 sudo /opt/cloud-iot/backend/.venv/bin/pip install -r ~/Cloud_IOT/backend/requirements.txt -q
 sudo systemctl restart cloud-iot-backend
 ```
+
+---
+
+### NUC on Ubuntu 26.04 / Python 3.14 — specifics & recovery
+
+> Field notes from the marina NUC (`marina-iot`, cabinet `MAR_KRK_ORM_01`),
+> confirmed 2026-06-13 while deploying v3.19/v3.20. Read this before touching the
+> venv or the upgrade tooling on a 3.14 box.
+
+**This NUC runs Python 3.14.4 only** (no 3.11/3.12/3.13). Several pinned
+dependencies have **no cp314 wheels**, so the venv must be built with relaxed
+pins or pip will attempt impossible source builds:
+
+| requirements.txt pin | relaxed to (Python ≥ 3.13) |
+|---|---|
+| `numpy==2.1.2` | `numpy>=2.2` |
+| `pydantic==2.9.2` | `pydantic>=2.10` |
+| `pydantic-settings==2.5.2` | `pydantic-settings>=2.6` |
+| `scikit-learn==1.5.2` | `scikit-learn>=1.6` |
+| `Pillow>=10.0.0` | `Pillow>=11.0` |
+| `reportlab` | **removed** (no 3.14 wheel; PDF is disabled on NUC anyway) |
+
+`reportlab` is only imported lazily inside `pdf_service.py` functions, so the
+backend starts fine without it — PDF-generating endpoints just return 501.
+
+**Which upgrade tool you have matters.** Both `nuc_image/upgrade.sh` and the
+`sudo cloud-iot upgrade` CLI exist. As of **v3.20** the CLI is the fixed,
+recommended path: it recreates the venv only when pip is missing, auto-relaxes
+the pins above on Python ≥ 3.13, installs with `--prefer-binary`, and **aborts
+without restarting** if pip fails. Versions **before v3.20** were broken on 3.14
+(they `rm -rf .venv` without recreating it, installed the strict pins, and
+restarted onto a dead venv → backend crash-loop with `203/EXEC` then
+`ModuleNotFoundError`).
+
+**Updating the management CLI itself** (no full reinstall needed — `cp`, not a
+fragile heredoc; `nuc_image/cloud-iot` is now a version-controlled file):
+```bash
+git -C ~/Cloud_IOT pull origin main
+sudo cp ~/Cloud_IOT/nuc_image/cloud-iot /usr/local/bin/cloud-iot
+diff -q ~/Cloud_IOT/nuc_image/cloud-iot /usr/local/bin/cloud-iot && echo IDENTICAL
+```
+
+**Manual venv recovery** (if the venv is ever gutted — pip/uvicorn missing —
+and you can't rely on the CLI). Do **not** re-run the full installer; it wipes
+`users.db`/`pedestal.db`:
+```bash
+cd /opt/cloud-iot/backend
+sudo cp requirements.txt req.txt
+sudo sed -i '/reportlab/d' req.txt
+sudo sed -i 's/^numpy==.*/numpy>=2.2/' req.txt
+sudo sed -i 's/^pydantic==.*/pydantic>=2.10/' req.txt
+sudo sed -i 's/^pydantic-settings==.*/pydantic-settings>=2.6/' req.txt
+sudo sed -i 's/^scikit-learn==.*/scikit-learn>=1.6/' req.txt
+sudo sed -i 's/^Pillow.*/Pillow>=11.0/' req.txt
+sudo rm -rf .venv
+sudo python3 -m venv .venv
+sudo .venv/bin/pip install --upgrade pip setuptools wheel
+sudo .venv/bin/pip install --prefer-binary -r req.txt
+sudo chown -R "$(stat -c '%U:%G' app)" .venv
+sudo systemctl restart cloud-iot-backend
+```
+With relaxed pins everything resolves to cp314 wheels (numpy 2.4.x,
+scikit-learn 1.9.x, pydantic-core 2.46.x, Pillow 12.x) — nothing compiles.
+
+**Repo ownership gotcha.** `sudo cloud-iot upgrade` runs `git pull` as **root**,
+leaving root-owned objects in `~/Cloud_IOT/.git/objects`. A later *non-root*
+`git pull` then fails with `insufficient permission for adding an object to
+repository database`. Fix:
+```bash
+sudo chown -R "$(id -un)":"$(id -gn)" ~/Cloud_IOT
+```
+
+**Terminal paste caveat.** This NUC's terminal hard-wraps long pasted lines and
+re-indents them, which breaks heredocs and multi-line commands. Keep pasted
+commands short (`cd` first to shorten paths); restore any clobbered file by
+copying the real one from `~/Cloud_IOT/...`.
+
+**TOTP first-login note (v3.19).** A freshly-deployed admin has no authenticator
+enrolled (`totp_enabled=False`), so the **first** login uses the OTP fallback
+(auto-sent, read from `sudo journalctl -u cloud-iot-backend -f`). Enable
+authenticator-app TOTP at **Settings → Two-Factor Authentication**; subsequent
+logins then show the TOTP screen with OTP behind "Use backup code instead". See
+`docs/totp-setup-guide.md`.
 
 ---
 

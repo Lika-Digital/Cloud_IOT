@@ -151,6 +151,20 @@ def cache_status(db: DBSession = Depends(get_db), _: User = Depends(require_admi
     }
 
 
+@router.get("/mqtt-status")
+def mqtt_status(_: User = Depends(require_admin)):
+    """Live MQTT broker connection status (v3.16). Mirror of mqtt_status.json."""
+    from ..services.status_service import build_mqtt_status
+    return build_mqtt_status()
+
+
+@router.get("/devices-status")
+def devices_status(_: User = Depends(require_admin)):
+    """Per-pedestal connected-device liveness (v3.16). Mirror of devices_status.json."""
+    from ..services.status_service import build_devices_status
+    return build_devices_status()
+
+
 @router.post("/cache/clear")
 def clear_cache(db: DBSession = Depends(get_db), _: User = Depends(require_admin)):
     """Free disk space now: clear the telemetry buffer (sensor_readings),

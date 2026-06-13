@@ -195,9 +195,10 @@ def list_berths(
 ):
     """
     Return berths synced to the registered pedestal list.
-    - Auto-creates a berth for any pedestal that doesn't have one yet.
-    - Returns only berths whose pedestal_id matches a real pedestal.
-    - Berth count always equals pedestal count.
+    - Auto-creates a DEFAULT berth for any pedestal that has none yet.
+    - Returns ALL berths whose pedestal_id matches a real pedestal — multiple
+      berths (sectors) per pedestal/camera are supported, each with its own
+      detection zone (v3.15). One camera can drive several berth sectors.
     """
     from ..services.berth_analyzer import list_reference_images
     from ..models.pedestal import Pedestal
@@ -205,7 +206,9 @@ def list_berths(
     pedestals = db.query(Pedestal).order_by(Pedestal.id).all()
     pedestal_ids = {p.id for p in pedestals}
 
-    # Auto-create missing berths (one per pedestal)
+    # Auto-create a default berth only for pedestals that have NONE yet. Once a
+    # pedestal has at least one berth, the operator manages additional sectors
+    # via "Add Sector" — we never auto-seed a second one.
     existing_ped_ids = {b.pedestal_id for b in user_db.query(Berth).all() if b.pedestal_id}
     for ped in pedestals:
         if ped.id not in existing_ped_ids:
@@ -218,14 +221,10 @@ def list_berths(
             ))
     user_db.commit()
 
-    # Return only berths tied to real pedestals, one per pedestal (first match)
+    # Return every berth tied to a real pedestal — NO de-dup by pedestal_id, so
+    # all sectors sharing a camera are shown (each analysed via its own zone).
     berths = user_db.query(Berth).order_by(Berth.id).all()
-    seen_pedestals: set = set()
-    filtered: list = []
-    for b in berths:
-        if b.pedestal_id in pedestal_ids and b.pedestal_id not in seen_pedestals:
-            seen_pedestals.add(b.pedestal_id)
-            filtered.append(b)
+    filtered = [b for b in berths if b.pedestal_id in pedestal_ids]
 
     cfg_map = _get_pedestal_cfg_map(db)
     return [

@@ -34,6 +34,7 @@ router = APIRouter(tags=["ext-pedestal"])
 _EP_BERTHS_OCC = "berths.occupancy_ext"
 _EP_CAM_FRAME  = "camera.frame_ext"
 _EP_CAM_STREAM = "camera.stream_ext"
+_EP_PUSH_IMAGE = "berths.push_image_ext"   # v3.16 — ERP pushes a match image
 
 
 # ── Auth + config helpers ─────────────────────────────────────────────────────
@@ -201,6 +202,55 @@ async def ext_berths_occupancy(pedestal_id: str, request: Request):
             })
 
     return JSONResponse({"pedestal_id": display_id, "berths": berth_list})
+
+
+# ── 1b. ERP pushes a reference image for a berth (v3.16) ──────────────────────
+
+@router.post("/api/ext/pedestals/{pedestal_id}/berths/{berth_id}/reference-image")
+async def ext_push_berth_image(pedestal_id: str, berth_id: int, request: Request):
+    """ERP pushes an image (raw bytes) to MATCH against an EXISTING berth/sector.
+
+    Sectors are created only on the NUC — this endpoint targets a berth_id that
+    must already exist under the pedestal; it never creates one. The image is
+    stored as a reference image for that berth and used by the histogram match
+    during analysis.
+
+      200 { ok, berth_id, stored }
+      404 pedestal/berth not found · 422 empty body · 503 disabled
+    """
+    _, err = _check_ext_auth(request)
+    if err:
+        return err
+    if not _endpoint_enabled(_EP_PUSH_IMAGE):
+        return JSONResponse({"error": "Feature not available", "reason": "Not enabled"}, status_code=503)
+
+    db_id, _display = _resolve_pedestal(pedestal_id)
+    if db_id is None:
+        return JSONResponse({"detail": "Pedestal not found"}, status_code=404)
+
+    from ..auth.berth_models import Berth
+    user_db = UserSessionLocal()
+    try:
+        berth = user_db.query(Berth).filter(
+            Berth.id == berth_id, Berth.pedestal_id == db_id
+        ).first()
+    finally:
+        user_db.close()
+    if berth is None:
+        return JSONResponse({"detail": "Berth not found for this pedestal"}, status_code=404)
+
+    data = await request.body()
+    if not data:
+        return JSONResponse({"detail": "Empty image body"}, status_code=422)
+
+    from datetime import datetime
+    from ..services.berth_analyzer import save_reference_image
+    fname = f"erp_{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.jpg"
+    try:
+        save_reference_image(berth_id, fname, data)
+    except Exception as e:
+        return JSONResponse({"detail": f"Failed to store image: {e}"}, status_code=500)
+    return JSONResponse({"ok": True, "berth_id": berth_id, "stored": fname})
 
 
 # ── 2. Camera frame ───────────────────────────────────────────────────────────

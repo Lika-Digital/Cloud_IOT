@@ -83,6 +83,67 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-06-13 — Config backup, status files, ERP occupancy (v3.16)
+
+Three operator/troubleshooting features, each impact-analysed first and shipped
+with regression tests.
+
+**1. Configuration backup / restore.** New `config_service.py` + admin router
+`config_backup.py`:
+- `GET /api/admin/config/export?full=` → single timestamped JSON bundle of ALL
+  config from both DBs (pedestal/socket/valve/LED/sensor configs, SNMP, ext-API,
+  SMTP, billing, contracts, berths). **Secrets redacted by default**; `?full=true`
+  is an opt-in disaster-recovery backup (still never exports the .env JWT secret).
+  Saved under `data/backups/`.
+- `GET /api/admin/config/backups` (+ `/{filename}` download), `POST /api/admin/config/import`
+  (restore — upserts by **natural key**, never raw PK; redacted secrets are
+  preserved, not overwritten; a redacted API key forces the gateway inactive).
+- `GET /api/admin/config/support-bundle` → one-click artifact = redacted config +
+  MQTT/devices status + 24h/7d error summary.
+- Tests: `test_config_backup.py` (6).
+
+**2. Status snapshot files.** New `status_service.py` writes
+`data/status/mqtt_status.json` and `devices_status.json` every 30 s (atomic), and
+backs `GET /api/system/mqtt-status` + `GET /api/system/devices-status`.
+`MQTTService` gained connect/disconnect timestamps + connect counter. Files exist
+for offline/SSH troubleshooting; endpoints for the dashboard. Tests:
+`test_status_files.py` (3).
+
+**3. ERP berth occupancy.** The `berth_occupancy_updated` webhook is now **trimmed
+to `{pedestal_id, berths:[{berth_id, occupied}]}`** (the dashboard WS still gets
+the full payload) — no more leaking zones/camera URL/scores/embedding paths. New
+ERP-facing `POST /api/ext/pedestals/{pid}/berths/{berth_id}/reference-image`
+(catalog `berths.push_image_ext`, opt-in) lets the ERP push a match image to an
+**existing** berth; sector creation stays NUC/admin-only (not in the ERP catalog).
+Tests: `test_erp_berth_occupancy.py` (5).
+
+Full backend suite **385 → 399 passing**, 0 failures.
+
+### 2026-06-13 — Multi-sector berths per camera (v3.15)
+
+Berth occupancy now supports **multiple sectors (berths) on one camera**, each
+with its own detection zone — so a single camera can monitor several berths.
+
+- **Root cause:** `GET /api/berths` (`list_berths`) de-duplicated results by
+  `pedestal_id` and documented "berth count always equals pedestal count" — so
+  any extra sector created via **Add Sector** was saved to the DB but **silently
+  dropped from the list**, making it look like only one sector existed / a second
+  add failed.
+- **Fix:** removed the per-pedestal de-dup; `list_berths` returns **all** berths
+  tied to a real pedestal. Auto-create still seeds at most one default berth per
+  *bare* pedestal (never a second). Impact analysis confirmed availability,
+  reservations, per-zone analysis, crop saving (filenames already include
+  `berth_id`), the shared per-camera frame buffer, WebSocket events and the
+  frontend/mobile all key by `berth_id` — so no other change was needed.
+- Tests: new `tests/backend/test_berths_multi_sector.py` (2) — two sectors on one
+  camera both appear in `/api/berths` and `/api/berths/availability`.
+- ⚠️ **Data note:** removing the de-dup surfaces any **hidden duplicate berths**
+  already in `users.db` (from earlier failed Add-Sector attempts). Review with
+  `SELECT pedestal_id, COUNT(*) FROM berths GROUP BY pedestal_id HAVING COUNT(*)>1;`
+  and delete unwanted rows.
+
+Full backend suite **383 → 385 passing**, 0 failures.
+
 ### 2026-06-10 — Database & data-integrity hardening (v3.14) — `30cb125`
 
 Follow-on to v3.13. All confirmed, low-risk fixes — each impact-analysed before

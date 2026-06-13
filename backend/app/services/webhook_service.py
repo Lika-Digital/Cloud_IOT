@@ -47,6 +47,19 @@ def _load_config() -> dict | None:
     return _config_cache
 
 
+def _project_berth_occupancy(data: dict) -> dict:
+    """v3.16 — trim the rich internal berth payload to the ERP-simple shape:
+    {pedestal_id, berths:[{berth_id, occupied}]}. The dashboard WebSocket still
+    receives the full payload; only the ERP webhook gets this slim projection,
+    so zones / camera URL / match scores / embedding paths are never leaked."""
+    berths = data.get("berths") or []
+    slim = [{"berth_id": b.get("id"), "occupied": bool(b.get("occupied_bit"))} for b in berths]
+    out = {"berths": slim}
+    if berths and berths[0].get("pedestal_id") is not None:
+        out["pedestal_id"] = berths[0]["pedestal_id"]
+    return out
+
+
 def invalidate_cache() -> None:
     """Force next dispatch to reload config from DB."""
     global _config_cache, _cache_ts
@@ -71,11 +84,16 @@ async def dispatch_webhook(message: dict) -> None:
         if event_id not in cfg.get("allowed_events", []):
             return
 
+        data = message.get("data", {})
+        # ERP gets a minimal occupancy shape, never the full internal berth row.
+        if event_id == "berth_occupancy_updated":
+            data = _project_berth_occupancy(data)
+
         import httpx
         api_key = cfg.get("api_key") or ""
         payload = {
             "event":     event_id,
-            "data":      message.get("data", {}),
+            "data":      data,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         async with httpx.AsyncClient(timeout=5.0) as client:

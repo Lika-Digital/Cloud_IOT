@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime
 import paho.mqtt.client as mqtt
 
 from ..config import settings
@@ -47,6 +48,27 @@ class MQTTService:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._client: mqtt.Client | None = None
         self._connected = False
+        # v3.16 — broker status instrumentation (for the status snapshot file).
+        self._last_connect_at: datetime | None = None
+        self._last_disconnect_at: datetime | None = None
+        self._last_disconnect_reason: str | None = None
+        self._connect_count = 0
+
+    def status(self) -> dict:
+        """Current broker connection status (for /api/system/mqtt-status + file)."""
+        def _iso(dt):
+            return (dt.isoformat() + "Z") if dt else None
+        return {
+            "connected": self._connected,
+            "broker_host": settings.mqtt_broker_host,
+            "broker_port": settings.mqtt_broker_port,
+            "keepalive": 60,
+            "last_connect_at": _iso(self._last_connect_at),
+            "last_disconnect_at": _iso(self._last_disconnect_at),
+            "last_disconnect_reason": self._last_disconnect_reason,
+            "connect_count": self._connect_count,
+            "subscribed_topics": list(TOPICS),
+        }
 
     def start(self, loop: asyncio.AbstractEventLoop):
         self._loop = loop
@@ -94,6 +116,8 @@ class MQTTService:
     def _on_connect(self, client, userdata, flags, reason_code, properties):
         if reason_code == 0:
             self._connected = True
+            self._last_connect_at = datetime.utcnow()
+            self._connect_count += 1
             logger.info("MQTT connected")
             for topic in TOPICS:
                 client.subscribe(topic, qos=1)
@@ -108,6 +132,8 @@ class MQTTService:
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties):
         self._connected = False
+        self._last_disconnect_at = datetime.utcnow()
+        self._last_disconnect_reason = str(reason_code)
         logger.warning(f"MQTT disconnected (reason: {reason_code})")
         if reason_code != 0:  # 0 = clean disconnect
             try:

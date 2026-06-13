@@ -41,6 +41,7 @@ from .routers import ext_breaker_endpoints as ext_breaker_router
 from .routers import meter_load as meter_load_router
 from .routers import ext_meter_load_endpoints as ext_meter_load_router
 from .routers import settings as settings_router
+from .routers import config_backup as config_backup_router
 from .auth.user_database import init_user_db, UserSessionLocal
 from .auth.models import User
 from .auth.customer_models import BillingConfig
@@ -81,6 +82,17 @@ async def _data_retention_purge():
             purge_old_data()
         except Exception as e:
             logger.warning(f"Data retention purge failed: {e}")
+
+
+async def _status_snapshot_writer():
+    """Write MQTT + connected-devices status files every 30 s (v3.16)."""
+    while True:
+        await asyncio.sleep(30)
+        try:
+            from .services.status_service import write_status_files
+            write_status_files()
+        except Exception as e:
+            logger.warning(f"Status snapshot write failed: {e}")
 
 
 async def _pending_session_watchdog():
@@ -474,6 +486,7 @@ async def lifespan(app: FastAPI):
     from .services.storage_monitor import run_storage_monitor
     cleanup_task         = asyncio.create_task(_hourly_log_purge())
     retention_task       = asyncio.create_task(_data_retention_purge())
+    status_writer_task   = asyncio.create_task(_status_snapshot_writer())
     watchdog_task        = asyncio.create_task(_pending_session_watchdog())
     socket_pending_task  = asyncio.create_task(_socket_pending_watchdog())
     comm_loss_task       = asyncio.create_task(_comm_loss_watchdog())
@@ -491,6 +504,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down...")
     cleanup_task.cancel()
     retention_task.cancel()
+    status_writer_task.cancel()
     watchdog_task.cancel()
     socket_pending_task.cancel()
     comm_loss_task.cancel()
@@ -577,6 +591,7 @@ app.include_router(reviews_router.router)
 app.include_router(berths_router.router)
 app.include_router(ext_api_admin_router.router)
 app.include_router(settings_router.router)
+app.include_router(config_backup_router.router)  # v3.16 — config backup/restore
 app.include_router(breakers_router.router)       # v3.8 — internal breaker admin routes
 app.include_router(meter_load_router.router)    # v3.11 — internal load monitoring routes
 app.include_router(ext_pedestal_router.router)   # must be before gateway catch-all

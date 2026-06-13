@@ -57,7 +57,7 @@ with a regression test** so the same mistake can't reappear in future work.
 
 | # | Issue | Why deferred |
 |---|-------|-------------|
-| FK | `PRAGMA foreign_keys=ON` not enabled. 11 tables FK to `pedestals` with no `ON DELETE CASCADE`, and `main.py:308` runs `DELETE FROM pedestals` every startup → enabling FK breaks boot. Needs cascade strategy + startup-clear rework. | High risk; SQLite table rebuilds. |
+| FK | `PRAGMA foreign_keys=ON` not enabled. 11 tables FK to `pedestals` with no `ON DELETE CASCADE`. The startup `DELETE FROM pedestals` was **removed in v3.18** and pedestal IDs are now stable, so the main blocker is gone — enabling FK is now feasible (still needs `ON DELETE` cascade definitions on the child tables). | Medium; SQLite table rebuilds for cascades. |
 | Loop | MQTT handlers do blocking SQLite commits on the asyncio loop → stalls under load; move to `run_in_executor`/threadpool. | High-risk refactor; WAL (v3.14) already mitigates most lock errors. |
 
 ### Firmware-side (not backend — Arduino Opta sketch)
@@ -83,7 +83,7 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
-### 2026-06-13 — Reboot resilience + plug-and-go by default (v3.18)
+### 2026-06-13 — Reboot resilience + plug-and-go by default (v3.18) — `0dd81b4`
 
 Fixes two startup bugs (a rebooted NUC killed live sessions and reverted
 operator config) and makes electricity plug-and-go the default. All impact-
@@ -118,7 +118,7 @@ adoption (elec + water, idempotent, idle→none), door-open non-blocking; update
 `test_pedestal_auto_discovery.py` (default True). Full backend suite
 **399 → 404 passing**, 0 failures.
 
-### 2026-06-13 — Config Backup/Restore Settings UI (v3.17)
+### 2026-06-13 — Config Backup/Restore Settings UI (v3.17) — `7f960f8`
 
 Frontend for the v3.16 config backup/restore backend. New **Configuration
 Backup / Restore** panel in Settings (`frontend/src/pages/Settings.tsx` +
@@ -136,7 +136,7 @@ Validation: `tsc` clean; backend API already covered by `test_config_backup.py`
 (6 tests). No frontend unit-test harness exists in this project, so UI
 correctness is enforced by the type-check + the pre-push eslint stage.
 
-### 2026-06-13 — Config backup, status files, ERP occupancy (v3.16)
+### 2026-06-13 — Config backup, status files, ERP occupancy (v3.16) — `da9dea9`
 
 Three operator/troubleshooting features, each impact-analysed first and shipped
 with regression tests.
@@ -172,7 +172,7 @@ Tests: `test_erp_berth_occupancy.py` (5).
 
 Full backend suite **385 → 399 passing**, 0 failures.
 
-### 2026-06-13 — Multi-sector berths per camera (v3.15)
+### 2026-06-13 — Multi-sector berths per camera (v3.15) — `da9dea9`
 
 Berth occupancy now supports **multiple sectors (berths) on one camera**, each
 with its own detection zone — so a single camera can monitor several berths.

@@ -46,6 +46,32 @@ def create_websocket_token(session_id: int, customer_id: int) -> str:
     return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
 
 
+def create_partial_token(user_id: int, email: str) -> str:
+    """v3.19 — short-lived (5 min) pre-2FA token issued after a correct password.
+
+    Role 'totp_pending' is NOT an operator role, so `_get_current_user` rejects
+    it: a partial token cannot reach any protected endpoint. It only authorizes
+    the second-factor completion endpoints (/totp/login, /otp/request, /otp/login).
+    """
+    expires = datetime.now(timezone.utc) + timedelta(minutes=5)
+    payload = {
+        "sub": str(user_id),
+        "email": email,
+        "role": "totp_pending",
+        "totp_pending": True,
+        "exp": expires,
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
+
+
+def decode_partial_token(token: str) -> Optional[dict]:
+    """Return the payload only if it is a valid, unexpired partial token."""
+    payload = decode_token(token)
+    if not payload or payload.get("role") != "totp_pending" or not payload.get("totp_pending"):
+        return None
+    return payload
+
+
 def decode_token(token: str) -> Optional[dict]:
     try:
         return jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])

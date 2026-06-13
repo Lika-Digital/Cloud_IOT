@@ -52,6 +52,12 @@ def _migrate_user_schema():
 
     migrations = [
         ("customers", "push_token",           "TEXT"),
+        # v3.19 — TOTP 2FA columns on the operator users table.
+        ("users", "totp_secret",          "TEXT"),
+        ("users", "totp_enabled",         "INTEGER NOT NULL DEFAULT 0"),
+        ("users", "totp_verified_at",     "DATETIME"),
+        ("users", "totp_failed_attempts", "INTEGER NOT NULL DEFAULT 0"),
+        ("users", "totp_locked_until",    "DATETIME"),
         ("berths",    "reference_image",       "TEXT"),
         ("berths",    "detect_conf_threshold", "REAL NOT NULL DEFAULT 0.30"),
         ("berths",    "match_threshold",       "REAL NOT NULL DEFAULT 0.50"),

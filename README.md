@@ -83,6 +83,39 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-06-13 — TOTP two-factor with OTP fallback (v3.19)
+
+Adds authenticator-app (TOTP, RFC 6238) two-factor as the primary second factor,
+with the existing email/log OTP preserved as an always-available fallback. **2FA
+stays mandatory** — no operator ever reaches the dashboard without a second factor.
+TOTP works fully offline (pyotp; no external service).
+
+- **DB:** 5 new nullable `users` columns — `totp_secret`, `totp_enabled` (default
+  False), `totp_verified_at`, `totp_failed_attempts` (default 0), `totp_locked_until`.
+  Idempotent migration; no existing columns changed.
+- **New endpoints** (`routers/totp.py`): `POST /api/auth/totp/setup`,
+  `/totp/verify-setup`, `/totp/disable` (admin only), `GET /api/auth/totp/status`;
+  `POST /api/auth/totp/login`, `/otp/request`, `/otp/login` (partial-token).
+- **Login flow:** `POST /api/auth/login` now returns a 5-minute **partial token**
+  (`{totp_required, otp_available, partial_token, otp_sent, method}`) instead of a
+  JWT. TOTP users get a chooser; users without TOTP have an **OTP auto-sent**
+  (today's UX). The partial token (role `totp_pending`) cannot reach any protected
+  endpoint. Legacy `/verify-otp` (email+code) kept for back-compat.
+- **OTP fallback** is always available, requires a valid partial token (prevents
+  abuse), written to the backend log (`journalctl -u cloud-iot-backend -f`) and
+  emailed if SMTP is configured; 10-minute, single-use.
+- **Lockout:** 5 failed second-factor attempts → 15-minute lock (HTTP 429), shared
+  by TOTP and OTP, **always-on** (all environments).
+- **Frontend:** multi-step login (TOTP auto-submit + "Use backup code instead");
+  new admin **Settings → Two-Factor Authentication** panel (QR + manual key,
+  verify-enable, disable with password+code).
+- **Dependency:** `pyotp==2.9.0` added (`qrcode[pil]` already present).
+- **Docs:** `docs/totp-setup-guide.md` (apps, setup, fallback, SMTP, recovery,
+  troubleshooting).
+- Tests: new `tests/backend/test_totp.py` (24) — setup/verify/disable/status,
+  partial-token TOTP + OTP login, clock-drift, single-use, expiry, lockout,
+  partial-token isolation. Full backend suite **404 → 426 passing**, 0 failures.
+
 ### 2026-06-13 — Reboot resilience + plug-and-go by default (v3.18) — `0dd81b4`
 
 Fixes two startup bugs (a rebooted NUC killed live sessions and reverted

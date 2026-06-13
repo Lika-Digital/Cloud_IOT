@@ -60,3 +60,51 @@ class SmtpConfigUpdate(BaseModel):
     username: str = ""
     password: str = ""
     from_email: str = ""
+
+
+# ── v3.19 — TOTP 2FA ──────────────────────────────────────────────────────────
+
+class PartialLoginResponse(BaseModel):
+    """Returned by /login when credentials are valid. 2FA is mandatory, so a
+    full JWT is never returned here — the caller completes a second factor."""
+    totp_required: bool
+    otp_available: bool = True
+    partial_token: str
+    otp_sent: bool = False          # True when /login auto-sent an OTP (no-TOTP path)
+    method: Optional[str] = None    # "log" | "email" when otp_sent
+
+
+class TotpSetupResponse(BaseModel):
+    qr_code: str                    # base64 PNG (no data: prefix)
+    secret: str                     # plain secret for manual entry
+    provisioning_uri: str
+    warning: str = "Calling setup again invalidates the previous QR code and secret."
+
+
+class TotpCodeRequest(BaseModel):
+    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+class TotpDisableRequest(BaseModel):
+    password: str = Field(..., min_length=1, max_length=128)
+    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+class TotpStatusResponse(BaseModel):
+    totp_enabled: bool
+    totp_verified_at: Optional[datetime] = None
+
+
+class PartialTokenCodeRequest(BaseModel):
+    """Body for /totp/login and /otp/login — partial token + 6-digit code."""
+    partial_token: str = Field(..., max_length=4096)
+    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+class OtpRequestRequest(BaseModel):
+    partial_token: str = Field(..., max_length=4096)
+
+
+class OtpRequestResponse(BaseModel):
+    otp_sent: bool
+    method: str                     # "log" | "email"

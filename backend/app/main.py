@@ -22,6 +22,7 @@ from .services.session_service import session_service
 from .services.websocket_manager import ws_manager
 from .routers import pedestals, sessions, controls, analytics, predictions, websocket, camera, diagnostics
 from .routers import auth as auth_router
+from .routers import totp as totp_router
 from .routers import customer_auth, customer_sessions, customer_invoices, billing, chat, system_health
 from .routers import mobile as mobile_router
 from .routers import qr as qr_router
@@ -572,6 +573,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 # ─── Routers ─────────────────────────────────────────────────────────────────
 
 app.include_router(auth_router.router)
+app.include_router(totp_router.router)  # v3.19 — TOTP 2FA + partial-token login
 app.include_router(pedestal_config_router.router)  # must be before pedestals — /api/pedestals/health must register before /{pedestal_id}
 app.include_router(pedestals.router)
 app.include_router(sessions.router)

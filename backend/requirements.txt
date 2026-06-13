@@ -21,6 +21,7 @@ Pillow>=10.0.0
 python-multipart>=0.0.9
 slowapi==0.1.9
 qrcode[pil]==8.0
+pyotp==2.9.0   # v3.19 — TOTP (RFC 6238) authenticator 2FA
 # v3.10 — IANA time zone database. Linux NUC has it via /usr/share/zoneinfo,
 # but Windows dev/test boxes need this PyPI package for `zoneinfo.ZoneInfo`
 # to find tz keys like "Europe/Zagreb".

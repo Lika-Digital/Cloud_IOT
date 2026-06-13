@@ -14,6 +14,10 @@ import {
   exportConfig, getSupportBundle, listBackups, importConfig,
   type BackupMeta, type ConfigBundle, type RestoreReport,
 } from '../api/configBackup'
+import {
+  totpStatus, totpSetup, totpVerifySetup, totpDisable,
+  type TotpStatusResponse, type TotpSetupResponse,
+} from '../api/auth'
 
 export default function Settings() {
   return (
@@ -35,6 +39,9 @@ export default function Settings() {
 
           {/* User Management */}
           <UserManagementPanel />
+
+          {/* Two-Factor Authentication (TOTP) */}
+          <TwoFactorPanel />
         </div>
 
         {/* Right column — info */}
@@ -834,6 +841,128 @@ function UserManagementPanel() {
     </div>
   )
 }
+
+// ── Two-Factor Authentication (TOTP) Panel ──────────────────────────────────
+
+function TwoFactorPanel() {
+  const [status, setStatus] = useState<TotpStatusResponse | null>(null)
+  const [setup, setSetup] = useState<TotpSetupResponse | null>(null)
+  const [code, setCode] = useState('')
+  const [pw, setPw] = useState('')
+  const [disableCode, setDisableCode] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  const load = () => totpStatus().then(setStatus).catch(() => {})
+  useEffect(() => { load() }, [])
+
+  const detail = (err: unknown, fb: string) =>
+    (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? fb
+
+  const beginSetup = async () => {
+    setBusy(true); setMsg(null)
+    try { setSetup(await totpSetup()); setCode('') }
+    catch (e) { setMsg({ type: 'error', text: detail(e, 'Setup failed.') }) }
+    finally { setBusy(false) }
+  }
+
+  const verify = async () => {
+    setBusy(true); setMsg(null)
+    try {
+      await totpVerifySetup(code)
+      setSetup(null); setCode('')
+      setMsg({ type: 'success', text: 'Two-factor authentication enabled.' })
+      load()
+    } catch (e) { setMsg({ type: 'error', text: detail(e, 'Invalid code — check your phone clock.') }) }
+    finally { setBusy(false) }
+  }
+
+  const disable = async () => {
+    if (!confirm('Disable two-factor authentication for your account?')) return
+    setBusy(true); setMsg(null)
+    try {
+      await totpDisable(pw, disableCode)
+      setPw(''); setDisableCode('')
+      setMsg({ type: 'success', text: 'Two-factor authentication disabled.' })
+      load()
+    } catch (e) { setMsg({ type: 'error', text: detail(e, 'Could not disable — check password and code.') }) }
+    finally { setBusy(false) }
+  }
+
+  const enabled = !!status?.totp_enabled
+
+  return (
+    <div className="card space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-white">Two-Factor Authentication</h3>
+        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+          enabled ? 'bg-green-900/50 text-green-400' : 'bg-yellow-900/50 text-yellow-400'}`}>
+          {enabled ? 'Enabled' : 'Disabled'}
+        </span>
+      </div>
+
+      {msg && (
+        <div className={`text-sm px-3 py-2 rounded-lg ${msg.type === 'success' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'}`}>
+          {msg.text}
+        </div>
+      )}
+
+      {enabled ? (
+        <>
+          <p className="text-xs text-gray-400">
+            Authenticator app enabled{status?.totp_verified_at ? ` on ${new Date(status.totp_verified_at).toLocaleDateString()}` : ''}.
+          </p>
+          <div className="space-y-2 p-3 bg-gray-800/50 rounded-lg border border-gray-700">
+            <p className="text-sm text-gray-300">Disable two-factor authentication</p>
+            <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="Current password"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm" autoComplete="current-password" />
+            <input type="text" inputMode="numeric" maxLength={6} value={disableCode}
+              onChange={(e) => setDisableCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              placeholder="Current 6-digit code"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm font-mono" />
+            <button onClick={disable} disabled={busy || !pw || disableCode.length !== 6}
+              className="text-xs px-3 py-1.5 rounded-lg bg-red-700 hover:bg-red-600 text-white disabled:opacity-40">
+              {busy ? '…' : 'Disable Two-Factor Authentication'}
+            </button>
+          </div>
+        </>
+      ) : setup ? (
+        <div className="space-y-3">
+          <p className="text-xs text-gray-400">
+            Scan with Aegis, Google Authenticator, or Microsoft Authenticator. Then enter the 6-digit code to confirm.
+          </p>
+          <img src={`data:image/png;base64,${setup.qr_code}`} alt="TOTP QR code"
+            className="w-44 h-44 bg-white p-2 rounded-lg mx-auto" />
+          <p className="text-xs text-gray-500 text-center">Manual entry key:</p>
+          <p className="text-xs font-mono text-gray-300 break-all text-center bg-gray-800 rounded px-2 py-1">{setup.secret}</p>
+          <input type="text" inputMode="numeric" maxLength={6} value={code} autoFocus
+            onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            placeholder="000000"
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-center tracking-[0.4em] font-mono" />
+          <button onClick={verify} disabled={busy || code.length !== 6} className="btn-primary w-full">
+            {busy ? 'Verifying…' : 'Verify and Enable'}
+          </button>
+        </div>
+      ) : (
+        <>
+          <p className="text-xs text-gray-400">
+            Add an authenticator app as your second factor. A backup OTP code is always available via the
+            backend log regardless of TOTP status.
+          </p>
+          <button onClick={beginSetup} disabled={busy} className="btn-primary w-full">
+            {busy ? '…' : 'Setup Authenticator'}
+          </button>
+        </>
+      )}
+
+      <p className="text-[11px] text-gray-600">
+        TOTP works completely offline — no internet on your phone or the NUC, and no data is sent to any
+        external service.
+      </p>
+    </div>
+  )
+}
+
 
 // ── Configuration Backup / Restore Panel ────────────────────────────────────
 

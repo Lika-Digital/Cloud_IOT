@@ -27,6 +27,13 @@ class User(UserBase):
     role: Mapped[str] = mapped_column(String(20), nullable=False, default="monitor")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # v3.19 — TOTP 2FA (authenticator app). All nullable/defaulted so existing
+    # rows and the no-TOTP flow are unaffected.
+    totp_secret: Mapped[str] = mapped_column(String(64), nullable=True)
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    totp_verified_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    totp_failed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    totp_locked_until: Mapped[datetime] = mapped_column(DateTime, nullable=True)
 
 
 class OtpStore(UserBase):

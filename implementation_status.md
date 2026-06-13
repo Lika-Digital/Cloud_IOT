@@ -1,3 +1,47 @@
+# Implementation Status — TOTP 2FA with OTP Fallback (v3.19)
+
+## Session started: 2026-06-13
+
+Feature: TOTP (authenticator-app) two-factor as the primary second factor, with
+the existing email/log OTP preserved as an always-available, user-selectable
+fallback. Partial-token two-step login. TOTP setup is admin-only.
+
+**Approved design decisions (2026-06-13):**
+- D1 — 2FA stays MANDATORY. No operator ever gets a JWT without a second factor.
+- D2 — totp_enabled=False → /login auto-sends OTP + returns partial token (today's UX).
+       totp_enabled=True → chooser screen; user requests OTP on demand.
+- D3 — TOTP setup is ADMIN ONLY. Monitors use OTP fallback only.
+- D4 — Keep legacy /verify-otp working; add new partial-token /otp/login alongside.
+- D5 — Partial token travels in the JSON body.
+- D6 — DB-based lockout (5 fails → 15 min) is ALWAYS-ON (all environments).
+- D7 — TOTP setup UI = new panel in admin Settings.
+
+**Files — Status** (append after every file):
+- [DONE] `backend/requirements.txt` — added `pyotp==2.9.0` (qrcode[pil] already present); installed into venv.
+- [DONE] `backend/app/auth/models.py` — added 5 User columns: totp_secret(String64,null), totp_enabled(Bool,default False), totp_verified_at(DateTime,null), totp_failed_attempts(Int,default 0), totp_locked_until(DateTime,null).
+- [DONE] `backend/app/auth/user_database.py` — 5 idempotent migration tuples on `users` for existing DBs.
+- Phase 1 (deps + model + migration) COMPLETE.
+- [DONE] `backend/app/auth/tokens.py` — added create_partial_token() (role 'totp_pending', 5-min) + decode_partial_token(); partial token cannot pass _get_current_user.
+- [DONE] `backend/app/auth/totp_service.py` (NEW) — pyotp secret/URI/QR-base64/verify(valid_window=1) + shared always-on lockout helpers (5 fails → 15 min).
+- [DONE] `backend/app/auth/schemas.py` — PartialLoginResponse, TotpSetupResponse, TotpCodeRequest, TotpDisableRequest, TotpStatusResponse, PartialTokenCodeRequest, OtpRequestRequest, OtpRequestResponse.
+- Phase 2 COMPLETE.
+- [DONE] `backend/app/routers/totp.py` (NEW) — /totp/setup, /totp/verify-setup, /totp/disable, /totp/status (admin/any-role), /totp/login, /otp/request, /otp/login (partial-token, lockout-guarded, rate-limited).
+- [DONE] `backend/app/routers/auth.py` — /login now returns partial-token response (mandatory 2FA, D1); auto-sends OTP when totp_enabled=False (D2). Legacy /verify-otp unchanged (D4).
+- [DONE] `backend/app/main.py` — registered totp_router.
+- Phase 3 (backend endpoints) COMPLETE.
+- [DONE] `tests/backend/test_totp.py` (NEW, 24 tests) — setup/verify/disable/status, partial-token login (TOTP+OTP), clock-drift, single-use, expiry, lockout (5→15min, shared), partial-token endpoint isolation. Full suite 404 → 426 passing, 0 failures.
+- Backend COMPLETE + tested.
+- [DONE] `frontend/src/api/auth.ts` — PartialLoginResponse/Totp* types; authLogin returns partial; added authTotpLogin, authOtpRequest, authOtpLogin, totpSetup, totpVerifySetup, totpDisable, totpStatus. Legacy authVerifyOtp kept.
+- [DONE] `frontend/src/pages/LoginPage.tsx` — multi-step: credentials → second-factor (TOTP auto-submit on 6 digits + "Use backup code instead" → OTP) with method message + 5-min note + back. Partial token in component state only.
+- [DONE] `frontend/src/pages/Settings.tsx` — new TwoFactorPanel (admin): status, Setup (QR+secret+verify-enable), Disable (password+code), offline note. tsc clean.
+- Frontend COMPLETE (tsc clean).
+- [DONE] `docs/totp-setup-guide.md` (NEW) — options, compatible apps, setup, OTP fallback, SMTP, recovery (DB reset snippet), disable, troubleshooting.
+- [DONE] `README.md` — v3.19 changelog entry (endpoints, columns, screens, OTP-always-available, offline TOTP).
+- ALL FILES COMPLETE. Backend suite 426 passing, frontend tsc clean.
+- **STATUS: AWAITING EXPLICIT USER APPROVAL TO COMMIT + PUSH (develop → main).** Per the rule, do NOT push to main without confirmation.
+
+---
+
 # Implementation Status — 90% Auto-Stop Overload Protection (v3.12)
 
 ## Session started: 2026-04-30
@@ -62,9 +106,14 @@ only clears when an admin calls a new socket-scoped acknowledge endpoint
 | 14 | `tests/backend/test_meter_load.py` | COMPLETE | 25 new TC-ML-31..55 cases (Steps 2/3/4/5/6 tests merged into a single file in step order). New helpers: `_seed_active_session`, `_capture_mqtt_publishes`, `_seed_socket_state`, `_set_auto_stop_latch`, `_trigger_auto_stop`. Existing `_reset_state` autouse fixture extended to wipe leftover sessions and clear auto_stop_pending_ack between tests. |
 | 15 | `README.md` | COMPLETE | v3.12 changelog entry inserted at the top of "## Changelog", newest-first per project convention. Documents all backend + frontend touchpoints, design decisions D1/D7/D8/D9 in plain operator-readable terms, the 25-test delta (339 → 364), and explicitly notes the no-hardcoded-rated_amps invariant. |
 
-### Section currently being worked on: Step 11 — COMMIT + PUSH (in progress)
+### Section currently being worked on: DONE
 ### Final test counts: 364/364 backend pytest passing. TypeScript clean.
-### Awaiting: explicit user approval before merging develop → main with CLOUD_IOT_RELEASE=1.
+### Release status:
+- ✅ Commit `dbd859b` on develop → pre-commit + pre-push gates green → pushed to `origin/develop`.
+- ✅ User approved merge with "go merge to main".
+- ✅ `main` fast-forwarded to `dbd859b` (also picked up the 26.04 NUC installer + README guard commits that were previously develop-only — those land on main too as a side effect).
+- ✅ Pushed to `origin/main` with `CLOUD_IOT_RELEASE=1` — full pre-push gate green.
+- ✅ Final state: `main` and `develop` both at `dbd859b`, in sync with origin.
 
 ---
 

@@ -94,9 +94,30 @@ def login(request: Request, body: LoginRequest, db: Session = Depends(get_user_d
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled")
 
     record_login_success(client_ip)
+
+    # v3.19 — 2FA is MANDATORY (D1): never return a JWT here. Issue a 5-min
+    # partial token; the caller completes a second factor via /totp/login or
+    # /otp/request → /otp/login (or the legacy /verify-otp).
+    from ..auth.tokens import create_partial_token
+    from ..auth.email_service import smtp_is_configured
+    partial = create_partial_token(user.id, user.email)
+
+    if user.totp_enabled:
+        # TOTP user: show the chooser; OTP is available on demand (not auto-sent).
+        return {
+            "totp_required": True, "otp_available": True,
+            "partial_token": partial, "otp_sent": False, "method": None,
+        }
+
+    # No TOTP configured (D2): auto-send the OTP now (preserves today's UX) and
+    # also return the partial token so the new /otp/login flow can be used.
     code = generate_otp(db, user.id)
     send_otp_email(user.email, code)
-    return {"message": "OTP sent to your email address"}
+    return {
+        "totp_required": False, "otp_available": True,
+        "partial_token": partial, "otp_sent": True,
+        "method": "email" if smtp_is_configured() else "log",
+    }
 
 
 @router.post("/verify-otp", response_model=TokenResponse)

@@ -10,6 +10,10 @@ import {
   getActivePedestals, type ActivePedestalsInfo,
   getPilotAssignments, createPilotAssignment, deletePilotAssignment, type PilotAssignment,
 } from '../api/settings'
+import {
+  exportConfig, getSupportBundle, listBackups, importConfig,
+  type BackupMeta, type ConfigBundle, type RestoreReport,
+} from '../api/configBackup'
 
 export default function Settings() {
   return (
@@ -47,6 +51,9 @@ export default function Settings() {
 
           {/* Pilot Mode Assignments */}
           <PilotModePanel />
+
+          {/* Configuration Backup / Restore */}
+          <BackupRestorePanel />
 
           <div className="card">
             <h3 className="font-semibold text-white mb-3">Quick Start</h3>
@@ -824,6 +831,142 @@ function UserManagementPanel() {
           <p className="text-sm text-gray-600 text-center py-2">No users found.</p>
         )}
       </div>
+    </div>
+  )
+}
+
+// ── Configuration Backup / Restore Panel ────────────────────────────────────
+
+function downloadJson(obj: unknown, filename: string) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function BackupRestorePanel() {
+  const [backups, setBackups] = useState<BackupMeta[]>([])
+  const [full, setFull] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [report, setReport] = useState<RestoreReport | null>(null)
+
+  const load = () => listBackups().then((r) => setBackups(r.backups)).catch(() => {})
+  useEffect(() => { load() }, [])
+
+  const stamp = (prefix: string) =>
+    `${prefix}_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`
+
+  const handleExport = async () => {
+    setBusy(true); setMsg(null); setReport(null)
+    try {
+      const bundle = await exportConfig(full)
+      downloadJson(bundle, stamp(full ? 'cloud_iot_config_full' : 'cloud_iot_config'))
+      setMsg({ type: 'success', text: `Config exported${full ? ' (full — includes secrets)' : ' (redacted)'}.` })
+      load()
+    } catch {
+      setMsg({ type: 'error', text: 'Export failed.' })
+    } finally { setBusy(false) }
+  }
+
+  const handleSupport = async () => {
+    setBusy(true); setMsg(null); setReport(null)
+    try {
+      const bundle = await getSupportBundle()
+      downloadJson(bundle, stamp('support_bundle'))
+      setMsg({ type: 'success', text: 'Support bundle downloaded.' })
+      load()
+    } catch {
+      setMsg({ type: 'error', text: 'Support bundle failed.' })
+    } finally { setBusy(false) }
+  }
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    if (!confirm(`Restore configuration from "${file.name}"? Config is upserted by natural key; redacted secrets are preserved.`)) return
+    setBusy(true); setMsg(null); setReport(null)
+    try {
+      const bundle = JSON.parse(await file.text()) as ConfigBundle
+      const res = await importConfig(bundle)
+      setReport(res.report)
+      setMsg({ type: 'success', text: 'Configuration restored.' })
+      load()
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setMsg({ type: 'error', text: detail ?? 'Restore failed (invalid file?).' })
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="card space-y-4">
+      <h3 className="font-semibold text-white">Configuration Backup / Restore</h3>
+      <p className="text-xs text-gray-400">
+        Export all system configuration to a timestamped JSON file (redacted by default —
+        safe to share for troubleshooting). Restore re-applies a saved file.
+      </p>
+
+      {msg && (
+        <div className={`text-sm px-3 py-2 rounded-lg ${msg.type === 'success' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'}`}>
+          {msg.text}
+        </div>
+      )}
+
+      <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+        <input type="checkbox" checked={full} onChange={(e) => setFull(e.target.checked)} className="accent-blue-500" />
+        Full backup — include secrets (passwords, API key). Handle with care.
+      </label>
+
+      <div className="grid grid-cols-2 gap-2">
+        <button onClick={handleExport} disabled={busy} className="btn-primary">
+          {busy ? '…' : 'Download Config'}
+        </button>
+        <button
+          onClick={handleSupport}
+          disabled={busy}
+          className="px-4 py-2 bg-gray-700 text-gray-200 text-sm rounded-lg hover:bg-gray-600 transition-colors disabled:opacity-40"
+        >
+          Support Bundle
+        </button>
+      </div>
+
+      <label className="block">
+        <span className="text-xs text-gray-400">Restore from file</span>
+        <input
+          type="file"
+          accept="application/json,.json"
+          onChange={handleUpload}
+          disabled={busy}
+          className="mt-1 block w-full text-xs text-gray-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-blue-700 file:text-white hover:file:bg-blue-600 file:cursor-pointer"
+        />
+      </label>
+
+      {report && (
+        <div className="text-xs bg-gray-800/60 rounded-lg p-3 space-y-1">
+          <p className="text-gray-300 font-medium">Restore report</p>
+          {Object.entries(report).map(([k, v]) => (
+            <p key={k} className="text-gray-400 font-mono">
+              {k}: <span className="text-green-400">{v.updated}</span> updated, {v.inserted} new, {v.skipped} skipped
+            </p>
+          ))}
+        </div>
+      )}
+
+      {backups.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-xs text-gray-500">Saved on NUC ({backups.length}):</p>
+          {backups.slice(0, 5).map((b) => (
+            <div key={b.filename} className="flex items-center justify-between text-xs text-gray-500 font-mono">
+              <span className="truncate">{b.filename}</span>
+              <span className="ml-2 flex-shrink-0">{(b.size_bytes / 1024).toFixed(0)} KB</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

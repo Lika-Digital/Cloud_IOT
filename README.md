@@ -83,6 +83,24 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-06-13 — Config Backup/Restore Settings UI (v3.17)
+
+Frontend for the v3.16 config backup/restore backend. New **Configuration
+Backup / Restore** panel in Settings (`frontend/src/pages/Settings.tsx` +
+`frontend/src/api/configBackup.ts`):
+- **Download Config** — exports the timestamped JSON bundle (redacted by
+  default; a "Full backup — include secrets" checkbox switches to the opt-in
+  full export). The file downloads in-browser and a copy is saved on the NUC.
+- **Support Bundle** — one-click download of redacted config + MQTT/devices
+  status + 24h error summary (the artifact to share for troubleshooting).
+- **Restore from file** — upload a saved bundle; shows a per-section
+  updated/new/skipped report. Redacted secrets are preserved on restore.
+- Lists the most recent backups stored on the NUC.
+
+Validation: `tsc` clean; backend API already covered by `test_config_backup.py`
+(6 tests). No frontend unit-test harness exists in this project, so UI
+correctness is enforced by the type-check + the pre-push eslint stage.
+
 ### 2026-06-13 — Config backup, status files, ERP occupancy (v3.16)
 
 Three operator/troubleshooting features, each impact-analysed first and shipped

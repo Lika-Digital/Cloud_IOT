@@ -58,6 +58,7 @@ DEFAULT_ADMIN_PASSWORD = settings.default_admin_password
 
 PENDING_TIMEOUT_SECONDS = settings.pending_timeout_seconds
 COMM_LOSS_TIMEOUT_SECONDS = 60
+_WATCHDOG_BOOT_GRACE_S = 60   # v3.18 — delay pending/auto-reject watchdogs after boot
 
 
 # ─── Background tasks ────────────────────────────────────────────────────────
@@ -101,6 +102,7 @@ async def _pending_session_watchdog():
     and auto-deny them so sockets are not held indefinitely.
     """
     from .services.error_log_service import log_warning
+    await asyncio.sleep(_WATCHDOG_BOOT_GRACE_S)  # v3.18 — boot grace: let heartbeats + session adoption settle
     while True:
         await asyncio.sleep(10)
         cutoff = datetime.utcnow() - timedelta(seconds=PENDING_TIMEOUT_SECONDS)
@@ -145,6 +147,7 @@ async def _socket_pending_watchdog():
     PENDING_TIMEOUT_SECONDS and auto-reject them via the shared helper.
     """
     from .services.mqtt_handlers import auto_reject_stale_socket_pending
+    await asyncio.sleep(_WATCHDOG_BOOT_GRACE_S)  # v3.18 — boot grace
     while True:
         await asyncio.sleep(10)
         cutoff = datetime.utcnow() - timedelta(seconds=PENDING_TIMEOUT_SECONDS)
@@ -309,19 +312,23 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log_error("system", "startup", f"Database connectivity FAILED on startup: {e}", exc=e)
 
-    # Clear pedestals and socket states on every startup — they are re-created from MQTT.
-    # pedestal_configs is NOT cleared: camera URLs, credentials, and MQTT settings are
-    # manually configured and must survive reboots. When the pedestal reconnects via MQTT,
-    # _ensure_pedestal() re-creates the Pedestal row with the same ID and the existing
-    # config automatically re-links via the FK.
+    # v3.18 — Reset only TRANSIENT liveness on startup. Operator config on the
+    # `pedestals` row (initialized, mobile_enabled, ai_enabled, name, location)
+    # MUST persist across reboots, so we NO LONGER delete pedestals. socket_states
+    # is transient (connection + pending approval) and is cleared; all pedestals
+    # are marked offline until the next heartbeat re-confirms them.
     db = SessionLocal()
     try:
+        from .models.pedestal_config import PedestalConfig
         db.execute(text("DELETE FROM socket_states"))
-        db.execute(text("DELETE FROM pedestals"))
+        db.query(PedestalConfig).update(
+            {PedestalConfig.opta_connected: 0, PedestalConfig.status: "offline"},
+            synchronize_session=False,
+        )
         db.commit()
-        logger.info("Startup: pedestal table cleared — waiting for MQTT registration")
+        logger.info("Startup: socket_states cleared; pedestals marked offline (config preserved)")
     except Exception as e:
-        logger.warning("Startup: failed to clear pedestals: %s", e)
+        logger.warning("Startup: transient-state reset failed: %s", e)
     finally:
         db.close()
 

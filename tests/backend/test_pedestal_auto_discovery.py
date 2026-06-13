@@ -259,7 +259,7 @@ def test_unknown_socket_creates_socket_config(clean_fs):
             pedestal_id=cfg.pedestal_id, socket_id=3,
         ).first()
         assert row is not None
-        assert row.auto_activate is False
+        assert row.auto_activate is True   # v3.18 — plug-and-go by default
     finally:
         db.close()
 

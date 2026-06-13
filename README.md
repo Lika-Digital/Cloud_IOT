@@ -83,6 +83,41 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-06-13 — Reboot resilience + plug-and-go by default (v3.18)
+
+Fixes two startup bugs (a rebooted NUC killed live sessions and reverted
+operator config) and makes electricity plug-and-go the default. All impact-
+analysed first; shipped with tests.
+
+- **A — operator config persists across reboot.** Startup no longer runs
+  `DELETE FROM pedestals` (that row holds config — `initialized`,
+  `mobile_enabled`, `ai_enabled`, name, location — not liveness). On boot we now
+  reset only transient liveness (clear `socket_states`, mark pedestals offline
+  until the next heartbeat). No more "Not initialized"/lost settings after every
+  reboot. Bonus: pedestal IDs are now stable (unblocks future FK enforcement).
+- **A2 — electricity plug-and-go by default.** `socket_configs.auto_activate`
+  now defaults **True** (model + all auto-discovery creation sites), plus a
+  one-time guarded migration that flips existing sockets to True once (later
+  operator "off" choices still persist). Water was already default True.
+- **B — adopt live sessions on reconnect.** When the Opta reports a socket/valve
+  `state="active"` and there's no open session (e.g. it ran standalone while the
+  NUC was off), the backend now **adopts** it as an active session instead of
+  letting it be torn down. Idempotent (guarded by the unique index); electricity
+  and water; `customer_id=None`.
+- **C — watchdog boot-grace.** The pending/auto-reject watchdogs wait 60 s after
+  boot so heartbeats and session adoption settle before any cleanup runs.
+- **D — cabinet door is non-blocking for auto-activate.** Door open/unknown no
+  longer **skips** auto-activation — it **warns** and proceeds (sockets must work
+  with the door open during testing/operation; breakers guard electrical faults).
+  All other preconditions (active fault, heartbeat, already-active, diagnostic,
+  overload-pending) still block.
+
+Tests: new `tests/backend/test_reboot_resilience.py` (6) — auto_activate default,
+adoption (elec + water, idempotent, idle→none), door-open non-blocking; updated
+`test_socket_auto_activate.py` (door no longer a skip path) and
+`test_pedestal_auto_discovery.py` (default True). Full backend suite
+**399 → 404 passing**, 0 failures.
+
 ### 2026-06-13 — Config Backup/Restore Settings UI (v3.17)
 
 Frontend for the v3.16 config backup/restore backend. New **Configuration

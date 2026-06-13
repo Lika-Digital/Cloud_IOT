@@ -252,10 +252,8 @@ def test_auto_activate_true_publishes_after_delay(clean_state):
 
 
 @pytest.mark.parametrize("scenario,reason_substring,setup", [
-    # TC-AA-05 door open
-    ("door_open",
-     "door open",
-     lambda pid: _set_door(pid, "open")),
+    # TC-AA-05 (v3.18) — door open is NO LONGER a skip path; it warns and proceeds.
+    # Covered by test_reboot_resilience.test_door_open_does_not_block_auto_activate.
     # TC-AA-06 active fault on any socket
     ("fault_on_pedestal",
      "active fault",

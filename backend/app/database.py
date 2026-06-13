@@ -77,6 +77,8 @@ def _migrate_schema():
         ("pedestals", "initialized",    "INTEGER NOT NULL DEFAULT 0"),
         ("pedestals", "mobile_enabled", "INTEGER NOT NULL DEFAULT 0"),
         ("pedestals", "ai_enabled",     "INTEGER NOT NULL DEFAULT 0"),
+        # v3.18 — one-time marker for the electricity plug-and-go default flip.
+        ("socket_configs", "auto_activate_default_migrated", "INTEGER NOT NULL DEFAULT 0"),
         ("sessions",  "customer_id", "INTEGER"),
         ("sessions",  "deny_reason", "TEXT"),
         # v3.6 — QR claim timestamp (nullable). NULL for unclaimed sessions
@@ -220,6 +222,17 @@ def _migrate_schema():
             "ON sensor_readings(pedestal_id, timestamp)"
         ))
         conn.commit()
+
+        # v3.18 — one-time: electricity sockets become plug-and-go by default.
+        # Flip EXISTING sockets to auto_activate=1 ONCE (guarded by the marker),
+        # so an operator's later "off" choice persists across restarts.
+        flipped = conn.execute(text(
+            "UPDATE socket_configs SET auto_activate=1, auto_activate_default_migrated=1 "
+            "WHERE auto_activate_default_migrated=0"
+        )).rowcount
+        conn.commit()
+        if flipped:
+            log.info(f"v3.18 plug-and-go: enabled auto-activate on {flipped} existing socket(s)")
 
     _backfill_session_totals(log)
 

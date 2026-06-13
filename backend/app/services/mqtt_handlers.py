@@ -251,7 +251,7 @@ def _auto_discover_socket_config(db, pedestal_id: int, socket_id: int) -> bool:
         db.add(SocketConfig(
             pedestal_id=pedestal_id,
             socket_id=socket_id,
-            auto_activate=False,
+            auto_activate=True,
         ))
         db.commit()
         logger.info("[Discovery] SocketConfig created pedestal=%d socket=%d", pedestal_id, socket_id)
@@ -440,6 +440,27 @@ async def _handle_marina_socket(cabinet_id: str, socket_name: str, payload: str)
             db.add(state_row)
         db.commit()
 
+        # v3.18 — adopt a session the hardware is already running. If the Opta
+        # reports the socket ACTIVE but we have no open session (e.g. the Opta
+        # ran standalone and the NUC just (re)connected), materialize one so the
+        # live session is TRACKED rather than torn down by a later event.
+        if raw_state == "active":
+            from .session_service import session_service as _ss
+            if _ss.get_active_for_socket(db, pedestal_id, socket_id, session_type="electricity") is None:
+                _adopted = _ss.create_pending(db, pedestal_id, socket_id, "electricity")
+                _ss.activate(db, _adopted)
+                logger.info("[Adopt] pedestal=%d socket=%d adopted live session %d",
+                            pedestal_id, socket_id, _adopted.id)
+                await ws_manager.broadcast({
+                    "event": "session_created",
+                    "data": {
+                        "session_id": _adopted.id, "pedestal_id": pedestal_id,
+                        "socket_id": socket_id, "type": "electricity", "status": "active",
+                        "started_at": _adopted.started_at.isoformat(),
+                        "customer_id": None, "customer_name": None, "adopted": True,
+                    },
+                })
+
         # v3.7 — auto-discovery side-effect: ensure a SocketConfig exists for
         # this socket and render its printable QR PNG on first sight. Both
         # steps are idempotent; both catch+log all exceptions so MQTT flow
@@ -512,6 +533,29 @@ async def _handle_marina_water(cabinet_id: str, water_name: str, payload: str):
         return
 
     logger.debug("[Marina] cabinet=%s water=%s total_l=%.3f session_l=%.3f", cabinet_id, water_name, total_l, session_l)
+
+    # v3.18 — adopt a live water session on (re)connect (same as electricity).
+    if data.get("state") == "active":
+        adb = SessionLocal()
+        try:
+            from .session_service import session_service as _ss
+            if _ss.get_active_for_socket(adb, pedestal_id, valve_id, session_type="water") is None:
+                _adopted = _ss.create_pending(adb, pedestal_id, valve_id, "water")
+                _ss.activate(adb, _adopted)
+                logger.info("[Adopt] pedestal=%d valve=%d adopted live water session %d",
+                            pedestal_id, valve_id, _adopted.id)
+                await ws_manager.broadcast({
+                    "event": "session_created",
+                    "data": {
+                        "session_id": _adopted.id, "pedestal_id": pedestal_id,
+                        "socket_id": valve_id, "type": "water", "status": "active",
+                        "started_at": _adopted.started_at.isoformat(),
+                        "customer_id": None, "customer_name": None, "adopted": True,
+                    },
+                })
+        finally:
+            adb.close()
+
     await _handle_water_flow(pedestal_id, legacy_payload)
     # Rich broadcast for Control Center UI
     await ws_manager.broadcast({
@@ -858,13 +902,10 @@ def _auto_activate_precondition_check(db, pedestal_id: int, socket_id: int) -> s
     from ..models.pedestal_config import PedestalConfig
     from ..models.session import Session as SessionModel
 
-    # 1. Door closed (unknown ≡ open per design decision).
-    cfg = db.query(PedestalConfig).filter(PedestalConfig.pedestal_id == pedestal_id).first()
-    door = getattr(cfg, "door_state", "unknown") if cfg else "unknown"
-    if door != "closed":
-        if door == "unknown":
-            return "door state unknown"
-        return "door open"
+    # 1. Door state is NO LONGER a blocking precondition (v3.18). An open or
+    #    unknown door only raises a WARNING at activation time (see
+    #    _maybe_auto_activate) — sockets must work with the door open (common
+    #    during testing/operation); breakers guard against electrical faults.
 
     # 2. No active faults anywhere on this pedestal.
     for (pid, _sid), _ts in socket_fault_state.items():
@@ -959,8 +1000,17 @@ async def _maybe_auto_activate(pedestal_id: int, socket_id: int, outlet_id: str)
 
         cfg = db.query(PedestalConfig).filter(PedestalConfig.pedestal_id == pedestal_id).first()
         cabinet_id = getattr(cfg, "opta_client_id", None) if cfg else None
+        door_state = getattr(cfg, "door_state", "unknown") if cfg else "unknown"
     finally:
         db.close()
+
+    # v3.18 — door is non-blocking; warn but proceed if it's open/unknown.
+    if door_state != "closed":
+        _hw_warn(
+            f"pedestal_{pedestal_id}",
+            f"Auto-activating socket {socket_id} with cabinet door {door_state.upper()} "
+            f"— proceeding (door is non-blocking).",
+        )
 
     # Publish. Format matches direct_socket_cmd so the firmware sees an
     # identical command shape whether it came from the operator or auto.
@@ -1609,7 +1659,7 @@ async def _handle_opta_breaker_status(socket_name: str, payload: str):
             cfg = SocketConfig(
                 pedestal_id=pedestal_id,
                 socket_id=socket_id,
-                auto_activate=False,
+                auto_activate=True,
             )
             db.add(cfg)
             db.flush()
@@ -1853,7 +1903,7 @@ async def _handle_opta_hardware_config(payload: str) -> None:
                 cfg = SocketConfig(
                     pedestal_id=pedestal_id,
                     socket_id=socket_id,
-                    auto_activate=False,
+                    auto_activate=True,
                 )
                 db.add(cfg)
                 db.flush()
@@ -1953,7 +2003,7 @@ async def _handle_opta_meter_telemetry(socket_name: str, payload: str) -> None:
             SocketConfig.socket_id == socket_id,
         ).first()
         if cfg is None:
-            cfg = SocketConfig(pedestal_id=pedestal_id, socket_id=socket_id, auto_activate=False)
+            cfg = SocketConfig(pedestal_id=pedestal_id, socket_id=socket_id, auto_activate=True)
             db.add(cfg)
             db.flush()
 

@@ -22,7 +22,7 @@ class SocketConfig(Base):
     id            = Column(Integer, primary_key=True, index=True)
     pedestal_id   = Column(Integer, ForeignKey("pedestals.id"), nullable=False, index=True)
     socket_id     = Column(Integer, nullable=False)   # 1–4
-    auto_activate = Column(Boolean, nullable=False, default=False)
+    auto_activate = Column(Boolean, nullable=False, default=True)   # v3.18 — plug-and-go by default
     created_at    = Column(DateTime, default=datetime.utcnow)
     updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

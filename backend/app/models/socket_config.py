@@ -59,7 +59,8 @@ class SocketConfig(Base):
     # passthrough from the firmware's Modbus reading.
     meter_current_amps       = Column(Float, nullable=True)
     meter_voltage_v          = Column(Float, nullable=True)
-    meter_power_kw           = Column(Float, nullable=True)
+    meter_power_kw           = Column(Float, nullable=True)   # B4: operational/clamped value (display)
+    meter_power_kw_raw       = Column(Float, nullable=True)   # B4: raw firmware-reported value (audit)
     meter_power_factor       = Column(Float, nullable=True)
     meter_energy_kwh         = Column(Float, nullable=True)
     meter_frequency_hz       = Column(Float, nullable=True)

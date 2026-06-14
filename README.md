@@ -83,6 +83,48 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-06-14 — Backend resilience to Opta firmware quirks: B1–B4 (v3.21)
+
+Four **backend-only** fixes (no firmware change required) that make the NUC handle
+data the Opta already sends. Derived from live MQTT captures of cabinet
+`MAR_KRK_ORM_01` running firmware 2.5.0.
+
+- **B1 — Tolerant hwconfig parser.** `opta/config/hardware` is truncated by the
+  firmware at ~502 bytes (severing the `valves` array), so `json.loads` failed and
+  **no** socket metadata was stored → every socket stuck on *"Awaiting hardware
+  configuration."* The handler now recovers the complete `sockets` array from the
+  truncated payload (string-aware bracket match), logs the truncation + bytes
+  dropped + that valves were not recovered, and stamps `hw_config_received_at`.
+  Clears the "awaiting configuration" state with no firmware change.
+- **B2 — Fault precedence display.** A socket could show **ACTIVE** while the
+  hardware reported `hw_status:fault` / breaker `tripped`. A unified resolver
+  (`fault > active > pending > idle`) now drives both the live `socket_state_changed`
+  WebSocket event and the per-socket REST `…/load` response (`display_state`). A
+  hardware fault or tripped breaker always wins over the logical session — **display
+  only**; the internal session is never modified, so the state restores automatically
+  when the fault clears. Fault = message fault, `breaker_state=="tripped"`, or
+  `SocketState.connected==False`.
+- **B3 — Honest diagnostic.** On no fresh diagnostic response the endpoint no longer
+  synthesizes a green result from the cached `opta_connected` flag — it returns
+  `all_ok=false`, `status:"unknown"`, *"No diagnostic response received from device."*
+  A `status` field (`ok`/`fault`/`unknown`) is now on every diagnostic response.
+- **B4 — Power sanity clamp (display/audit only).** The firmware can report `powerKw`
+  ~100× too high. Telemetry now stores the raw value in `meter_power_kw_raw` and a
+  sanity-clamped value in `meter_power_kw` (clamp when reported > 50× the value
+  computed from V·I, PF for three-phase only; skipped when V or I is zero), logging
+  when it fires. Overload (current-based) and billing (energy-based) were already
+  immune and are unchanged.
+
+DB: one new nullable column `socket_configs.meter_power_kw_raw` (idempotent migration).
+Tests: `tests/backend/test_v321_backend_fixes.py` (22) + suite **426 → 448 passing**.
+
+**Outstanding firmware/hardware issues (NOT fixed here — require firmware or on-site
+work):** hwconfig 502-byte truncation (enlarge Opta MQTT buffer + retain); breakers
+reporting `tripped` with a frozen boot timestamp; all power sockets `hw:fault`
+(check physical breakers/wiring); Q3/Q4 meters offline (0 V — Modbus/power); `powerKw`
+~100× scaling; door permanently `open`; LED command acked but physical actuation
+unconfirmed.
+
 ### 2026-06-13 — Fix `cloud-iot upgrade` venv corruption on Python 3.14 (v3.20) — `703724a`
 
 The `cloud-iot upgrade` CLI destroyed the Python venv on every run and could not

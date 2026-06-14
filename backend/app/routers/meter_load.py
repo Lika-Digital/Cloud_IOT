@@ -60,10 +60,16 @@ def _get_socket_or_404(db: DBSession, pedestal_id: int, socket_id: int) -> Socke
     return cfg
 
 
-def serialize_load_state(cfg: SocketConfig) -> dict:
+def serialize_load_state(cfg: SocketConfig, db: DBSession | None = None) -> dict:
     """Render every meter-related field of a SocketConfig row. Per-phase
     fields are only included for 3-phase meters so the JSON shape matches
-    what the firmware reported (D2)."""
+    what the firmware reported (D2).
+
+    B4 (v3.21): exposes `power_kw` (clamped/operational) plus `power_kw_raw`
+    (raw firmware value, audit). B2 (v3.21): when `db` is provided, includes
+    `display_state` (fault > active > pending > idle) so a REST consumer gets
+    the same fault-precedence badge as the live WebSocket feed.
+    """
     base: dict = {
         "pedestal_id": cfg.pedestal_id,
         "socket_id": cfg.socket_id,
@@ -75,6 +81,7 @@ def serialize_load_state(cfg: SocketConfig) -> dict:
         "current_amps": cfg.meter_current_amps,
         "voltage_v": cfg.meter_voltage_v,
         "power_kw": cfg.meter_power_kw,
+        "power_kw_raw": cfg.meter_power_kw_raw,
         "power_factor": cfg.meter_power_factor,
         "energy_kwh": cfg.meter_energy_kwh,
         "frequency_hz": cfg.meter_frequency_hz,
@@ -84,6 +91,9 @@ def serialize_load_state(cfg: SocketConfig) -> dict:
         "warning_threshold_pct": cfg.load_warning_threshold_pct,
         "critical_threshold_pct": cfg.load_critical_threshold_pct,
     }
+    if db is not None:
+        from ..services.mqtt_handlers import _compute_socket_display_state
+        base["display_state"] = _compute_socket_display_state(db, cfg.pedestal_id, cfg.socket_id)
     if cfg.phases == 3:
         base.update({
             "current_l1": cfg.meter_current_l1,
@@ -128,7 +138,7 @@ def get_socket_load(
     """Live meter readings + load status for a single socket. Admin & monitor."""
     _get_pedestal_or_404(db, pedestal_id)
     cfg = _get_socket_or_404(db, pedestal_id, socket_id)
-    return serialize_load_state(cfg)
+    return serialize_load_state(cfg, db)
 
 
 @router.get("/{pedestal_id}/load")
@@ -144,7 +154,7 @@ def get_pedestal_load(
     ).order_by(SocketConfig.socket_id).all()
     return {
         "pedestal_id": pedestal_id,
-        "sockets": [serialize_load_state(r) for r in rows],
+        "sockets": [serialize_load_state(r, db) for r in rows],
     }
 
 
@@ -172,7 +182,7 @@ def patch_thresholds(
     cfg.load_critical_threshold_pct = body.critical_threshold_pct
     db.commit()
     db.refresh(cfg)
-    return serialize_load_state(cfg)
+    return serialize_load_state(cfg, db)
 
 
 @router.get("/{pedestal_id}/load/alarms")

@@ -473,6 +473,13 @@ async def _handle_marina_socket(cabinet_id: str, socket_name: str, payload: str)
             except Exception as e:
                 logger.warning("[Discovery] QR gen for socket %s on %s failed: %s",
                                socket_name, cabinet_id, e)
+
+        # B2 (v3.21) — resolve the unified display state (fault precedence) while
+        # the db session is still open; broadcast it after the session closes.
+        display_state = _compute_socket_display_state(
+            db, pedestal_id, socket_id,
+            raw_state=raw_state, hw_status=data.get("hw_status", ""),
+        )
     finally:
         db.close()
 
@@ -499,6 +506,11 @@ async def _handle_marina_socket(cabinet_id: str, socket_name: str, payload: str)
             "timestamp": datetime.utcnow().isoformat(),
         },
     })
+
+    # B2 (v3.21) — emit the unified socket_state_changed so the dashboard badge
+    # (socketComputedStates, single source of truth) respects fault precedence:
+    # fault > active > pending > idle. Display only — session state is untouched.
+    await _broadcast_socket_state(pedestal_id, socket_id, display_state, "POWER")
 
 
 async def _handle_marina_water(cabinet_id: str, water_name: str, payload: str):
@@ -776,6 +788,47 @@ async def _broadcast_socket_state(pedestal_id: int, socket_id: int, new_state: s
             "timestamp": datetime.utcnow().isoformat(),
         },
     })
+
+
+def _compute_socket_display_state(
+    db, pedestal_id: int, socket_id: int, *, raw_state: str = "", hw_status: str = "",
+) -> str:
+    """B2 (v3.21) — unified socket display state with fault precedence.
+
+    Precedence: fault > active > pending > idle. A hardware fault or a tripped
+    breaker always wins over the logical session state. This affects DISPLAY
+    only — the internal session is never modified, so when the fault clears the
+    resolved state automatically falls back to the live session state.
+
+    Fault signals (D5): the live message reports `fault`, OR the persisted
+    `SocketConfig.breaker_state == "tripped"`, OR `SocketState.connected is
+    False` (set whenever the firmware reports a non-active/idle state).
+    """
+    if hw_status == "fault" or raw_state == "fault":
+        return "fault"
+
+    from ..models.socket_config import SocketConfig
+    from ..models.pedestal_config import SocketState
+
+    cfg = db.query(SocketConfig).filter(
+        SocketConfig.pedestal_id == pedestal_id,
+        SocketConfig.socket_id == socket_id,
+    ).first()
+    if cfg is not None and cfg.breaker_state == "tripped":
+        return "fault"
+
+    ss = db.query(SocketState).filter(
+        SocketState.pedestal_id == pedestal_id,
+        SocketState.socket_id == socket_id,
+    ).first()
+    if ss is not None and ss.connected is False:
+        return "fault"
+
+    from .session_service import session_service as _ss
+    active = _ss.get_active_for_socket(db, pedestal_id, socket_id, session_type="electricity")
+    if active is not None:
+        return "active" if getattr(active, "status", None) == "active" else "pending"
+    return "idle"
 
 
 def _set_socket_connected(db, pedestal_id: int, socket_id: int, connected: bool) -> None:
@@ -1849,6 +1902,75 @@ def _classify_load(pct: float, prev_status: str, warn: int, crit: int) -> str:
     return "normal"
 
 
+def _recover_truncated_hwconfig(payload: str) -> tuple[dict, int] | None:
+    """B1 (v3.21) — best-effort recovery of a truncated opta/config/hardware payload.
+
+    The Opta firmware (>=2.4.0, still present in 2.5.0) truncates this message at
+    ~502 bytes, severing the trailing `valves` array. The `sockets` array always
+    appears before `valves` and is complete within the limit, so we extract and
+    parse only the `sockets` array (plus cabinetId / firmwareVersion from the
+    intact prefix).
+
+    Returns (recovered_dict, bytes_dropped) on success, or None if even the
+    `sockets` array cannot be recovered. `bytes_dropped` is the length of the
+    received-but-unusable tail after the sockets array (the truncated `valves`
+    portion). Never raises.
+    """
+    try:
+        key = payload.find('"sockets"')
+        if key == -1:
+            return None
+        open_idx = payload.find('[', key)
+        if open_idx == -1:
+            return None
+
+        # Bracket-match the sockets array, ignoring brackets inside JSON strings.
+        depth = 0
+        in_str = False
+        escaped = False
+        end_idx = -1
+        for i in range(open_idx, len(payload)):
+            ch = payload[i]
+            if in_str:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth == 0:
+                    end_idx = i
+                    break
+
+        if end_idx == -1:
+            return None  # sockets array itself is truncated — unrecoverable
+
+        sockets = json.loads(payload[open_idx:end_idx + 1])
+        if not isinstance(sockets, list):
+            return None
+
+        # Recover identity fields from the intact prefix (best-effort).
+        data: dict = {"sockets": sockets}
+        m_cab = re.search(r'"cabinetId"\s*:\s*"([^"]*)"', payload[:open_idx])
+        if m_cab:
+            data["cabinetId"] = m_cab.group(1)
+        m_fw = re.search(r'"firmwareVersion"\s*:\s*"([^"]*)"', payload[:open_idx])
+        if m_fw:
+            data["firmwareVersion"] = m_fw.group(1)
+
+        bytes_dropped = len(payload) - (end_idx + 1)
+        return data, bytes_dropped
+    except Exception:
+        return None
+
+
 async def _handle_opta_hardware_config(payload: str) -> None:
     """v3.11 — opta/config/hardware
 
@@ -1861,8 +1983,20 @@ async def _handle_opta_hardware_config(payload: str) -> None:
     try:
         data = json.loads(payload)
     except json.JSONDecodeError as e:
-        logger.warning("[HwConfig] Bad payload: %s", e)
-        return
+        # B1 (v3.21) — tolerant recovery for the firmware's 502-byte truncation.
+        recovered = _recover_truncated_hwconfig(payload)
+        if recovered is None:
+            logger.warning(
+                "[HwConfig] Bad payload (unrecoverable — sockets array not parseable): %s", e
+            )
+            return
+        data, bytes_dropped = recovered
+        logger.warning(
+            "[HwConfig] Truncated payload recovered — parsed %d socket(s); valves data NOT "
+            "recovered. Received %d bytes, dropped %d truncated byte(s) after the sockets array "
+            "(Opta MQTT publish buffer too small). Underlying JSON error: %s",
+            len(data.get("sockets", [])), len(payload), bytes_dropped, e,
+        )
 
     cabinet_id = data.get("cabinetId", "") or _opta_cached_cabinet_id
     if not cabinet_id:
@@ -1958,6 +2092,53 @@ async def _handle_opta_hardware_config(payload: str) -> None:
     })
 
 
+def _sanity_clamp_power_kw(
+    reported_kw, *, voltage, current, power_factor, is_three_phase: bool, socket_name: str,
+):
+    """B4 (v3.21) — sanity-clamp the firmware's reported powerKw for DISPLAY/audit.
+
+    Computes expected kW from V and I (D3: power factor is applied only for the
+    three-phase formula, not single-phase). If the reported value exceeds the
+    computed value by more than 50x, logs a warning with both figures and
+    returns the computed value as the operational figure; otherwise returns the
+    reported value unchanged. When voltage or current is zero/missing the check
+    is skipped and the reported value is returned as-is.
+
+    Operational decisions are unaffected: overload uses current (amps) and
+    billing uses energy_kwh — this only corrects the displayed instantaneous
+    power and provides a clamped/raw audit pair.
+    """
+    if reported_kw is None:
+        return None
+    try:
+        v = float(voltage) if voltage is not None else 0.0
+        i = float(current) if current is not None else 0.0
+        rep = float(reported_kw)
+    except (TypeError, ValueError):
+        return reported_kw
+
+    if v == 0.0 or i == 0.0:
+        return reported_kw  # cannot compute an expected value — trust firmware
+
+    if is_three_phase:
+        try:
+            pf = float(power_factor) if power_factor not in (None, "") else 0.0
+        except (TypeError, ValueError):
+            pf = 0.0
+        computed = v * i * pf * 0.001
+    else:
+        computed = v * i * 0.001
+
+    if computed > 0.0 and rep > computed * 50.0:
+        logger.warning(
+            "[Meter] %s powerKw sanity clamp fired: reported=%.3f kW computed=%.3f kW "
+            "(>50x) — using computed value for display/audit (raw value preserved)",
+            socket_name, rep, computed,
+        )
+        return computed
+    return reported_kw
+
+
 async def _handle_opta_meter_telemetry(socket_name: str, payload: str) -> None:
     """v3.11 — opta/meters/{socketId}/telemetry (every 5 s).
 
@@ -2007,27 +2188,52 @@ async def _handle_opta_meter_telemetry(socket_name: str, payload: str) -> None:
             db.add(cfg)
             db.flush()
 
-        # Always store the raw live readings (D5).
+        # Always store the raw live readings (D5). B4 (v3.21): also store the raw
+        # reported power in meter_power_kw_raw and a sanity-clamped operational
+        # value in meter_power_kw (display/audit pair).
         if is_single_phase:
-            cfg.meter_current_amps  = data.get("currentAmps")
-            cfg.meter_voltage_v     = data.get("voltageV")
-            cfg.meter_power_kw      = data.get("powerKw")
+            v_single   = data.get("voltageV")
+            i_single   = data.get("currentAmps")
+            reported_kw = data.get("powerKw")
+            cfg.meter_current_amps  = i_single
+            cfg.meter_voltage_v     = v_single
             cfg.meter_power_factor  = data.get("powerFactor")
             cfg.meter_energy_kwh    = data.get("energyKwh")
             cfg.meter_frequency_hz  = data.get("frequency")
+            cfg.meter_power_kw_raw  = reported_kw
+            cfg.meter_power_kw = _sanity_clamp_power_kw(
+                reported_kw, voltage=v_single, current=i_single, power_factor=None,
+                is_three_phase=False, socket_name=socket_name,
+            )
         else:
-            cfg.meter_current_amps  = data.get("currentAmpsTotal")
+            i_total     = data.get("currentAmpsTotal")
+            pf_3ph      = data.get("powerFactor")
+            reported_kw = data.get("powerKwTotal")
+            cfg.meter_current_amps  = i_total
             cfg.meter_current_l1    = data.get("currentAmpsL1")
             cfg.meter_current_l2    = data.get("currentAmpsL2")
             cfg.meter_current_l3    = data.get("currentAmpsL3")
             cfg.meter_voltage_l1    = data.get("voltageL1")
             cfg.meter_voltage_l2    = data.get("voltageL2")
             cfg.meter_voltage_l3    = data.get("voltageL3")
-            cfg.meter_power_kw      = data.get("powerKwTotal")
-            cfg.meter_power_factor  = data.get("powerFactor")
+            cfg.meter_power_factor  = pf_3ph
             cfg.meter_energy_kwh    = data.get("energyKwh")
             cfg.meter_frequency_hz  = data.get("frequency")
             # `meter_voltage_v` aggregate stays null for 3-phase rows.
+            # D3 — three-phase expected power uses (vL1+vL2+vL3)/3 × I_total × PF.
+            _vs = [x for x in (data.get("voltageL1"), data.get("voltageL2"),
+                               data.get("voltageL3")) if x is not None]
+            _avg_v = None
+            if _vs:
+                try:
+                    _avg_v = sum(float(x) for x in _vs) / 3.0
+                except (TypeError, ValueError):
+                    _avg_v = None
+            cfg.meter_power_kw_raw  = reported_kw
+            cfg.meter_power_kw = _sanity_clamp_power_kw(
+                reported_kw, voltage=_avg_v, current=i_total, power_factor=pf_3ph,
+                is_three_phase=True, socket_name=socket_name,
+            )
         cfg.meter_load_updated_at = datetime.utcnow()
 
         # Load calculation requires rated_amps from hardware config (D5).

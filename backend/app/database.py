@@ -159,6 +159,8 @@ def _migrate_schema():
         ("socket_configs", "meter_current_amps",          "REAL"),
         ("socket_configs", "meter_voltage_v",             "REAL"),
         ("socket_configs", "meter_power_kw",              "REAL"),
+        # B4 (v3.21) — raw firmware-reported power kept alongside the clamped value.
+        ("socket_configs", "meter_power_kw_raw",          "REAL"),
         ("socket_configs", "meter_power_factor",          "REAL"),
         ("socket_configs", "meter_energy_kwh",            "REAL"),
         ("socket_configs", "meter_frequency_hz",          "REAL"),

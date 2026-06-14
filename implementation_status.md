@@ -1,3 +1,56 @@
+# Implementation Status — Backend bug-fix bundle B1–B4 (v3.21)
+
+## 2026-06-14 — Four firmware-independent backend fixes
+
+Approved design decisions: D1 clamp display+audit only (no overload/billing change);
+D2 keep `meter_power_kw` as clamped, add `meter_power_kw_raw`; D3 single-phase formula
+without PF, three-phase with PF; D4 B2 resolver in backend via existing
+`socket_state_changed` (no frontend change); D5 REST fault = `breaker_state=="tripped"`
+OR `SocketState.connected==False`; D6 diagnostic `status` field on all responses;
+D7 v3.21, commit+push dev then STOP for approval before main.
+
+Files — Status:
+- [DONE] `backend/app/services/mqtt_handlers.py` (B1) — added `_recover_truncated_hwconfig()`
+  helper (bracket-matched sockets-array recovery, string-aware) and wired it into
+  `_handle_opta_hardware_config` tolerant-parse path; logs truncation + bytes dropped +
+  "valves not recovered"; existing `hw_config_received_at` stamping already covers the
+  partial-parse timestamp requirement. (B2 + B4 edits to this same file still pending.)
+- [DONE] `backend/app/services/mqtt_handlers.py` (B2) — added `_compute_socket_display_state()`
+  (fault>active>pending>idle; fault = msg fault OR breaker_state tripped OR SocketState.connected
+  False); `_handle_marina_socket` now resolves it in-session and emits `socket_state_changed`
+  via the existing `_broadcast_socket_state` (no frontend change). 
+- [DONE] `backend/app/services/mqtt_handlers.py` (B4) — added `_sanity_clamp_power_kw()` (D3:
+  no PF single-phase, PF three-phase; skip when V or I = 0; clamp when reported > 50x computed,
+  logs both values); `_handle_opta_meter_telemetry` stores raw → `meter_power_kw_raw` and
+  clamped → `meter_power_kw`. (mqtt_handlers.py fully done: B1+B2+B4; py_compile OK.)
+- [DONE] `backend/app/models/socket_config.py` (B4) — added `meter_power_kw_raw` Float column.
+- [DONE] `backend/app/database.py` (B4) — added `("socket_configs","meter_power_kw_raw","REAL")`
+  migration.
+- [DONE] `backend/app/routers/meter_load.py` (B2+B4) — `serialize_load_state(cfg, db=None)`:
+  added `power_kw_raw` always, and `display_state` when db provided (reuses
+  `_compute_socket_display_state`); `get_socket_load`/`get_pedestal_load`/`patch_thresholds`
+  now pass db. ext ERP twin left db=None (no badge needed).
+- [DONE] `backend/app/routers/diagnostics.py` (B3) — Opta timeout returns all_ok=False,
+  status="unknown", error "No diagnostic response received from device" (no cached synthesis);
+  added `status` (ok/fault/unknown) to all responses incl. legacy path.
+- All modified backend files py_compile OK.
+- [DONE] `backend/app/routers/diagnostics.py` (B3 testability) — added module-level
+  `import asyncio` + `_await_diag_event()` seam (replaces in-function wait_for) so the
+  diagnostic wait is patchable without touching the global loop.
+- [DONE] `tests/backend/test_v321_backend_fixes.py` (NEW) — 22 tests covering B1 (7:
+  complete JSON, truncated recovers 4 sockets, warning logged, bytes-dropped logged,
+  hw_config_received_at set, unrecoverable case, awaiting-config clears), B2 (7: hw-fault
+  precedence, breaker-tripped precedence, hw-ok→active, WS broadcast, REST response,
+  internal session untouched), B3 (3: timeout→unknown/no-synthesis, fresh ok, fresh fault),
+  B4 (6: clamp fires+logs, raw alongside clamped, no-clamp on zero V, no-clamp within 50x,
+  3-phase PF clamp, REST exposes power_kw_raw). Reuses test_meter_load harness + conftest
+  client. Auto-included by tests/run_tests.sh (globs tests/backend/).
+- [DONE] Full backend suite: 448 passed, 0 failures (was 426; +22).
+- [DONE] `README.md` — v3.21 changelog entry (B1–B4, backend-only, outstanding firmware list).
+- ALL FILES COMPLETE. Committing + pushing dev; STOP for explicit approval before main (D7).
+
+---
+
 # Implementation Status — Fix `cloud-iot upgrade` venv corruption on Python 3.14 (v3.20)
 
 ## 2026-06-13 — NUC upgrade-tooling fix (post-incident)

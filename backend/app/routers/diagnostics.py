@@ -7,6 +7,7 @@ POST /api/pedestals/{id}/diagnostics/run
   → Returns per-sensor pass/fail + overall status
   → Marks pedestal.initialized=True if all sensors respond (status known)
 """
+import asyncio
 import json
 import logging
 
@@ -22,6 +23,12 @@ from ..auth.models import User
 
 router = APIRouter(prefix="/api/pedestals", tags=["diagnostics"])
 logger = logging.getLogger(__name__)
+
+
+async def _await_diag_event(event: asyncio.Event, timeout: float = 12.0) -> None:
+    """Awaitable seam around asyncio.wait_for so tests can stub the wait without
+    touching the global event loop. Raises asyncio.TimeoutError on timeout."""
+    await asyncio.wait_for(event.wait(), timeout=timeout)
 
 
 @router.post("/{pedestal_id}/diagnostics/run")
@@ -58,7 +65,6 @@ async def run_diagnostics(pedestal_id: int, db: DBSession = Depends(get_db), _: 
 
         # Register the waiter BEFORE publishing to avoid race condition
         # (Opta can respond within milliseconds)
-        import asyncio
         event = asyncio.Event()
         diagnostics_manager._events[pedestal_id] = event
 
@@ -77,7 +83,7 @@ async def run_diagnostics(pedestal_id: int, db: DBSession = Depends(get_db), _: 
 
         # Wait for response on opta/diagnostic topic
         try:
-            await asyncio.wait_for(event.wait(), timeout=12.0)
+            await _await_diag_event(event, 12.0)
             raw = diagnostics_manager._results.get(pedestal_id)
         except asyncio.TimeoutError:
             logger.warning(f"Diagnostics timeout for Opta {cabinet_id} (pedestal {pedestal_id})")
@@ -92,38 +98,33 @@ async def run_diagnostics(pedestal_id: int, db: DBSession = Depends(get_db), _: 
             # For Opta cabinets: camera is not part of the cabinet, don't fail on it
             opta_sensors = {k: v for k, v in sensors.items() if k != "camera"}
             all_ok = all(v == "ok" for v in opta_sensors.values())
-        else:
-            # Opta didn't respond — fall back to DB-derived state
-            logger.warning(f"No diagnostic response from Opta {cabinet_id} — falling back to DB state")
-            connected = bool(cfg.opta_connected)
-            socket_states = {
-                ss.socket_id: ss.connected
-                for ss in db.query(SocketState).filter(SocketState.pedestal_id == pedestal_id).all()
+
+            if all_ok and not pedestal.initialized:
+                pedestal.initialized = True
+                db.commit()
+                db.refresh(pedestal)
+                logger.info(f"Marina cabinet {cabinet_id} (pedestal {pedestal_id}) marked as initialized")
+
+            return {
+                "pedestal_id": pedestal_id,
+                "sensors": sensors,
+                "all_ok": all_ok,
+                "status": "ok" if all_ok else "fault",
+                "initialized": pedestal.initialized,
+                "error": None,
             }
-            sensors = {}
-            for i in range(1, 5):
-                if i in socket_states:
-                    sensors[f"socket_{i}"] = "ok" if socket_states[i] else "fail"
-                else:
-                    sensors[f"socket_{i}"] = "ok" if connected else "missing"
-            sensors["water"]       = "ok" if connected else "missing"
-            sensors["temperature"] = "ok" if connected else "missing"
-            sensors["moisture"]    = "ok" if connected else "missing"
-            sensors["camera"]      = "missing"
-            all_ok = connected
 
-        if all_ok and not pedestal.initialized:
-            pedestal.initialized = True
-            db.commit()
-            db.refresh(pedestal)
-            logger.info(f"Marina cabinet {cabinet_id} (pedestal {pedestal_id}) marked as initialized")
-
+        # B3 (v3.21) — no fresh diagnostic response within the timeout window.
+        # Report honestly: never synthesize an OK from the cached opta_connected
+        # flag. The result must reflect what the device actually reported.
+        logger.warning(f"No diagnostic response from Opta {cabinet_id} within timeout window")
         return {
             "pedestal_id": pedestal_id,
-            "sensors": sensors,
-            "all_ok": all_ok,
+            "sensors": {s: "missing" for s in EXPECTED_SENSORS},
+            "all_ok": False,
+            "status": "unknown",
             "initialized": pedestal.initialized,
-            "error": None if raw is not None else f"No response from Opta {cabinet_id} — showing cached state.",
+            "error": "No diagnostic response received from device",
         }
 
     # ── Legacy pedestal: MQTT diagnostics request/response ────────────────────
@@ -141,6 +142,7 @@ async def run_diagnostics(pedestal_id: int, db: DBSession = Depends(get_db), _: 
             "pedestal_id": pedestal_id,
             "sensors": {s: "missing" for s in LEGACY_SENSORS},
             "all_ok": False,
+            "status": "unknown",
             "initialized": pedestal.initialized,
             "error": "No response from pedestal — check that it is powered on and connected to the MQTT broker.",
         }
@@ -161,6 +163,7 @@ async def run_diagnostics(pedestal_id: int, db: DBSession = Depends(get_db), _: 
         "pedestal_id": pedestal_id,
         "sensors": sensors,
         "all_ok": all_ok,
+        "status": "ok" if all_ok else "fault",
         "initialized": pedestal.initialized,
         "error": None,
     }

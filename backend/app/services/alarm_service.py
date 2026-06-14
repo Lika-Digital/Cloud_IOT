@@ -31,6 +31,7 @@ def trigger_alarm(
     pedestal_id: int | None = None,
     details: str | None = None,
     deduplicate: bool = True,
+    severity: str | None = None,
 ) -> ActiveAlarm | None:
     db = SessionLocal()
     try:
@@ -45,13 +46,28 @@ def trigger_alarm(
                 .first()
             )
             if existing:
-                return existing  # already active, don't create duplicate
+                # v3.23 — escalate/de-escalate an already-active alarm in place
+                # (e.g. temperature warning -> critical) instead of spawning a
+                # duplicate. Re-broadcast only when something actually changed.
+                changed = False
+                if severity is not None and existing.severity != severity:
+                    existing.severity = severity
+                    changed = True
+                if message and existing.message != message[:500]:
+                    existing.message = message[:500]
+                    changed = True
+                if changed:
+                    db.commit()
+                    db.refresh(existing)
+                    _broadcast(existing, "alarm_triggered")
+                return existing
 
         alarm = ActiveAlarm(
             alarm_type=alarm_type,
             source=source,
             pedestal_id=pedestal_id,
             status="triggered",
+            severity=severity,
             message=message[:500],
             details=details,
             triggered_at=datetime.utcnow(),
@@ -126,6 +142,60 @@ def get_active_alarm_count() -> int:
         db.close()
 
 
+def has_active_alarm(alarm_type: str, pedestal_id: int | None) -> bool:
+    """v3.23 — True if a 'triggered' alarm of this type+pedestal exists.
+    Used by the temperature poller to apply clearing hysteresis."""
+    db = SessionLocal()
+    try:
+        return (
+            db.query(ActiveAlarm)
+            .filter(
+                ActiveAlarm.alarm_type == alarm_type,
+                ActiveAlarm.pedestal_id == pedestal_id,
+                ActiveAlarm.status == "triggered",
+            )
+            .first()
+            is not None
+        )
+    finally:
+        db.close()
+
+
+def resolve_alarm_type(alarm_type: str, pedestal_id: int | None) -> int:
+    """v3.23 — auto-resolve every 'triggered' alarm of this type+pedestal
+    (sets status='resolved', resolved_at=now) and broadcasts 'alarm_resolved'.
+    Returns the number resolved. Used when a self-healing condition (e.g. the
+    temperature returning to normal) clears."""
+    db = SessionLocal()
+    try:
+        alarms = (
+            db.query(ActiveAlarm)
+            .filter(
+                ActiveAlarm.alarm_type == alarm_type,
+                ActiveAlarm.pedestal_id == pedestal_id,
+                ActiveAlarm.status == "triggered",
+            )
+            .all()
+        )
+        if not alarms:
+            return 0
+        now = datetime.utcnow()
+        for a in alarms:
+            a.status = "resolved"
+            a.resolved_at = now
+        db.commit()
+        for a in alarms:
+            db.refresh(a)
+            _broadcast(a, "alarm_resolved")
+        return len(alarms)
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to resolve alarms ({alarm_type}, pedestal={pedestal_id}): {e}")
+        return 0
+    finally:
+        db.close()
+
+
 # ─── Internal ─────────────────────────────────────────────────────────────────
 
 def _broadcast(alarm: ActiveAlarm, event: str):
@@ -140,10 +210,12 @@ def _broadcast(alarm: ActiveAlarm, event: str):
                 "source": alarm.source,
                 "pedestal_id": alarm.pedestal_id,
                 "status": alarm.status,
+                "severity": getattr(alarm, "severity", None),
                 "message": alarm.message,
                 "triggered_at": alarm.triggered_at.isoformat(),
                 "acknowledged_at": alarm.acknowledged_at.isoformat() if alarm.acknowledged_at else None,
                 "acknowledged_by": alarm.acknowledged_by,
+                "resolved_at": alarm.resolved_at.isoformat() if getattr(alarm, "resolved_at", None) else None,
             },
         }
         loop: asyncio.AbstractEventLoop | None = None

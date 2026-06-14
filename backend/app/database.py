@@ -180,6 +180,9 @@ def _migrate_schema():
         # acknowledgment. Cleared only by the acknowledge endpoint, never
         # by load dropping back below the threshold.
         ("socket_configs", "auto_stop_pending_ack",       "INTEGER NOT NULL DEFAULT 0"),
+        # v3.23 — temperature range alarms: severity (warning/critical) + auto-resolve.
+        ("active_alarms",  "severity",    "TEXT"),
+        ("active_alarms",  "resolved_at", "DATETIME"),
     ]
 
     with engine.connect() as conn:

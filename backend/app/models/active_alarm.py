@@ -23,7 +23,13 @@ class ActiveAlarm(Base):
         'customer_mobile'  — raised by a customer via API
 
     status:
-        'triggered' | 'acknowledged'
+        'triggered' | 'acknowledged' | 'resolved'
+
+    severity (v3.23):
+        'warning' | 'critical' | None  — drives the dashboard colour (yellow/red).
+    resolved_at (v3.23):
+        set when an auto-resolving alarm (e.g. temperature range) returns to
+        normal; status becomes 'resolved'.
     """
     __tablename__ = "active_alarms"
 
@@ -32,8 +38,10 @@ class ActiveAlarm(Base):
     source: Mapped[str] = mapped_column(String(20), nullable=False)
     pedestal_id: Mapped[int] = mapped_column(Integer, nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="triggered", index=True)
+    severity: Mapped[str] = mapped_column(String(10), nullable=True)   # v3.23 — "warning" | "critical"
     message: Mapped[str] = mapped_column(String(500), nullable=False)
     details: Mapped[str] = mapped_column(Text, nullable=True)
     triggered_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     acknowledged_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     acknowledged_by: Mapped[str] = mapped_column(String(255), nullable=True)
+    resolved_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)   # v3.23 — auto-resolve

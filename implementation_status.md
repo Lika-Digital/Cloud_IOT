@@ -1,3 +1,23 @@
+# Implementation Status — TME temperature range alarms (v3.23)
+
+## 2026-06-14 — Approved "idi s preporukama" (D1a severity col, D2a auto-resolve+hysteresis, D6 offline warning, D3 fixed 45/60/0/-10, D5 30s, D8 live temp on card)
+
+- [DONE] `backend/app/models/active_alarm.py` — added `severity` + `resolved_at`; status now triggered|acknowledged|resolved.
+- [DONE] `backend/app/database.py` — migration: active_alarms.severity, active_alarms.resolved_at.
+- [DONE] `backend/app/services/alarm_service.py` — `trigger_alarm(severity=...)` + in-place escalate/de-escalate (no dup); new `has_active_alarm`, `resolve_alarm_type`; severity+resolved_at in broadcast.
+- [DONE] `backend/app/services/temp_alarm.py` (NEW) — constants (45/60/0/-10, 1° hysteresis) + pure `evaluate_temp_band` + `threshold_for`.
+- [DONE] `backend/app/services/discovery.py` — `read_tme_temperature()` (single-host HTTP read).
+- [DONE] `backend/app/main.py` — `_temp_sensor_poll()` (30s; reachability + reading + range alarm + auto-resolve + offline warning); registered/cancelled in lifespan; temperature_reading WS now carries severity+alarm.
+- [DONE] `tests/backend/test_temp_alarm.py` (NEW, 19) — band/hysteresis + alarm severity/escalate/resolve. Full suite 450 → 469 passing.
+- [DONE] `frontend/src/store/index.ts` — SensorReading.severity.
+- [DONE] `frontend/src/hooks/useWebSocket.ts` — store severity from temperature_reading.
+- [DONE] `frontend/src/components/config/DevicesPanel.tsx` — live reading on TME card (gray/yellow/red) + threshold legend. tsc OK.
+- [DONE] `README.md` — v3.23 changelog.
+- NOTE: no generic ActiveAlarm panel exists in the dashboard yet (pre-existing gap) — temperature alarms are raised/auto-resolved + on WS/REST, but a full alarm-list UI is a separate follow-up.
+- NEXT: commit + push dev; STOP for approval before main.
+
+---
+
 # Implementation Status — Backend bug-fix bundle B1–B4 (v3.21)
 
 ## 2026-06-14 — Four firmware-independent backend fixes

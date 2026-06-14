@@ -212,6 +212,22 @@ async def scan_tme_sensors(subnet: str = "", timeout: float = 5.0) -> list[dict]
     return results
 
 
+async def read_tme_temperature(ip: str, port: int = 80) -> Optional[float]:
+    """v3.23 — Read the current temperature (°C) from a configured Papouch TME via
+    HTTP /values.xml. Returns None if the sensor is unreachable or the value can't
+    be parsed. Reuses check_tme_sensor so the probe/parse logic stays in one place."""
+    try:
+        res = await check_tme_sensor(ip, port)
+    except Exception:
+        return None
+    if res and res.get("temperature") is not None:
+        try:
+            return float(res["temperature"])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 async def check_camera(
     url: str,
     username: str = "",

@@ -17,6 +17,7 @@ export interface Pedestal {
 export interface SensorReading {
   value: number
   alarm: boolean
+  severity?: 'warning' | 'critical' | null   // v3.23 — temperature range band
   timestamp: string
 }
 

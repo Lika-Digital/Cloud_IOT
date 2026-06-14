@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getPedestals } from '../../api'
 import HelpBubble from '../ui/HelpBubble'
-import type { Pedestal } from '../../store'
+import { useStore, type Pedestal } from '../../store'
 import {
   getPedestalConfig,
   updatePedestalConfig,
@@ -136,6 +136,9 @@ export default function DevicesPanel() {
 
   const [saving, setSaving]               = useState(false)
   const [saveMsg, setSaveMsg]             = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  // Live temperature reading (v3.23) — pushed via the `temperature_reading` WS event.
+  const tempReading = useStore((s) => (selectedId != null ? s.temperatureData[selectedId] : undefined))
 
   // Load pedestals on mount
   useEffect(() => {
@@ -512,6 +515,28 @@ export default function DevicesPanel() {
             </select>
           </Field>
         </div>
+        {tempReading && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-400">Live reading:</span>
+            <span className={`text-sm font-mono px-2 py-0.5 rounded ${
+              tempReading.severity === 'critical' ? 'bg-red-900/40 text-red-300 border border-red-700/50'
+              : tempReading.severity === 'warning' ? 'bg-yellow-900/40 text-yellow-300 border border-yellow-700/50'
+              : 'bg-gray-800 text-gray-200 border border-gray-700'
+            }`}>
+              {tempReading.value}°C
+            </span>
+            {tempReading.severity && (
+              <span className={`text-xs font-medium ${
+                tempReading.severity === 'critical' ? 'text-red-400' : 'text-yellow-400'
+              }`}>
+                {tempReading.severity === 'critical' ? '🔴 CRITICAL' : '🟡 WARNING'}
+              </span>
+            )}
+          </div>
+        )}
+        <p className="text-xs text-gray-500">
+          Alarm thresholds: warning ≥ 45 °C or ≤ 0 °C (yellow); critical ≥ 60 °C or ≤ −10 °C (red).
+        </p>
         {cfg?.last_temp_sensor_check && (
           <p className="text-xs text-gray-600">
             Last check: {new Date(cfg.last_temp_sensor_check).toLocaleString()}

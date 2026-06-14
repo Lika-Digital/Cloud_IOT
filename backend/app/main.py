@@ -232,6 +232,117 @@ async def _camera_health_check():
             logger.warning(f"Camera health check loop error: {e}")
 
 
+async def _temp_sensor_poll():
+    """v3.23 — Every 30 s: read each configured Papouch TME, update reachability +
+    store a reading, and raise/auto-resolve temperature-range alarms.
+
+    Prerequisite (D6): the sensor must be CONFIGURED and actually returning a value
+    before range alarms apply. A configured-but-unreachable sensor raises a
+    'temp_sensor_offline' warning instead and is skipped for range evaluation.
+    """
+    from .models.pedestal_config import PedestalConfig
+    from .services.discovery import read_tme_temperature
+    from .services.alarm_service import trigger_alarm, resolve_alarm_type, has_active_alarm
+    from .services.session_service import session_service
+    from .services.temp_alarm import evaluate_temp_band, threshold_for
+    while True:
+        await asyncio.sleep(30)
+        try:
+            db = SessionLocal()
+            try:
+                configs = db.query(PedestalConfig).filter(
+                    PedestalConfig.temp_sensor_ip.isnot(None),
+                    PedestalConfig.temp_sensor_ip != "",
+                ).all()
+                targets = [
+                    (c.id, c.pedestal_id, c.temp_sensor_ip, c.temp_sensor_port or 80)
+                    for c in configs
+                ]
+            finally:
+                db.close()
+
+            for cfg_id, pid, ip, port in targets:
+                try:
+                    value = await read_tme_temperature(ip, port)
+                    now = datetime.utcnow()
+                    reachable = value is not None
+
+                    db2 = SessionLocal()
+                    try:
+                        row = db2.get(PedestalConfig, cfg_id)
+                        if row:
+                            row.temp_sensor_reachable = 1 if reachable else 0
+                            row.last_temp_sensor_check = now
+                            row.updated_at = now
+                            db2.commit()
+                    finally:
+                        db2.close()
+
+                    if not reachable:
+                        # D6 — configured but not sending data.
+                        trigger_alarm(
+                            alarm_type="temp_sensor_offline",
+                            source="sensor_auto",
+                            message=f"Pedestal {pid}: temperature sensor at {ip} is not responding",
+                            pedestal_id=pid,
+                            deduplicate=True,
+                            severity="warning",
+                        )
+                        await ws_manager.broadcast({
+                            "event": "pedestal_health_updated",
+                            "data": {
+                                "pedestal_id": pid,
+                                "temp_sensor_reachable": False,
+                                "last_temp_sensor_check": now.isoformat(),
+                            },
+                        })
+                        continue
+
+                    # Sensor alive → clear any offline alarm and record the reading.
+                    resolve_alarm_type("temp_sensor_offline", pid)
+                    dbr = SessionLocal()
+                    try:
+                        session_service.add_reading(dbr, None, pid, None, "temperature", value, "°C")
+                    finally:
+                        dbr.close()
+
+                    # Range evaluation (with clearing hysteresis).
+                    active = has_active_alarm("temperature", pid)
+                    severity, kind = evaluate_temp_band(value, active)
+                    if severity is None:
+                        resolve_alarm_type("temperature", pid)
+                    else:
+                        thr = threshold_for(severity, kind)
+                        trigger_alarm(
+                            alarm_type="temperature",
+                            source="sensor_auto",
+                            message=(
+                                f"Pedestal {pid}: temperature {round(value, 1)}°C — "
+                                f"{kind} {severity} (threshold {thr:g}°C)"
+                            ),
+                            pedestal_id=pid,
+                            deduplicate=True,
+                            severity=severity,
+                        )
+
+                    await ws_manager.broadcast({
+                        "event": "temperature_reading",
+                        "data": {
+                            "pedestal_id": pid,
+                            "value": round(value, 1),
+                            "severity": severity,
+                            "alarm": severity is not None,
+                            "temp_sensor_reachable": True,
+                            "last_temp_sensor_check": now.isoformat(),
+                            "timestamp": now.isoformat(),
+                        },
+                    })
+                except Exception as e:
+                    logger.warning(f"Temp sensor poll error for pedestal {pid}: {e}")
+        except Exception as e:
+            logger.warning(f"Temp sensor poll loop error: {e}")
+
+
 async def _comm_loss_watchdog():
     """
     Every 30 s: check each known pedestal against its last-heartbeat timestamp.
@@ -506,6 +617,8 @@ async def lifespan(app: FastAPI):
     # v3.10 — daily LED on/off scheduler
     from .services.led_scheduler import run_scheduler as _run_led_scheduler
     led_scheduler_task   = asyncio.create_task(_run_led_scheduler())
+    # v3.23 — Papouch TME temperature poller + range alarms
+    temp_poll_task       = asyncio.create_task(_temp_sensor_poll())
 
     yield
 
@@ -522,6 +635,7 @@ async def lifespan(app: FastAPI):
     storage_monitor_task.cancel()
     time_sync_task.cancel()
     led_scheduler_task.cancel()
+    temp_poll_task.cancel()
     mqtt_service.stop()
     snmp_trap_service.stop()
     simulator_manager.stop()

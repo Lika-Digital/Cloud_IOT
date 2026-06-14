@@ -239,6 +239,7 @@ export function useWebSocket() {
           setSensorReading('temperature', msg.data.pedestal_id as number, {
             value: msg.data.value as number,
             alarm: msg.data.alarm as boolean,
+            severity: (msg.data.severity as 'warning' | 'critical' | null | undefined) ?? null,
             timestamp: msg.data.timestamp as string,
           })
           break

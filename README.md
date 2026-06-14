@@ -83,6 +83,36 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-06-14 — Temperature range alarms for the Papouch TME sensor (v3.23)
+
+Live polling + range alarms for the networked TME temperature sensor (configured
+in v3.22). Previously the TME was only probed during a discovery scan — there was
+no continuous reading and no range alarm (only a hardcoded `>50°C` alarm on the
+MQTT/SNMP path, never on the TME).
+
+- **Poller** (`main.py _temp_sensor_poll`, every 30 s): reads each configured TME
+  over HTTP `/values.xml`, updates `temp_sensor_reachable`/`last_temp_sensor_check`,
+  stores a `temperature` reading, and evaluates the range. **Prerequisite:** a
+  sensor must be configured and actually returning a value before range alarms
+  apply — a configured-but-unreachable sensor raises a `temp_sensor_offline`
+  warning instead.
+- **Bands** (`temp_alarm.evaluate_temp_band`): `≥45°C` or `≤0°C` → **warning
+  (yellow)**; `≥60°C` or `≤−10°C` → **critical (red)**. 1 °C clearing hysteresis
+  so it doesn't flap at a boundary.
+- **Alarm lifecycle:** `ActiveAlarm` gains `severity` (warning/critical) and a
+  `resolved` status + `resolved_at`. `trigger_alarm` now **escalates/de-escalates
+  an active alarm in place** (warning→critical) instead of duplicating; the poller
+  **auto-resolves** when the temperature returns to normal (new
+  `resolve_alarm_type` / `has_active_alarm`). Severity + `resolved_at` are on the
+  WS payload (`alarm_triggered` / `alarm_resolved`).
+- **UI:** the Device Configuration TME card shows the **live reading** coloured by
+  band (gray/yellow/red) with the alarm-threshold legend; `temperature_reading` WS
+  now carries `severity`. (A general ActiveAlarm panel does not yet exist in the
+  dashboard — that's a separate follow-up; the alarm records + WS events are ready.)
+- DB: `active_alarms.severity` + `active_alarms.resolved_at` (idempotent migration).
+- Tests: `tests/backend/test_temp_alarm.py` (19) — band logic + hysteresis +
+  severity/escalate/auto-resolve. Suite **450 → 469 passing**.
+
 ### 2026-06-14 — Temperature sensor (Papouch TME) configuration UI (v3.22)
 
 The backend has long supported a standalone networked **Papouch TME** temperature

@@ -47,7 +47,21 @@ Files — Status:
   client. Auto-included by tests/run_tests.sh (globs tests/backend/).
 - [DONE] Full backend suite: 448 passed, 0 failures (was 426; +22).
 - [DONE] `README.md` — v3.21 changelog entry (B1–B4, backend-only, outstanding firmware list).
-- ALL FILES COMPLETE. Committing + pushing dev; STOP for explicit approval before main (D7).
+- [DONE] v3.21 committed da1602e + pushed origin/develop.
+
+## B3b — honest diagnostic sensor mapping (follow-up, user-requested)
+Root cause found by tracing UI DiagnosticsModal → /diagnostics/run → _handle_opta_diagnostic:
+temperature/moisture were hard-wired to "ok" from `mqtt=="connected"` (cabinet has no
+such sensors) → phantom green; UI passCount also counted failures as "passed".
+- [DONE] `backend/app/services/mqtt_handlers.py` (_handle_opta_diagnostic) — temp/moisture/
+  camera → "missing" (no fabrication).
+- [DONE] `backend/app/routers/diagnostics.py` — all_ok/status computed over PRESENT sensors
+  only (sockets+water); missing sensors neither pass nor block.
+- [DONE] `frontend/src/components/config/DiagnosticsModal.tsx` — passCount counts only "ok";
+  banner shows passCount/presentCount "sensors OK"; missing chip relabeled "N/A".
+- [DONE] tests: +2 in test_v321_backend_fixes.py (handler marks temp/moisture/camera missing;
+  present-based all_ok ignores missing). Suite 448 → 450 passing.
+- ALL FILES COMPLETE (B1–B4 + B3b). Committing + pushing dev; STOP for approval before main (D7).
 
 ---
 

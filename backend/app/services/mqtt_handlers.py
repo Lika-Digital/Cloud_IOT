@@ -2552,9 +2552,11 @@ async def _handle_opta_diagnostic(payload: str):
         sensors[f"water_v{vid}"] = "ok" if ok else "fail"
         per_valve_ok[vid] = ok
 
-    # Opta doesn't have separate temp/moisture/camera sensors
-    sensors["temperature"] = "ok" if data.get("mqtt") == "connected" else "missing"
-    sensors["moisture"] = "ok" if data.get("mqtt") == "connected" else "missing"
+    # B3b (v3.21) — Opta cabinets have NO temperature/moisture/camera sensors.
+    # Report them as "missing" (not present) instead of fabricating an "ok" from
+    # MQTT connectivity, which made non-existent sensors show green in the UI.
+    sensors["temperature"] = "missing"
+    sensors["moisture"] = "missing"
     sensors["camera"] = "missing"
 
     # Also pass the full raw response for rich display

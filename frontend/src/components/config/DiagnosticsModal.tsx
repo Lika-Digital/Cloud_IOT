@@ -60,10 +60,12 @@ export default function DiagnosticsModal({ pedestalId, pedestalName, onClose }: 
 
   useEffect(() => { run() }, [])
 
-  const passCount = result
-    ? Object.values(result.sensors).filter((v) => v !== 'missing').length
-    : 0
-  const totalCount = Object.keys(SENSOR_LABELS).length
+  // B3b — only count sensors that actually reported OK. "present" excludes
+  // sensors the cabinet doesn't have (reported as "missing"), so a faulted
+  // socket is never counted as "passed" and phantom sensors are not counted.
+  const allStatuses = result ? Object.values(result.sensors) : []
+  const passCount = allStatuses.filter((v) => v === 'ok').length
+  const presentCount = allStatuses.filter((v) => v !== 'missing').length
 
   return (
     <div
@@ -120,7 +122,7 @@ export default function DiagnosticsModal({ pedestalId, pedestalName, onClose }: 
               ) : (
                 <div className="bg-amber-900/20 border border-amber-700/40 rounded-lg px-4 py-3">
                   <p className="text-amber-300 font-medium text-sm">
-                    {passCount}/{totalCount} sensors passed
+                    {passCount}/{presentCount} sensors OK
                   </p>
                   <p className="text-amber-400 text-xs mt-0.5">
                     {result.error ?? 'Some sensors did not respond — check connections.'}
@@ -193,7 +195,7 @@ function StatusChip({ status }: { status: string }) {
   }
   return (
     <span className="flex items-center gap-1 text-xs font-medium text-gray-500 bg-gray-800 border border-gray-700 px-2 py-0.5 rounded-full">
-      — NO RESPONSE
+      — N/A
     </span>
   )
 }

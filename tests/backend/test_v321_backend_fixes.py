@@ -398,3 +398,48 @@ def test_b4_rest_response_exposes_power_kw_raw(client, auth_headers):
     body = r.json()
     assert "power_kw_raw" in body
     assert body["power_kw_raw"] == pytest.approx(395.974)
+
+
+# ── B3b — honest diagnostic sensor mapping (no phantom temp/moisture OK) ──────
+
+def test_b3b_handler_reports_temp_moisture_camera_as_missing():
+    pid = _ensure_cabinet()
+    _simulate("opta/diagnostic", {
+        "cabinetId": CABINET, "mqtt": "connected", "time": "NOT_SYNCED",
+        "power": [{"id": "Q1", "state": "fault", "hw": "fault"},
+                  {"id": "Q2", "state": "idle", "hw": "off"}],
+        "water": [],
+    })
+    from app.services.diagnostics_manager import diagnostics_manager
+    res = diagnostics_manager._results.get(pid)
+    assert res is not None
+    # Opta cabinet has no such sensors → must be "missing", never a phantom "ok".
+    assert res["temperature"] == "missing"
+    assert res["moisture"] == "missing"
+    assert res["camera"] == "missing"
+    # Real hardware is mapped truthfully.
+    assert res["socket_1"] == "fail"
+    assert res["socket_2"] == "ok"
+
+
+def test_b3b_present_based_all_ok_ignores_missing_sensors(client, auth_headers):
+    pid = _ensure_cabinet()
+    from app.services.diagnostics_manager import diagnostics_manager
+
+    async def _seed(*_a, **_k):
+        diagnostics_manager._results[pid] = {
+            "socket_1": "ok", "socket_2": "ok", "socket_3": "ok", "socket_4": "ok",
+            "water": "ok",
+            "temperature": "missing", "moisture": "missing", "camera": "missing",
+        }
+        return None
+
+    with (
+        patch("app.routers.diagnostics.mqtt_service.publish"),
+        patch("app.routers.diagnostics._await_diag_event", new=AsyncMock(side_effect=_seed)),
+    ):
+        r = client.post(f"/api/pedestals/{pid}/diagnostics/run", headers=auth_headers)
+    body = r.json()
+    assert body["all_ok"] is True            # missing temp/moisture/camera don't block
+    assert body["status"] == "ok"
+    assert body["sensors"]["temperature"] == "missing"  # surfaced as N/A, not OK

@@ -108,6 +108,12 @@ data the Opta already sends. Derived from live MQTT captures of cabinet
   synthesizes a green result from the cached `opta_connected` flag — it returns
   `all_ok=false`, `status:"unknown"`, *"No diagnostic response received from device."*
   A `status` field (`ok`/`fault`/`unknown`) is now on every diagnostic response.
+- **B3b — Honest diagnostic sensor mapping.** Opta cabinets have no temperature/
+  moisture/camera sensors, yet the mapper showed them **green ("ok")** derived from
+  MQTT connectivity. They are now reported as **`missing`** (UI shows "N/A"), the
+  overall verdict is computed only over sensors the cabinet actually reports
+  (sockets + water), and the diagnostics modal's "X/Y" counts only real OKs (a
+  faulted socket is no longer counted as "passed").
 - **B4 — Power sanity clamp (display/audit only).** The firmware can report `powerKw`
   ~100× too high. Telemetry now stores the raw value in `meter_power_kw_raw` and a
   sanity-clamped value in `meter_power_kw` (clamp when reported > 50× the value
@@ -116,7 +122,7 @@ data the Opta already sends. Derived from live MQTT captures of cabinet
   immune and are unchanged.
 
 DB: one new nullable column `socket_configs.meter_power_kw_raw` (idempotent migration).
-Tests: `tests/backend/test_v321_backend_fixes.py` (22) + suite **426 → 448 passing**.
+Tests: `tests/backend/test_v321_backend_fixes.py` (24) + suite **426 → 450 passing**.
 
 **Outstanding firmware/hardware issues (NOT fixed here — require firmware or on-site
 work):** hwconfig 502-byte truncation (enlarge Opta MQTT buffer + retain); breakers

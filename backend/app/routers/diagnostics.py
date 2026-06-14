@@ -95,9 +95,11 @@ async def run_diagnostics(pedestal_id: int, db: DBSession = Depends(get_db), _: 
         if raw is not None:
             # Opta responded — use its mapped result
             sensors = {s: raw.get(s, "missing") for s in EXPECTED_SENSORS}
-            # For Opta cabinets: camera is not part of the cabinet, don't fail on it
-            opta_sensors = {k: v for k, v in sensors.items() if k != "camera"}
-            all_ok = all(v == "ok" for v in opta_sensors.values())
+            # B3b (v3.21) — only sensors the cabinet actually reports (not "missing")
+            # count toward the verdict; phantom/absent sensors (temperature, moisture,
+            # camera on an Opta cabinet) neither pass nor block initialization.
+            present = {k: v for k, v in sensors.items() if v != "missing"}
+            all_ok = bool(present) and all(v == "ok" for v in present.values())
 
             if all_ok and not pedestal.initialized:
                 pedestal.initialized = True

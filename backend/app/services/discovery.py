@@ -168,6 +168,29 @@ async def check_tme_sensor(ip: str, port: int = 80) -> Optional[dict]:
                                 "temperature": None,
                                 "unit": "C",
                             }
+
+            # ── Fallback: older Papouch TME firmware serves /fresh.xml (not
+            #    /values.xml, which 404s on these units). Format:
+            #      <sns ... status="0" unit="0" val="285" .../>
+            #    where val = temperature × 10 (285 → 28.5 °C) and the unit
+            #    attribute codes 0/1/2 = °C/°F/K.
+            resp_f = await client.get(f"http://{ip}:{port}/fresh.xml")
+            if resp_f.status_code == 200 and "papouch.com/xml/TME" in resp_f.text:
+                xml_f = resp_f.text
+                val_match  = re.search(r'val="(-?\d+)"', xml_f)
+                unit_match = re.search(r'unit="(\d+)"', xml_f)
+                if val_match:
+                    unit_letter = {"0": "C", "1": "F", "2": "K"}.get(
+                        unit_match.group(1) if unit_match else "0", "C")
+                    return {
+                        "ip": ip,
+                        "port": port,
+                        "protocol": "http",
+                        "type": "temp_sensor_tme",
+                        "name": f"Papouch TME ({ip})",
+                        "temperature": int(val_match.group(1)) / 10.0,
+                        "unit": unit_letter,
+                    }
     except Exception:
         pass
     return None
@@ -214,8 +237,9 @@ async def scan_tme_sensors(subnet: str = "", timeout: float = 5.0) -> list[dict]
 
 async def read_tme_temperature(ip: str, port: int = 80) -> Optional[float]:
     """v3.23 — Read the current temperature (°C) from a configured Papouch TME via
-    HTTP /values.xml. Returns None if the sensor is unreachable or the value can't
-    be parsed. Reuses check_tme_sensor so the probe/parse logic stays in one place."""
+    HTTP /values.xml (newer firmware) or /fresh.xml (older firmware). Returns None
+    if the sensor is unreachable or the value can't be parsed. Reuses
+    check_tme_sensor so the probe/parse logic stays in one place."""
     try:
         res = await check_tme_sensor(ip, port)
     except Exception:

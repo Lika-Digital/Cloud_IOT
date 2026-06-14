@@ -1,3 +1,29 @@
+# Implementation Status — TME /fresh.xml support (field fix)
+
+## 2026-06-14 — "kreni" (field: TME at 192.168.1.254 returns 404 on /values.xml; serves /fresh.xml)
+
+- Root cause: older Papouch TME firmware (cabinet MAR_KRK_ORM_01) serves `/fresh.xml`, not `/values.xml` (404). Format: `<sns ... unit="0" val="285" .../>` where val = temp×10 (285→28.5°C), unit 0/1/2=C/F/K. Old parser only matched `<v>` element on /values.xml → sensor never discovered/read despite being pingable.
+- [DONE] `backend/app/services/discovery.py` — `check_tme_sensor()`: added `/fresh.xml` fallback after `/values.xml` fails; parses `val=`/`unit=` attributes, temperature=int(val)/10, unit map; guarded on `papouch.com/xml/TME` xmlns to avoid false positives. `read_tme_temperature()` reuses it (poll + scan both benefit). Docstring updated.
+- [VERIFIED] parser on real device sample → 28.5 °C, unit C, guard True.
+- [DONE] `tests/backend/test_tme_fresh_xml.py` (NEW) — 4 tests: fresh.xml parse (28.5°C/C), read_tme via fresh.xml, values.xml no-regression (23.5°C), unrecognised→None. All pass. Targeted suite 47 passed.
+- NEXT: commit develop → merge main → push (approved "push, s testom"); then NUC `cloud-iot upgrade` + manual IP entry 192.168.1.254.
+
+---
+
+# Implementation Status — ERP Integration Guide v3 (MarinaMaster MVP)
+
+## 2026-06-14 — "kreni" (A new H1 MVP section, B output to _v3.pdf, C curl examples, D keep rest)
+
+- [DONE] `generate_erp_integration_doc.py` — OUTPUT_PATH → `Cloud_IOT_ERP_Integration_Guide_v3.pdf` (v2 untouched).
+- [DONE] `generate_erp_integration_doc.py` — TOC: added "MVP Pilot — First Integration Set" entry.
+- [DONE] `generate_erp_integration_doc.py` — NEW H1 "MVP Pilot — First Integration Set" after Quick-Start (no renumber): 3 use cases (temperature push-only `temperature_reading`; berth occupancy pull `berths.occupancy_ext` + push `berth_occupancy_updated`; camera per berth via NUC `camera.stream_ext`/`camera.frame_ext`), accurate payloads/curl, per-pedestal-camera note, enablement checklist table, "what success unlocks" note.
+- [DONE] `generate_erp_integration_doc.py` — §9.4 temperature_reading: replaced ">50°C" with TME bands table (45/60/0/-10, 1° hysteresis) + new fields severity/alarm/temp_sensor_reachable/last_temp_sensor_check; noted push-only.
+- [DONE] `generate_erp_integration_doc.py` — §6: added 6.5 Berth Occupancy & Camera (Marina View) pull flows + toggles note.
+- [DONE] Regenerated `Cloud_IOT_ERP_Integration_Guide_v3.pdf` (84 KB) via backend/.venv.
+- NOTE: generator is untracked (per earlier "c" — don't commit doc generators); PDF is a build artifact. No git changes.
+
+---
+
 # Implementation Status — Active Alarms panel (v3.24)
 
 ## 2026-06-14 — "idi s preporukama" (D1 SystemHealth, D2 null→red, D3 WS+fetch+30s poll, D4 admin-only)

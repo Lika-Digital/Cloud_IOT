@@ -83,6 +83,31 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-06-14 — Temperature sensor (Papouch TME) configuration UI (v3.22)
+
+The backend has long supported a standalone networked **Papouch TME** temperature
+sensor (`temp_sensor_ip/port/protocol` on the pedestal config; the device scan
+already returns `temp_sensors`), but the **Device Configuration** UI never exposed
+it — there was no way to add it from the dashboard. Frontend-only fix:
+
+- New **"🌡️ Temperature Sensor — Papouch TME"** card in **Settings → Device
+  Configuration**: IP / port / protocol (HTTP polled, Modbus-TCP selectable),
+  reachability status dot, last-check timestamp. **Manual add works regardless of
+  discovery** — enter the IP and Save.
+- **Auto-Discovery** now renders the TME sensors the scan finds (name · ip:port ·
+  live °C) with an **Assign** button; the scan-result type was widened from
+  `{cameras}` to the full `ScanAllResult` (it was silently dropping `temp_sensors`).
+- **Subnet field** added to the scan: `get_local_subnet()` auto-detects via the
+  route to the internet, which on a multi-homed NUC (5G WAN + marina LAN) returns
+  the **WAN** subnet — so the scan probed the wrong `/24` and missed devices on
+  `192.168.1.x`. You can now type the subnet (e.g. `192.168.1`) to scan it directly
+  (the backend `scan` endpoint already accepted a `subnet` param).
+- **Save** sends `temp_sensor_ip/port/protocol`; an empty IP clears the sensor.
+
+No backend change (API + discovery already supported it). The TME is a separate
+device, **not** part of the Opta cabinet — which is why the cabinet diagnostic
+(v3.21 B3b) correctly shows Temperature/Moisture as N/A.
+
 ### 2026-06-14 — Backend resilience to Opta firmware quirks: B1–B4 (v3.21)
 
 Four **backend-only** fixes (no firmware change required) that make the NUC handle

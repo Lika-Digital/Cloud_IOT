@@ -8,6 +8,8 @@ import {
   scanAllDevices,
   type PedestalConfigData,
   type DiscoveredCamera,
+  type DiscoveredTempSensor,
+  type ScanAllResult,
 } from '../../api/pedestalConfig'
 
 // ─── Status dot ───────────────────────────────────────────────────────────────
@@ -113,6 +115,10 @@ export default function DevicesPanel() {
   const [cameraPass, setCameraPass]       = useState('')
   const [showCameraPass, setShowCameraPass] = useState(false)
   const [hasSavedPassword, setHasSavedPassword] = useState(false)
+  // Temperature sensor (Papouch TME) — standalone networked thermometer.
+  const [tempIp, setTempIp]             = useState('')
+  const [tempPort, setTempPort]         = useState('80')
+  const [tempProtocol, setTempProtocol] = useState<'http' | 'modbus_tcp'>('http')
 
   // Auto-computed RTSP URL — derived from ip + user + pass
   const computedRtspUrl = cameraIp && cameraUser && cameraPass
@@ -124,7 +130,8 @@ export default function DevicesPanel() {
 
   // Scan state
   const [scanning, setScanning]           = useState(false)
-  const [scanResult, setScanResult]       = useState<{ cameras: DiscoveredCamera[] } | null>(null)
+  const [scanSubnet, setScanSubnet]       = useState('')
+  const [scanResult, setScanResult]       = useState<ScanAllResult | null>(null)
   const [scanMsg, setScanMsg]             = useState('')
 
   const [saving, setSaving]               = useState(false)
@@ -154,6 +161,9 @@ export default function DevicesPanel() {
       const passwordSaved = c.camera_password === '***'
       setHasSavedPassword(passwordSaved)
       setCameraPass(passwordSaved ? '' : (c.camera_password ?? ''))
+      setTempIp(c.temp_sensor_ip ?? '')
+      setTempPort(String(c.temp_sensor_port ?? 80))
+      setTempProtocol(c.temp_sensor_protocol ?? 'http')
       setScanResult(null)
       setScanMsg('')
       setSaveMsg(null)
@@ -165,12 +175,14 @@ export default function DevicesPanel() {
     setScanResult(null)
     setScanMsg('Scanning network… (ONVIF multicast + subnet HTTP probe, ~5s)')
     try {
-      const result = await scanAllDevices()
+      const result = await scanAllDevices(scanSubnet.trim() || undefined)
       setScanResult(result)
+      const nCam = result.cameras.length
+      const nTme = result.temp_sensors.length
       setScanMsg(
-        result.cameras.length === 0
-          ? `No cameras found on ${result.subnet}.0/24. Use manual entry below.`
-          : `Found ${result.cameras.length} camera(s) on ${result.subnet}.0/24`
+        nCam === 0 && nTme === 0
+          ? `No devices found on ${result.subnet}.0/24. Use manual entry below.`
+          : `Found ${nCam} camera(s) and ${nTme} temperature sensor(s) on ${result.subnet}.0/24`
       )
     } catch {
       setScanMsg('Scan failed. Check network connection.')
@@ -184,6 +196,13 @@ export default function DevicesPanel() {
     setScanMsg('Camera assigned. Enter username and password then click Save.')
   }
 
+  const assignTempSensor = (s: DiscoveredTempSensor) => {
+    setTempIp(s.ip)
+    setTempPort(String(s.port))
+    setTempProtocol(s.protocol)
+    setScanMsg('Temperature sensor assigned. Click Save to store it.')
+  }
+
   const handleSave = async () => {
     if (!selectedId) return
 
@@ -194,6 +213,13 @@ export default function DevicesPanel() {
     }
     if (cameraIp && cameraUser && !cameraPass && !hasSavedPassword) {
       setSaveMsg({ type: 'error', text: 'Camera password is required. Enter a password to save the camera configuration.' })
+      return
+    }
+
+    // Temperature sensor: validate port only when an IP is set.
+    const tempPortNum = parseInt(tempPort, 10) || 80
+    if (tempIp.trim() && (tempPortNum < 1 || tempPortNum > 65535)) {
+      setSaveMsg({ type: 'error', text: 'Temperature sensor port must be between 1 and 65535.' })
       return
     }
 
@@ -212,6 +238,10 @@ export default function DevicesPanel() {
         camera_username:      cameraUser        || undefined,
         // Empty password = keep existing (user didn't re-enter it)
         camera_password:      cameraPass        || undefined,
+        // Temperature sensor (Papouch TME). Sent as-is so an empty IP clears it.
+        temp_sensor_ip:       tempIp.trim(),
+        temp_sensor_port:     tempPortNum,
+        temp_sensor_protocol: tempProtocol,
       })
       // Refresh cfg to get updated health/status
       const fresh = await getPedestalConfig(selectedId)
@@ -277,7 +307,7 @@ export default function DevicesPanel() {
             <div>
               <p className="text-sm font-medium text-white">Auto-Discovery</p>
               <p className="text-xs text-gray-500 mt-0.5">
-                Scans LAN for ONVIF cameras
+                Scans LAN for ONVIF cameras + Papouch TME temperature sensors
               </p>
             </div>
             <HelpBubble text={
@@ -297,6 +327,19 @@ export default function DevicesPanel() {
           </button>
         </div>
 
+        <input
+          type="text"
+          value={scanSubnet}
+          onChange={(e) => setScanSubnet(e.target.value)}
+          placeholder="Subnet to scan (optional) — e.g. 192.168.1"
+          className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-200 text-sm focus:outline-none focus:border-blue-500"
+        />
+        <p className="text-xs text-gray-500">
+          Leave blank to auto-detect. On a multi-homed NUC (5G WAN + marina LAN) auto-detect can
+          pick the wrong network — enter the device subnet (e.g. <code className="text-gray-400">192.168.1</code>)
+          to scan it directly.
+        </p>
+
         {scanMsg && (
           <p className={`text-xs px-3 py-2 rounded-lg ${
             scanMsg.includes('No devices') || scanMsg.includes('failed')
@@ -313,6 +356,33 @@ export default function DevicesPanel() {
             <p className="text-xs text-gray-500 uppercase tracking-wider">Cameras found</p>
             {scanResult.cameras.map((cam, i) => (
               <DiscoveredBadge key={i} item={cam} onAssign={() => assignCamera(cam)} />
+            ))}
+          </div>
+        )}
+
+        {/* Discovered temperature sensors */}
+        {scanResult && scanResult.temp_sensors.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-xs text-gray-500 uppercase tracking-wider">Temperature sensors found</p>
+            {scanResult.temp_sensors.map((s, i) => (
+              <div
+                key={i}
+                className="flex items-center justify-between px-3 py-2 rounded-lg bg-emerald-900/20 border border-emerald-700/40"
+              >
+                <div>
+                  <p className="text-sm text-emerald-300 font-medium">{s.name}</p>
+                  <p className="text-xs text-emerald-400/70">
+                    {s.ip}:{s.port} · {s.protocol}
+                    {s.temperature != null ? ` · ${s.temperature}°${s.unit}` : ''}
+                  </p>
+                </div>
+                <button
+                  onClick={() => assignTempSensor(s)}
+                  className="ml-3 flex-shrink-0 text-xs px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition-colors"
+                >
+                  Assign
+                </button>
+              </div>
             ))}
           </div>
         )}
@@ -409,6 +479,42 @@ export default function DevicesPanel() {
         {cfg?.last_camera_check && (
           <p className="text-xs text-gray-600">
             Last check: {new Date(cfg.last_camera_check).toLocaleString()}
+          </p>
+        )}
+      </DeviceCard>
+
+      {/* ── Temperature Sensor (Papouch TME) ─────────────────────────────────── */}
+      <DeviceCard
+        icon="🌡️"
+        title="Temperature Sensor — Papouch TME"
+        status={<StatusDot ok={cfg?.temp_sensor_reachable ?? false} label={cfg?.temp_sensor_reachable ? 'Reachable' : 'Unreachable'} />}
+      >
+        <p className="text-xs text-gray-500">
+          Standalone networked thermometer — <strong>not</strong> part of the Arduino OPTA cabinet.
+          Polled over HTTP <code className="text-gray-400">/values.xml</code>. Leave the IP blank
+          if no temperature sensor is installed.
+        </p>
+        <Field label="Sensor IP / Hostname">
+          <TextInput value={tempIp} onChange={setTempIp} placeholder="e.g. 192.168.1.190" />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Port">
+            <TextInput value={tempPort} onChange={setTempPort} placeholder="80" type="number" />
+          </Field>
+          <Field label="Protocol">
+            <select
+              value={tempProtocol}
+              onChange={(e) => setTempProtocol(e.target.value as 'http' | 'modbus_tcp')}
+              className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-200 text-sm focus:outline-none focus:border-blue-500"
+            >
+              <option value="http">HTTP (Papouch TME — polled)</option>
+              <option value="modbus_tcp">Modbus TCP</option>
+            </select>
+          </Field>
+        </div>
+        {cfg?.last_temp_sensor_check && (
+          <p className="text-xs text-gray-600">
+            Last check: {new Date(cfg.last_temp_sensor_check).toLocaleString()}
           </p>
         )}
       </DeviceCard>

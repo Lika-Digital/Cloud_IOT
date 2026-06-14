@@ -61,7 +61,20 @@ such sensors) → phantom green; UI passCount also counted failures as "passed".
   banner shows passCount/presentCount "sensors OK"; missing chip relabeled "N/A".
 - [DONE] tests: +2 in test_v321_backend_fixes.py (handler marks temp/moisture/camera missing;
   present-based all_ok ignores missing). Suite 448 → 450 passing.
-- ALL FILES COMPLETE (B1–B4 + B3b). Committing + pushing dev; STOP for approval before main (D7).
+- ALL FILES COMPLETE (B1–B4 + B3b). v3.21 released to main (a16a5a6).
+
+## v3.22 — TME temperature sensor configuration UI (frontend-only)
+User request: add/configure Papouch TME temp sensor from UI; scan missed it at
+192.168.1.254:80. Root cause of scan miss: get_local_subnet() (discovery.py) detects
+the subnet via the route to 8.8.8.8 → on a multi-homed NUC that returns the 5G WAN
+subnet, not the 192.168.1.x marina LAN → scan probes the wrong /24.
+- [DONE] `frontend/src/components/config/DevicesPanel.tsx` — new "🌡️ Temperature Sensor
+  — Papouch TME" card (IP/port/protocol/status/last-check); scanResult widened to
+  ScanAllResult; renders discovered temp_sensors with Assign; optional "Subnet to scan"
+  input (passes the existing backend subnet param); save sends temp_sensor_* (empty IP
+  clears the sensor). `tsc --noEmit` OK. No backend change (API + discovery already
+  supported it).
+- NEXT: commit + push dev; STOP for approval before main.
 
 ---
 

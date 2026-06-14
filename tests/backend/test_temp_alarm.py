@@ -152,3 +152,18 @@ def test_resolve_is_noop_when_nothing_active():
     with patch("app.services.alarm_service.SessionLocal", _TS):
         from app.services.alarm_service import resolve_alarm_type
         assert resolve_alarm_type("temperature", 999) == 0
+
+
+# ── v3.24 — /api/alarms/active exposes severity ──────────────────────────────
+
+def test_active_alarms_endpoint_returns_severity(client, auth_headers):
+    with patch("app.services.alarm_service.SessionLocal", _TS):
+        from app.services.alarm_service import trigger_alarm
+        trigger_alarm("temperature", "sensor_auto", "crit", pedestal_id=30, severity="critical")
+        r = client.get("/api/alarms/active", headers=auth_headers)
+    assert r.status_code == 200
+    rows = r.json()
+    match = [x for x in rows if x["pedestal_id"] == 30]
+    assert match, "triggered alarm not returned by /api/alarms/active"
+    assert match[0]["severity"] == "critical"
+    assert "resolved_at" in match[0]

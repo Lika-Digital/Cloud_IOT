@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { AlarmRecord } from '../api/alarms'
 
 // --- Types ---
 
@@ -229,6 +230,13 @@ interface AppStore {
   addBreakerAlarm: (key: string) => void
   clearBreakerAlarm: (key: string) => void
   acknowledgeBreakerAlarm: (key: string) => void
+
+  // v3.24 — generic ActiveAlarm records (fire, temperature, comm_loss, …) for the
+  // Active Alarms panel. Hydrated from REST + kept live via WS alarm events.
+  activeAlarms: AlarmRecord[]
+  setActiveAlarms: (rows: AlarmRecord[]) => void
+  upsertActiveAlarm: (a: AlarmRecord) => void
+  removeActiveAlarm: (id: number) => void
 
   // v3.5 — per-socket auto-activation config, keyed by `${pedestal_id}-${socket_id}`.
   // Populated when the Control Center opens (`getSocketConfigs`) and by the PATCH
@@ -533,6 +541,13 @@ export const useStore = create<AppStore>((set) => ({
         },
       }
     }),
+
+  activeAlarms: [],
+  setActiveAlarms: (rows) => set({ activeAlarms: rows }),
+  upsertActiveAlarm: (a) =>
+    set((s) => ({ activeAlarms: [a, ...s.activeAlarms.filter((x) => x.id !== a.id)] })),
+  removeActiveAlarm: (id) =>
+    set((s) => ({ activeAlarms: s.activeAlarms.filter((x) => x.id !== id) })),
 
   activeBreakerAlarms: (() => {
     // Hydrate from sessionStorage the set of keys the operator has already

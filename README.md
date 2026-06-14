@@ -83,6 +83,27 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-06-14 — Active Alarms panel (v3.24)
+
+The dashboard had no general view of `ActiveAlarm` records (fire, temperature,
+comm_loss, security, …) — they were raised in the backend but invisible. Adds an
+operator-facing panel.
+
+- **`Settings/System Health → Active Alarms`** card (`ActiveAlarmsPanel`): lists
+  every triggered alarm with a severity-coloured row (critical/unclassified =
+  red, warning = yellow), type icon, message, pedestal, age, and an
+  **Acknowledge** button. Admin-only (the `/api/alarms` endpoints are admin).
+- **Live + initial fetch:** hydrated from `GET /api/alarms/active` on mount with a
+  30 s safety poll, and kept live via the WS `alarm_triggered` /
+  `alarm_acknowledged` / `alarm_resolved` events (now handled in `useWebSocket` →
+  `store.activeAlarms`). Acknowledging or an auto-resolve removes the row instantly.
+- **Backend:** `AlarmResponse` (`/api/alarms`) now returns `severity` + `resolved_at`
+  (the columns added in v3.23). No other backend change.
+
+Tests: `/api/alarms/active` returns `severity` (added to `test_temp_alarm.py`); the
+WS-event catalog guard updated to recognise the `alarm_*` events emitted via the
+`alarm_service._broadcast` helper. Suite **470 passing**; frontend `tsc` clean.
+
 ### 2026-06-14 — Temperature range alarms for the Papouch TME sensor (v3.23)
 
 Live polling + range alarms for the networked TME temperature sensor (configured

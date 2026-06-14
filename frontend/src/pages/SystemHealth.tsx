@@ -8,6 +8,7 @@ import {
   type MeterLoadAlarm,
 } from '../api/meterLoad'
 import { useStore } from '../store'
+import ActiveAlarmsPanel from '../components/system/ActiveAlarmsPanel'
 
 type FilterCategory = 'all' | 'system' | 'hw'
 type FilterLevel    = 'all' | 'error' | 'warning' | 'info'
@@ -263,6 +264,9 @@ export default function SystemHealth() {
           </div>
         </div>
       )}
+
+      {/* ── Active alarms (v3.24) ──────────────────────────────────────────── */}
+      <ActiveAlarmsPanel />
 
       {/* ── Hardware alarm banners ─────────────────────────────────────────── */}
       {criticalAlarms.length > 0 && (

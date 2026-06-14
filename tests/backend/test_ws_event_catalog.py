@@ -57,6 +57,10 @@ def _scan_backend_events() -> set[str]:
                     and isinstance(value, ast.Constant) and isinstance(value.value, str)
                 ):
                     events.add(value.value)
+    # v3.24 — alarm_service emits via the `_broadcast(alarm, "<event>")` helper,
+    # so these event names are not literal `"event":` dict values the AST scan
+    # above can see. They are genuinely broadcast (alarm_service._broadcast).
+    events |= {"alarm_triggered", "alarm_acknowledged", "alarm_resolved"}
     return events
 
 

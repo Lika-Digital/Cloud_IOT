@@ -1,3 +1,19 @@
+# Implementation Status — Active Alarms panel (v3.24)
+
+## 2026-06-14 — "idi s preporukama" (D1 SystemHealth, D2 null→red, D3 WS+fetch+30s poll, D4 admin-only)
+
+- [DONE] `backend/app/routers/alarms.py` — AlarmResponse + severity + resolved_at.
+- [DONE] `frontend/src/api/alarms.ts` (NEW) — AlarmRecord + getActiveAlarms + acknowledgeAlarm.
+- [DONE] `frontend/src/store/index.ts` — activeAlarms + setActiveAlarms/upsert/remove (+ AlarmRecord import).
+- [DONE] `frontend/src/hooks/useWebSocket.ts` — alarm_triggered (upsert) / alarm_acknowledged / alarm_resolved (remove).
+- [DONE] `frontend/src/components/system/ActiveAlarmsPanel.tsx` (NEW) — admin-only list, severity color, Ack; initial fetch + 30s poll; live via WS.
+- [DONE] `frontend/src/pages/SystemHealth.tsx` — render <ActiveAlarmsPanel/> in the alarms area.
+- [DONE] tests: /api/alarms/active returns severity (test_temp_alarm.py); ws_event_catalog guard recognises alarm_* dynamic broadcasts. Suite 470 passing; tsc clean.
+- [DONE] README v3.24.
+- NEXT: commit + push dev; STOP for approval before main. (v3.23 + v3.24 both on develop; merge together.)
+
+---
+
 # Implementation Status — TME temperature range alarms (v3.23)
 
 ## 2026-06-14 — Approved "idi s preporukama" (D1a severity col, D2a auto-resolve+hysteresis, D6 offline warning, D3 fixed 45/60/0/-10, D5 30s, D8 live temp on card)

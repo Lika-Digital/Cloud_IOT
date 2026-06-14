@@ -16,11 +16,13 @@ class AlarmResponse(BaseModel):
     source: str
     pedestal_id: Optional[int] = None
     status: str
+    severity: Optional[str] = None          # v3.24 — "warning" | "critical" | None
     message: str
     details: Optional[str] = None
     triggered_at: datetime
     acknowledged_at: Optional[datetime] = None
     acknowledged_by: Optional[str] = None
+    resolved_at: Optional[datetime] = None  # v3.24
 
     model_config = {"from_attributes": True}
 

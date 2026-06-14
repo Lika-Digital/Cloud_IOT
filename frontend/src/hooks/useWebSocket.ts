@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useStore } from '../store'
+import type { AlarmRecord } from '../api/alarms'
 import { useAuthStore } from '../store/authStore'
 
 const WS_URL = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`
@@ -233,6 +234,16 @@ export function useWebSocket() {
             total_liters: msg.data.total_liters as number,
             lastUpdated: msg.data.timestamp as string,
           })
+          break
+        }
+        case 'alarm_triggered': {
+          // v3.24 — generic ActiveAlarm (fire, temperature, comm_loss, …).
+          useStore.getState().upsertActiveAlarm(msg.data as unknown as AlarmRecord)
+          break
+        }
+        case 'alarm_acknowledged':
+        case 'alarm_resolved': {
+          useStore.getState().removeActiveAlarm(msg.data.id as number)
           break
         }
         case 'temperature_reading': {

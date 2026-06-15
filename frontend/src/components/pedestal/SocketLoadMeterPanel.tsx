@@ -86,6 +86,7 @@ export default function SocketLoadMeterPanel({
   const hwCfg = useStore((s) => s.socketHardwareConfig[key])
   const live = useStore((s) => s.socketLoadStates[key])
   const setLoadState = useStore((s) => s.setLoadState)
+  const setHardwareConfig = useStore((s) => s.setHardwareConfig)
   // v3.12 — auto-stop latch + recent alarm payload.
   const autoStopPending = useStore((s) => s.autoStopPendingAck[key] ?? false)
   const autoStopAlarm = useStore((s) =>
@@ -122,12 +123,23 @@ export default function SocketLoadMeterPanel({
           warning_threshold_pct: r.warning_threshold_pct,
           critical_threshold_pct: r.critical_threshold_pct,
         })
+        // Hydrate the hardware-config slice from the same REST payload. Without
+        // this the panel showed "Awaiting hardware configuration" on any tab
+        // opened after the one-shot `hardware_config_updated` WS event (Opta
+        // boot), even though the backend already has the config persisted.
+        setHardwareConfig(pedestalId, socketId, {
+          meter_type: r.meter_type,
+          phases: r.phases,
+          rated_amps: r.rated_amps,
+          modbus_address: r.modbus_address,
+          hw_config_received_at: r.hw_config_received_at,
+        })
         setWarnInput(r.warning_threshold_pct)
         setCritInput(r.critical_threshold_pct)
       })
       .catch(() => { /* fine — defaults stay; WS will populate later */ })
     return () => { cancelled = true }
-  }, [pedestalId, socketId, setLoadState])
+  }, [pedestalId, socketId, setLoadState, setHardwareConfig])
 
   const phases = hwCfg?.phases ?? null
   const isThreePhase = phases === 3

@@ -1,3 +1,31 @@
+# Implementation Status — Hardware-config hydration from REST (Awaiting… fix)
+
+## 2026-06-15 — "ok riješi ovo" (bundled into same merge as socket-panel fix)
+
+- Problem: "Awaiting hardware configuration from device" persisted on any dashboard opened AFTER the Opta boot. Cause: `socketHardwareConfig.hw_config_received_at` was fed ONLY by the one-shot `hardware_config_updated` WS event (Opta boot); the initial `getSocketLoad` REST fetch returns meter_type/phases/rated_amps/hw_config_received_at but the panel discarded them (called setLoadState only, never setHardwareConfig). Backend already had the config (now also retained per latest firmware trace), so it was purely a frontend hydration gap.
+- [DONE] `frontend/src/components/pedestal/SocketLoadMeterPanel.tsx` — initial fetch now also calls `setHardwareConfig(pedestalId, socketId, {meter_type, phases, rated_amps, modbus_address, hw_config_received_at})` from the same REST payload; added `setHardwareConfig` selector + dep. Clears "Awaiting…" on every load when the backend has the config; stays "Awaiting…" correctly when it genuinely doesn't (hw_config_received_at null).
+- [VERIFIED] `npx tsc --noEmit` → clean.
+- MERGE: bundled with the socket-panel breaker/fault fix below (both frontend, one develop→main release → NUC `cloud-iot upgrade`).
+
+---
+
+# Implementation Status — Socket detail panel reflects breaker/fault (UI fix)
+
+## 2026-06-15 — "kreni, medium, bez reset gumba"
+
+- Problem: clicking a socket on the pedestal image opened `SocketDetailPanel`, whose state logic used only sessions → a breaker-tripped or fault socket fell into the "Idle / No device connected" branch (misleading, despite the ⚡ marker on the circle). Command Center already shows breaker/fault; popup did not.
+- [DONE] `frontend/src/components/pedestal/PedestalView.tsx` → `SocketDetailPanel`:
+  - Pull `socketComputedStates`, `socketBreakerStates`, `socketLoadStates`, `socketHardwareConfig` from store.
+  - Derive `breakerTripped` / `isFault` / `loadState` / `hwConfig` (per `${pid}-${sid}`).
+  - Header dot+badge: red "Breaker Tripped" / "Fault" take precedence over active/pending/idle.
+  - New red panels: breaker-tripped (Qn, rated A, Stop if admin+active) and fault.
+  - Active panel enriched with Voltage / Current / Power factor from `socketLoadStates`.
+  - Idle no longer bare: shows Breaker / Meter / Rated A info line when known. All existing branches guarded with `!breakerTripped && !isFault`.
+- [VERIFIED] `npx tsc --noEmit` → clean. No reset button (per decision B). Camera zone unaffected (returns null earlier).
+- NEXT: STOP for approval before commit/push (frontend → NUC `cloud-iot upgrade` rebuild).
+
+---
+
 # Implementation Status — TME /fresh.xml support (field fix)
 
 ## 2026-06-14 — "kreni" (field: TME at 192.168.1.254 returns 404 on /values.xml; serves /fresh.xml)

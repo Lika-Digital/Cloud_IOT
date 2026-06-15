@@ -311,7 +311,7 @@ function ZoneButton({
 // ─── Socket Detail Panel ─────────────────────────────────────────────────────
 
 function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pedestalId: number; onClose: () => void }) {
-  const { pendingSessions, activeSessions, socketLiveData, updateSession, pendingSockets, addSession, removePendingSocket, optaWaterStates } = useStore()
+  const { pendingSessions, activeSessions, socketLiveData, updateSession, pendingSockets, addSession, removePendingSocket, optaWaterStates, socketComputedStates, socketBreakerStates, socketLoadStates, socketHardwareConfig } = useStore()
   const { role } = useAuthStore()
   const isAdmin = role === 'admin'
   const [actionError, setActionError] = useState<string | null>(null)
@@ -346,6 +346,16 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
   const isActive = !!activeSession || waterActive
 
   const liveData = !isWater && socketId ? socketLiveData[socketId] : null
+
+  // Hardware-level state (same sources the Command Center uses) so the panel
+  // reflects breaker/fault/meter reality instead of only session inference.
+  const skey = socketId !== null ? `${pedestalId}-${socketId}` : ''
+  const breakerState = !isWater && socketId !== null ? socketBreakerStates[skey]?.breaker_state : undefined
+  const breakerTripped = breakerState === 'tripped'
+  const computedState = !isWater && socketId !== null ? socketComputedStates[skey] : undefined
+  const isFault = computedState === 'fault'
+  const loadState = !isWater && socketId !== null ? socketLoadStates[skey] : undefined
+  const hwConfig = !isWater && socketId !== null ? socketHardwareConfig[skey] : undefined
 
   const handleStop = async () => {
     setActionError(null)
@@ -397,16 +407,18 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className={`w-4 h-4 rounded-full ${
+            breakerTripped || isFault ? 'bg-red-400 animate-pulse' :
             isActive ? 'bg-green-400 animate-pulse' :
             pendingSession ? 'bg-amber-400 animate-pulse' : 'bg-gray-600'
           }`} />
           <h3 className="text-lg font-bold text-white">{zone.label}</h3>
           <span className={
+            breakerTripped || isFault ? 'badge bg-red-900/40 text-red-300 border border-red-700/50' :
             isActive ? 'badge-active' :
             pendingSession ? 'badge-pending' :
             'badge bg-gray-800 text-gray-500'
           }>
-            {isActive ? 'Active' : pendingSession ? 'Starting…' : 'Idle'}
+            {breakerTripped ? 'Breaker Tripped' : isFault ? 'Fault' : isActive ? 'Active' : pendingSession ? 'Starting…' : 'Idle'}
           </span>
         </div>
         <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-xl leading-none">✕</button>
@@ -419,8 +431,38 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
         </div>
       )}
 
+      {/* Breaker tripped — highest priority; mirrors the ⚡ marker on the socket */}
+      {breakerTripped && (
+        <div className="bg-red-900/20 border border-red-700/50 rounded-lg p-4 space-y-2">
+          <p className="text-red-300 font-medium">⚡ Breaker tripped{socketId !== null ? ` — Q${socketId}` : ''}</p>
+          <p className="text-xs text-gray-400">
+            This socket's circuit breaker has tripped — no power is being delivered.
+            Reset it from the Control Center (Breaker panel).
+          </p>
+          {hwConfig?.rated_amps != null && (
+            <p className="text-xs text-gray-500">
+              Rated: {hwConfig.rated_amps} A{hwConfig.meter_type ? ` · ${hwConfig.meter_type}` : ''}
+            </p>
+          )}
+          {isAdmin && activeSession && (
+            <button className="btn-warning w-full mt-1" onClick={handleStop}>Stop Session</button>
+          )}
+        </div>
+      )}
+
+      {/* Fault (computed hardware state) */}
+      {!breakerTripped && isFault && (
+        <div className="bg-red-900/20 border border-red-700/50 rounded-lg p-4 space-y-2">
+          <p className="text-red-300 font-medium">Socket fault</p>
+          <p className="text-xs text-gray-400">
+            The pedestal reports a hardware fault on this socket. Check the Control Center
+            and diagnostics for details.
+          </p>
+        </div>
+      )}
+
       {/* Socket-level pending: MQTT connected, waiting for operator/mobile approval */}
-      {socketPending && !pendingSession && !isActive && (
+      {socketPending && !pendingSession && !isActive && !breakerTripped && !isFault && (
         <div className="bg-amber-900/20 border border-amber-700/40 rounded-lg p-4 space-y-3">
           <p className="text-amber-300 font-medium">Device Connected — Awaiting Approval</p>
           <p className="text-xs text-gray-400">A device was plugged in. Approve to start the session or reject to deny.</p>
@@ -455,7 +497,7 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
       )}
 
       {/* Pending state (transient — session is activating via DB pending) */}
-      {pendingSession && !isActive && (
+      {pendingSession && !isActive && !breakerTripped && !isFault && (
         <div className="bg-amber-900/20 border border-amber-700/40 rounded-lg p-4 space-y-2">
           <p className="text-amber-300 font-medium">Session starting…</p>
           {pendingSession.customer_name && (
@@ -465,13 +507,20 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
       )}
 
       {/* Active state */}
-      {isActive && (
+      {isActive && !breakerTripped && !isFault && (
         <div className="space-y-3">
           <div className="bg-green-900/20 border border-green-700/40 rounded-lg p-4 space-y-3">
             {!isWater && liveData && (
               <>
                 <LiveMetric label="Power" value={`${liveData.watts.toFixed(0)} W`} big />
                 <LiveMetric label="Total Energy" value={`${liveData.kwh_total.toFixed(4)} kWh`} />
+              </>
+            )}
+            {!isWater && loadState && (loadState.voltage_v != null || loadState.current_amps != null || loadState.power_factor != null) && (
+              <>
+                {loadState.voltage_v != null && <LiveMetric label="Voltage" value={`${loadState.voltage_v.toFixed(0)} V`} />}
+                {loadState.current_amps != null && <LiveMetric label="Current" value={`${loadState.current_amps.toFixed(1)} A`} />}
+                {loadState.power_factor != null && <LiveMetric label="Power factor" value={loadState.power_factor.toFixed(2)} />}
               </>
             )}
             {isWater && valveState && (
@@ -489,11 +538,26 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
       )}
 
       {/* Idle state */}
-      {!socketPending && !pendingSession && !isActive && (
-        <div className="text-center py-8 text-gray-500">
-          <p className="text-4xl mb-3">{isWater ? '💧' : '🔌'}</p>
-          <p>{isWater ? 'No water flow detected' : 'No device connected'}</p>
-          <p className="text-xs mt-1">Waiting for connection…</p>
+      {!socketPending && !pendingSession && !isActive && !breakerTripped && !isFault && (
+        <div className="space-y-3">
+          <div className="text-center py-6 text-gray-500">
+            <p className="text-4xl mb-3">{isWater ? '💧' : '🔌'}</p>
+            <p>{isWater ? 'No water flow detected' : 'No device connected'}</p>
+            <p className="text-xs mt-1">Waiting for connection…</p>
+          </div>
+          {!isWater && (breakerState || hwConfig?.meter_type || hwConfig?.rated_amps != null) && (
+            <div className="bg-gray-800/40 border border-gray-700/50 rounded-lg p-3 text-xs text-gray-400 space-y-1">
+              {breakerState && (
+                <div className="flex justify-between"><span>Breaker</span><span className="text-gray-300 capitalize">{breakerState}</span></div>
+              )}
+              {hwConfig?.meter_type && (
+                <div className="flex justify-between"><span>Meter</span><span className="text-gray-300">{hwConfig.meter_type}</span></div>
+              )}
+              {hwConfig?.rated_amps != null && (
+                <div className="flex justify-between"><span>Rated</span><span className="text-gray-300">{hwConfig.rated_amps} A</span></div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -1,3 +1,19 @@
+# Implementation Status — Manual activate (auto-OFF) plug-in stays actionable
+
+## 2026-06-15 — "kreni" (Control Center Activate; decision: pending until activate/unplug, no 15s auto-reject)
+
+- Problem: auto-activate OFF → user plugs in → Control Center "Activate" greyed out / not working. Root cause: modern Opta `opta/events {UserPluggedIn}` → `_handle_event_user_plugged_in` broadcast computed="pending" once, but persisted NOTHING; `_compute_socket_display_state` only knew about sessions, so the next periodic `opta/sockets idle` poll (~15s) reverted display to "idle" → `Activate` button (`disabled={!isPending}`) greyed out. (The legacy `pedestal/.../socket/status "connected"` flow set operator_status="pending" and was subject to a 15s auto-reject sweep; modern flow set neither.)
+- Fix (`backend/app/services/mqtt_handlers.py`):
+  - `_handle_event_user_plugged_in`: persist `SocketState.operator_status = "awaiting_activation"` (distinct from legacy "pending") when no active session. Distinct marker so the 15s pending auto-reject sweep (targets `=="pending"`) does NOT cancel it → stays actionable until activate/unplug (per user decision).
+  - `_compute_socket_display_state`: return "pending" when operator_status in ("pending","awaiting_activation") and no session → keeps Activate enabled across idle polls.
+  - `_handle_event_outlet_activated` + `_handle_event_user_plugged_out`: clear operator_status (electricity) on activate / plug-out.
+  - `backend/app/routers/controls.py` `_get_socket_state_or_400`: accept "awaiting_activation" too (also fixes pedestal-image popup Approve).
+- [DONE] tests: `tests/backend/test_operator_approval.py` TC-OA-09/10/11 (compute→pending, sweep does NOT reject awaiting_activation, approve accepts it). Legacy TC-OA-01..08 unchanged/green. Ran approval+meter+workflow = 85 passed.
+- Point 3 (connected semantics: idle status forces connected=True so "no plug" guard is inert) deliberately deferred — separate.
+- MERGE: bundled with hydration + socket-panel fixes below (one develop→main release).
+
+---
+
 # Implementation Status — Hardware-config hydration from REST (Awaiting… fix)
 
 ## 2026-06-15 — "ok riješi ovo" (bundled into same merge as socket-panel fix)

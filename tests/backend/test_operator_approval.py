@@ -563,3 +563,83 @@ class TestAuditLog:
         # Cleanup
         _complete_via_db_op(session_id)
         _clear_sessions_for_socket(pid, socket_id)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TC-OA-09..11  v3.25 — modern Opta UserPluggedIn "awaiting_activation" marker
+#   keeps the Control Center Activate button enabled across idle status polls,
+#   is NOT killed by the 15s pending auto-reject sweep, and is approvable.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestAwaitingActivation:
+    def test_tc_oa_09_compute_display_pending_for_awaiting_activation(self, approval_pid):
+        """A plugged-in socket with operator_status='awaiting_activation' and no
+        session resolves to display 'pending' (not 'idle') so the periodic idle
+        status poll does not grey out the Activate button."""
+        pid = approval_pid
+        socket_id = 3
+        _clear_sessions_for_socket(pid, socket_id)
+        _set_socket_state(pid, socket_id, connected=True,
+                          operator_status="awaiting_activation",
+                          operator_status_at=datetime.utcnow())
+
+        from app.services.mqtt_handlers import _compute_socket_display_state
+        db = _TestSession()
+        try:
+            state = _compute_socket_display_state(
+                db, pid, socket_id, raw_state="idle", hw_status="off",
+            )
+        finally:
+            db.close()
+        assert state == "pending", f"expected 'pending', got {state!r}"
+
+    def test_tc_oa_10_awaiting_activation_not_auto_rejected(self, approval_pid):
+        """The 15s pending auto-reject sweep targets operator_status='pending'
+        only; 'awaiting_activation' (manual flow) must survive indefinitely."""
+        pid = approval_pid
+        socket_id = 3
+        _set_socket_state(pid, socket_id, connected=True,
+                          operator_status="awaiting_activation",
+                          operator_status_at=datetime.utcnow() - timedelta(seconds=3600))
+
+        from app.services.mqtt_handlers import auto_reject_stale_socket_pending
+        db = _TestSession()
+        try:
+            asyncio.run(auto_reject_stale_socket_pending(
+                db, datetime.utcnow(),
+                lambda t, p: None, AsyncMock(return_value=None), 15,
+            ))
+        finally:
+            db.close()
+
+        state = _get_socket_state(pid, socket_id)
+        assert state.operator_status == "awaiting_activation", (
+            f"awaiting_activation must NOT be auto-rejected, got {state.operator_status!r}"
+        )
+
+    def test_tc_oa_11_approve_accepts_awaiting_activation(self, client, auth_headers, approval_pid):
+        """approve_socket precondition accepts 'awaiting_activation' (not only
+        the legacy 'pending'), so the pedestal-image popup Approve also works."""
+        pid = approval_pid
+        socket_id = 4
+        _clear_sessions_for_socket(pid, socket_id)
+        _set_socket_state(pid, socket_id, connected=True,
+                          operator_status="awaiting_activation",
+                          operator_status_at=datetime.utcnow())
+
+        from app.services.mqtt_client import mqtt_service
+        original = mqtt_service.publish
+        mqtt_service.publish = lambda t, p: None
+        try:
+            r = client.post(
+                f"/api/controls/sockets/{pid}/{socket_id}/approve",
+                headers=auth_headers,
+            )
+        finally:
+            mqtt_service.publish = original
+
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "active"
+        state = _get_socket_state(pid, socket_id)
+        assert state.operator_status is None, "operator_status must clear after approve"
+        _clear_sessions_for_socket(pid, socket_id)

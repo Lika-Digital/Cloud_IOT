@@ -316,7 +316,7 @@ def _get_socket_state_or_400(db: DBSession, pedestal_id: int, socket_id: int) ->
         SocketState.pedestal_id == pedestal_id,
         SocketState.socket_id == socket_id,
     ).first()
-    if not state or state.operator_status != "pending":
+    if not state or state.operator_status not in ("pending", "awaiting_activation"):
         raise HTTPException(status_code=400, detail="Socket is not in pending approval state")
     return state
 

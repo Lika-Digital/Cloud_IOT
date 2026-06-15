@@ -828,6 +828,12 @@ def _compute_socket_display_state(
     active = _ss.get_active_for_socket(db, pedestal_id, socket_id, session_type="electricity")
     if active is not None:
         return "active" if getattr(active, "status", None) == "active" else "pending"
+    # No session, but a plug is physically inserted awaiting operator action.
+    # Modern Opta UserPluggedIn flow sets "awaiting_activation"; the legacy
+    # connect-string flow sets "pending". Either keeps the socket shown as
+    # pending so the operator can still activate it.
+    if ss is not None and ss.operator_status in ("pending", "awaiting_activation"):
+        return "pending"
     return "idle"
 
 
@@ -872,6 +878,23 @@ async def _handle_event_user_plugged_in(db, pedestal_id: int, outlet_id: str, re
     session_type = "water" if is_water else "electricity"
     active = session_service.get_active_for_socket(db, pedestal_id, socket_id, session_type=session_type)
     computed = "active" if (active and active.status == "active") else "pending"
+
+    # v3.25 — persist "plug inserted, awaiting manual activation" so the pending
+    # display survives the periodic idle status poll (keeps the Control Center
+    # Activate button enabled until the operator acts or the plug is removed).
+    # We use a DISTINCT marker ("awaiting_activation") rather than "pending" so
+    # the 15s pending auto-reject sweep — which targets the legacy customer
+    # approval flow keyed on operator_status == "pending" — does NOT cancel it.
+    if not is_water and not (active and active.status == "active"):
+        from ..models.pedestal_config import SocketState
+        ss = db.query(SocketState).filter(
+            SocketState.pedestal_id == pedestal_id,
+            SocketState.socket_id == socket_id,
+        ).first()
+        if ss is not None and ss.operator_status not in ("pending", "awaiting_activation"):
+            ss.operator_status = "awaiting_activation"
+            ss.operator_status_at = datetime.utcnow()
+            db.commit()
 
     berth_id = data.get("device", {}).get("berthId", "")
     logger.info("[Event] UserPluggedIn %s (berth=%s, socket=%d) — state=%s", outlet_id, berth_id, socket_id, computed)
@@ -1263,6 +1286,16 @@ async def _handle_event_user_plugged_out(db, pedestal_id: int, outlet_id: str, r
         logger.info("[Event] UserPluggedOut %s — stopped active session %d", outlet_id, active.id)
 
     _set_socket_connected(db, pedestal_id, socket_id, False)
+    # v3.25 — plug removed: clear any plug-in pending marker so the socket
+    # returns to idle (not stuck "awaiting activation").
+    if not is_water:
+        from ..models.pedestal_config import SocketState as _SS
+        ss_row = db.query(_SS).filter(
+            _SS.pedestal_id == pedestal_id, _SS.socket_id == socket_id,
+        ).first()
+        if ss_row is not None:
+            ss_row.operator_status = None
+            ss_row.operator_status_at = None
     db.commit()
 
     logger.info("[Event] UserPluggedOut %s (socket=%d) — state=idle", outlet_id, socket_id)
@@ -1293,6 +1326,17 @@ async def _handle_event_outlet_activated(db, pedestal_id: int, outlet_id: str, r
     session_service.activate(db, session)
     logger.info("[Event] OutletActivated %s → session %d (type=%s, socket_id=%s)",
                 outlet_id, session.id, session_type, socket_id)
+
+    # v3.25 — clear the plug-in pending marker now that a live session exists.
+    if not is_water:
+        from ..models.pedestal_config import SocketState as _SS
+        ss_row = db.query(_SS).filter(
+            _SS.pedestal_id == pedestal_id, _SS.socket_id == socket_id,
+        ).first()
+        if ss_row is not None and ss_row.operator_status is not None:
+            ss_row.operator_status = None
+            ss_row.operator_status_at = None
+            db.commit()
 
     await ws_manager.broadcast({
         "event": "session_created",

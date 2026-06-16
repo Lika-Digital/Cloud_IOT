@@ -45,7 +45,10 @@ Build order: 1 models/migrations/config → 2 nfc_service + require_erp_api_key 
 - [DONE] `frontend/src/components/pedestal/NfcProvisioningTable.tsx` (NEW) — per-socket rows (live status from socketComputedStates, tag input, Provision/Remove), Save All, summary; duplicate/error surfaced via onFeedback from backend 409 detail.
 - [DONE] `frontend/src/components/pedestal/PedestalControlCenter.tsx` — `QrCodesSection` → "Socket Settings": NFC/QR radio (NFC listed first, reflects saved mode), confirm + warning on NFC switch, setProvisioningMode + reflect auto_activate flip via setSocketAutoActivate(1..4); QR branch = existing SocketQrGrid (unchanged) + Download/Regenerate (QR only); NFC branch = NfcProvisioningTable.
 - [VERIFIED] `npx tsc --noEmit` clean. ✅ Step 7 COMPLETE.
-- NEXT (step 9): README changelog; commit dev + push dev (gate); STOP before main push for explicit approval.
+### Step 9 — README + release (develop)
+- [DONE] `README.md` — v3.26 changelog entry (NFC provisioning, ERP API, webhook, auto_activate flip, lazy expiry, operator override, QR unchanged).
+- [DONE] Commit `962ea99` on develop; pushed `origin/develop` — full pre-push gate GREEN (backend 506 + linters + GAP checks; Playwright skipped, backend not on :8000).
+- ⏸ STOPPED before main push (per instruction). `origin/main` = 2238dc8 (unchanged). AWAITING explicit approval to merge develop→main + release push (CLOUD_IOT_RELEASE=1). On release: fill the README changelog commit hash. Feature COMPLETE on develop.
 
 ---
 

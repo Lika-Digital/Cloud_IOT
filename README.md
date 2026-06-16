@@ -83,7 +83,7 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
-### 2026-06-16 — NFC provisioning + ERP myMarina integration (v3.26)
+### 2026-06-16 — NFC provisioning + ERP myMarina integration (v3.26) — `962ea99`
 
 Adds an NFC alternative to QR for socket provisioning, plus a backend API for the
 myMarina ERP to pre-register an NFC scan that activates the socket on plug-in.

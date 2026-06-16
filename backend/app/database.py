@@ -58,6 +58,8 @@ def init_db():
     from .models import valve_config  # noqa: F401 — v3.9
     from .models import led_schedule  # noqa: F401 — v3.10
     from .models import meter_load_alarm  # noqa: F401 — v3.11
+    from .models import nfc_tag  # noqa: F401 — v3.26
+    from .models import nfc_pending_session  # noqa: F401 — v3.26
     Base.metadata.create_all(bind=engine)
     _migrate_schema()
 
@@ -146,6 +148,9 @@ def _migrate_schema():
         ("socket_configs", "breaker_rcd_sensitivity", "TEXT"),
         # v3.8 — machine-readable session end reason (e.g. "breaker_trip").
         ("sessions",       "end_reason",              "TEXT"),
+        # v3.26 — NFC: ERP user attached via scan flow; cabinet provisioning mode.
+        ("sessions",         "nfc_user_id",      "TEXT"),
+        ("pedestal_configs", "provisioning_mode","TEXT DEFAULT 'qr'"),
         # v3.11 — live socket meter telemetry + load monitoring. All hardware
         # values are read from the Arduino on `opta/config/hardware`; backend
         # never assumes meter type, phase count, or rated current. Live meter

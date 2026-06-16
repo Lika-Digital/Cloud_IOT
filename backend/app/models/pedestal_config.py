@@ -63,6 +63,12 @@ class PedestalConfig(Base):
     # sent its next heartbeat confirming the real door state).
     door_state = Column(String, default="unknown")  # "open" | "closed" | "unknown"
 
+    # v3.26 — socket provisioning mode for this cabinet: "qr" (default, existing
+    # behaviour) or "nfc". Switching to "nfc" disables auto_activate on all the
+    # cabinet's sockets (explicit activation required); switching back to "qr"
+    # restores auto_activate=True. Default "qr" preserves every existing pedestal.
+    provisioning_mode = Column(String, default="qr")  # "qr" | "nfc"
+
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

@@ -26,6 +26,7 @@ from .routers import totp as totp_router
 from .routers import customer_auth, customer_sessions, customer_invoices, billing, chat, system_health
 from .routers import mobile as mobile_router
 from .routers import qr as qr_router
+from .routers import nfc as nfc_router  # v3.26 — NFC provisioning + ERP integration
 from .routers import alarms as alarms_router
 from .routers import customer_alarms
 from .routers import contracts as contracts_router
@@ -702,6 +703,7 @@ app.include_router(customer_sessions.router)
 app.include_router(customer_invoices.router)
 app.include_router(mobile_router.router)
 app.include_router(qr_router.router)
+app.include_router(nfc_router.router)  # v3.26 — /api/nfc/* (provisioning + ERP)
 app.include_router(billing.router)
 app.include_router(chat.router)
 app.include_router(system_health.router)

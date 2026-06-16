@@ -923,8 +923,29 @@ async def _handle_event_user_plugged_in(db, pedestal_id: int, outlet_id: str, re
             SocketConfig.pedestal_id == pedestal_id,
             SocketConfig.socket_id == socket_id,
         ).first()
-        if cfg and cfg.auto_activate:
+
+        # v3.26 — NFC: a valid (non-expired) pending scan authorizes a one-shot
+        # activation on plug-in, regardless of auto_activate. The ERP user is
+        # attached to the resulting session in _handle_event_outlet_activated.
+        from . import nfc_service as _nfc
+        from ..models.pedestal_config import PedestalConfig as _PC
+        _pc = db.query(_PC).filter(_PC.pedestal_id == pedestal_id).first()
+        cabinet_id = getattr(_pc, "opta_client_id", None) if _pc else None
+        live = _nfc.get_live_pending(db, cabinet_id, outlet_id) if cabinet_id else None
+
+        if live is not None:
+            live.status = "activated"
+            db.commit()
+            logger.info("[NFC] UserPluggedIn matched pending (user=%s, %s/%s) — one-shot activate",
+                        live.user_id, cabinet_id, outlet_id)
             asyncio.create_task(_maybe_auto_activate(pedestal_id, socket_id, outlet_id))
+        elif cfg and cfg.auto_activate:
+            asyncio.create_task(_maybe_auto_activate(pedestal_id, socket_id, outlet_id))
+        else:
+            # NFC mode (auto_activate False) with no valid pending scan: do not
+            # activate. Socket stays idle until a valid NFC scan + plug-in.
+            logger.info("[NFC] UserPluggedIn on %s/%s — no valid NFC pending and "
+                        "auto_activate off; activation blocked", cabinet_id, outlet_id)
 
 
 # ── Auto-activation implementation (v3.5) ────────────────────────────────────
@@ -1285,6 +1306,14 @@ async def _handle_event_user_plugged_out(db, pedestal_id: int, outlet_id: str, r
         })
         logger.info("[Event] UserPluggedOut %s — stopped active session %d", outlet_id, active.id)
 
+        # v3.26 — ERP webhook: session ended via unplug (de-duped vs SessionEnded).
+        if not is_water:
+            from . import erp_webhook
+            if erp_webhook.mark_ended(active.id):
+                _pl = erp_webhook.build(db, active, "session_ended")
+                if _pl is not None:
+                    asyncio.create_task(erp_webhook.post_erp_event(_pl))
+
     _set_socket_connected(db, pedestal_id, socket_id, False)
     # v3.25 — plug removed: clear any plug-in pending marker so the socket
     # returns to idle (not stuck "awaiting activation").
@@ -1338,6 +1367,32 @@ async def _handle_event_outlet_activated(db, pedestal_id: int, outlet_id: str, r
             ss_row.operator_status_at = None
             db.commit()
 
+    # v3.26 — NFC: attach the ERP user if this activation was authorized by a
+    # recent NFC scan (marked "activated" on UserPluggedIn for this socket).
+    # The recency window bounds staleness so a later operator manual-activate
+    # does not inherit an old scan's user.
+    nfc_user_id = None
+    if not is_water:
+        from datetime import timedelta
+        from ..models.pedestal_config import PedestalConfig as _PC
+        from ..models.nfc_pending_session import NfcPendingSession as _NPS
+        _pc = db.query(_PC).filter(_PC.pedestal_id == pedestal_id).first()
+        cabinet_id = getattr(_pc, "opta_client_id", None) if _pc else None
+        if cabinet_id:
+            cutoff = datetime.utcnow() - timedelta(minutes=10)
+            rec = (db.query(_NPS)
+                   .filter(_NPS.cabinet_id == cabinet_id,
+                           _NPS.socket_id == outlet_id,
+                           _NPS.status == "activated",
+                           _NPS.created_at >= cutoff)
+                   .order_by(_NPS.created_at.desc())
+                   .first())
+            if rec is not None:
+                session.nfc_user_id = rec.user_id
+                nfc_user_id = rec.user_id
+                db.commit()
+                logger.info("[NFC] attached user=%s to session %d", rec.user_id, session.id)
+
     await ws_manager.broadcast({
         "event": "session_created",
         "data": {
@@ -1349,9 +1404,17 @@ async def _handle_event_outlet_activated(db, pedestal_id: int, outlet_id: str, r
             "started_at": session.started_at.isoformat(),
             "customer_id": None,
             "customer_name": None,
+            "nfc_user_id": nfc_user_id,
         },
     })
     await _broadcast_socket_state(pedestal_id, socket_id, "active", resource=resource)
+
+    # v3.26 — ERP webhook: socket activated.
+    if not is_water:
+        from . import erp_webhook
+        _pl = erp_webhook.build(db, session, "session_activated")
+        if _pl is not None:
+            asyncio.create_task(erp_webhook.post_erp_event(_pl))
 
 
 async def _handle_event_telemetry_update(db, pedestal_id: int, outlet_id: str, resource: str, data: dict):
@@ -1420,6 +1483,13 @@ async def _handle_event_telemetry_update(db, pedestal_id: int, outlet_id: str, r
                 },
             })
 
+            # v3.26 — ERP webhook: throttled (~60 s) live telemetry.
+            from . import erp_webhook
+            if erp_webhook.should_send_telemetry(session_id):
+                _pl = erp_webhook.build(db, session, "telemetry")
+                if _pl is not None:
+                    asyncio.create_task(erp_webhook.post_erp_event(_pl))
+
 
 async def _handle_event_session_ended(db, pedestal_id: int, outlet_id: str, resource: str, data: dict):
     """SessionEnded — complete the DB session; store final totals from firmware."""
@@ -1444,6 +1514,14 @@ async def _handle_event_session_ended(db, pedestal_id: int, outlet_id: str, reso
 
     session_service.complete(db, session)
     logger.info("[Event] SessionEnded %s → completed session %d", outlet_id, session.id)
+
+    # v3.26 — ERP webhook: session ended (any cause). De-duped across end paths.
+    if not is_water:
+        from . import erp_webhook
+        if erp_webhook.mark_ended(session.id):
+            _pl = erp_webhook.build(db, session, "session_ended")
+            if _pl is not None:
+                asyncio.create_task(erp_webhook.post_erp_event(_pl))
 
     await ws_manager.broadcast({
         "event": "session_completed",

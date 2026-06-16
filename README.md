@@ -83,6 +83,38 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-06-16 — NFC provisioning + ERP myMarina integration (v3.26)
+
+Adds an NFC alternative to QR for socket provisioning, plus a backend API for the
+myMarina ERP to pre-register an NFC scan that activates the socket on plug-in.
+**Existing QR flow and all existing session/operator behaviour are unchanged.**
+
+- **Socket Settings UI** (`PedestalControlCenter` → renamed from "QR Codes"): a
+  QR/NFC mode radio per cabinet (NFC listed first; saved mode defaults to `qr` so
+  every existing pedestal is untouched). QR mode shows the existing QR grid +
+  Download/Regenerate exactly as before; NFC mode shows the **NFC provisioning
+  table** (per-socket live status, tag id input, Provision/Remove, Save All,
+  config summary). Switching to NFC warns the operator and **disables
+  `auto_activate` on all four sockets**; switching back to QR restores it.
+- **NFC provisioning** (`/api/nfc/tags*`, admin): one tag per socket; a tag already
+  assigned elsewhere is rejected with a message identifying the owning cabinet/socket.
+- **ERP NFC API** (`/api/nfc/*`, `X-API-Key: ERP_API_KEY`): `POST /scan` pre-registers
+  intent (5-min lazy-expiring pending; returns `berth_id` from `pedestal_configs.berth_ref`)
+  but **does NOT activate** — activation happens only when the Opta reports
+  `UserPluggedIn`, where a valid pending authorises a one-shot activate and attaches
+  the ERP user (`sessions.nfc_user_id`). NFC mode with no valid pending = plug-in
+  blocked. `GET /session/{id}` (status/duration/energy/power/estimated cost),
+  `POST /session/{id}/stop` (409 "already ended by operator" if already stopped).
+- **Operator override is absolute:** NFC sessions are ordinary sessions; the existing
+  operator stop flow is unmodified and stops them identically.
+- **Webhook** (optional `ERP_WEBHOOK_URL`): session activated / ~60 s telemetry /
+  session ended; fire-and-forget, failures never block session, MQTT, or operator control.
+- **DB:** new `nfc_tags`, `nfc_pending_sessions` (pedestal.db); new
+  `sessions.nfc_user_id`, `pedestal_configs.provisioning_mode` (default `qr`).
+  Migrations via the existing `_migrate_schema` pattern.
+- **Design notes:** pending expiry is lazy (no background task). New env keys
+  `ERP_API_KEY`, `ERP_WEBHOOK_URL` (empty = feature off).
+
 ### 2026-06-14 — Active Alarms panel (v3.24)
 
 The dashboard had no general view of `ActiveAlarm` records (fire, temperature,

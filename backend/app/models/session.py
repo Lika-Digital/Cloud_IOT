@@ -33,6 +33,11 @@ class Session(Base):
     # "breaker_trip". Human-facing UI still uses deny_reason for denied sessions.
     end_reason: Mapped[str] = mapped_column(String(64), nullable=True)
 
+    # v3.26 — ERP / myMarina user attached via the NFC scan flow. This is the
+    # external string id from the ERP app, kept separate from customer_id (an
+    # Integer FK to our local Customer table). NULL for non-NFC sessions.
+    nfc_user_id: Mapped[str] = mapped_column(String(128), nullable=True)
+
     pedestal: Mapped["Pedestal"] = relationship("Pedestal", back_populates="sessions")  # noqa: F821
     sensor_readings: Mapped[list["SensorReading"]] = relationship(  # noqa: F821
         "SensorReading", back_populates="session"

@@ -15,6 +15,8 @@ import {
 import { getValveConfigs, setValveConfig } from '../../api/valveConfig'
 import LedScheduleSection from './LedScheduleSection'
 import { SocketQrGrid } from './SocketQrGrid'
+import NfcProvisioningTable from './NfcProvisioningTable'
+import { getProvisioningMode, setProvisioningMode, type ProvisioningMode } from '../../api/nfc'
 import SocketBreakerPanel from './SocketBreakerPanel'
 import SocketLoadMeterPanel from './SocketLoadMeterPanel'
 import type { OptaSocketState, OptaWaterState, OptaLogEntry } from '../../store'
@@ -1106,6 +1108,42 @@ function QrCodesSection({
   // Cache-buster — bumped after Regenerate so the <img> src reloads.
   const [reloadNonce, setReloadNonce] = useState(0)
 
+  // v3.26 — provisioning mode (qr default). NFC is offered as the primary
+  // option but each cabinet keeps its saved mode (existing pedestals = qr).
+  const [mode, setMode] = useState<ProvisioningMode>('qr')
+  const [modeBusy, setModeBusy] = useState(false)
+  const setSocketAutoActivate = useStore((s) => s.setSocketAutoActivate)
+
+  useEffect(() => {
+    let cancelled = false
+    getProvisioningMode(cabinetId)
+      .then((r) => { if (!cancelled) setMode(r.provisioning_mode) })
+      .catch(() => { /* default qr */ })
+    return () => { cancelled = true }
+  }, [cabinetId])
+
+  const switchMode = async (next: ProvisioningMode) => {
+    if (next === mode || modeBusy) return
+    if (next === 'nfc' && !window.confirm(
+      'Switch to NFC mode?\n\nAuto-activate will be DISABLED on all sockets — the ' +
+      'pedestal will require explicit activation (NFC scan + plug-in, or operator).',
+    )) return
+    setModeBusy(true)
+    try {
+      const r = await setProvisioningMode(cabinetId, next)
+      setMode(r.provisioning_mode)
+      // Reflect the server-side auto_activate flip in the UI immediately.
+      for (const sid of [1, 2, 3, 4]) setSocketAutoActivate(pedestalId, sid, r.auto_activate)
+      onFeedback(`nfc-mode-${cabinetId}`, 'success',
+        next === 'nfc' ? 'NFC mode on — auto-activate disabled on all sockets'
+                        : 'QR mode on — auto-activate restored on all sockets')
+    } catch (e: any) {
+      onFeedback(`nfc-mode-${cabinetId}`, 'error', e?.response?.data?.detail ?? 'Mode switch failed')
+    } finally {
+      setModeBusy(false)
+    }
+  }
+
   const handleDownloadAll = async () => {
     setZipBusy(true)
     try {
@@ -1153,11 +1191,11 @@ function QrCodesSection({
         >
           {expanded ? '▾' : '▸'}
         </button>
-        <span className="text-base">🔖</span>
-        <span className="text-sm font-medium text-white">QR Codes</span>
+        <span className="text-base">🔌</span>
+        <span className="text-sm font-medium text-white">Socket Settings</span>
         <span className="text-xs text-gray-500 font-mono ml-1">{cabinetId}</span>
 
-        {expanded && (
+        {expanded && mode === 'qr' && (
           <div className="ml-auto flex gap-1.5">
             <button
               type="button"
@@ -1182,13 +1220,49 @@ function QrCodesSection({
       </div>
 
       {expanded && (
-        <SocketQrGrid
-          cabinetId={cabinetId}
-          pedestalId={pedestalId}
-          reloadNonce={reloadNonce}
-          onCopied={(sid) => onFeedback(`qr-copy-${cabinetId}-${sid}`, 'success', `Copied ${sid} URL`)}
-          onCopyFailed={(sid) => onFeedback(`qr-copy-${cabinetId}-${sid}`, 'error', 'Clipboard unavailable')}
-        />
+        <>
+          {/* Provisioning mode selector — NFC is the primary option. */}
+          <div className="flex items-center gap-4 text-sm">
+            <span className="text-xs text-gray-500">Provisioning:</span>
+            {(['nfc', 'qr'] as ProvisioningMode[]).map((m) => (
+              <label key={m} className={`flex items-center gap-1.5 cursor-pointer ${!isAdmin ? 'opacity-60' : ''}`}>
+                <input
+                  type="radio"
+                  name={`prov-mode-${cabinetId}`}
+                  checked={mode === m}
+                  disabled={!isAdmin || modeBusy}
+                  onChange={() => switchMode(m)}
+                />
+                <span className="text-gray-200">{m === 'nfc' ? 'NFC' : 'QR'}</span>
+              </label>
+            ))}
+            {modeBusy && <span className="text-xs text-gray-500">saving…</span>}
+          </div>
+
+          {mode === 'nfc' && (
+            <div className="rounded border border-amber-700/40 bg-amber-900/20 text-amber-200 text-xs px-2 py-1.5">
+              NFC mode: auto-activate is disabled on all sockets. The pedestal requires
+              explicit activation (NFC scan + plug-in via myMarina, or the operator).
+            </div>
+          )}
+
+          {mode === 'qr' ? (
+            <SocketQrGrid
+              cabinetId={cabinetId}
+              pedestalId={pedestalId}
+              reloadNonce={reloadNonce}
+              onCopied={(sid) => onFeedback(`qr-copy-${cabinetId}-${sid}`, 'success', `Copied ${sid} URL`)}
+              onCopyFailed={(sid) => onFeedback(`qr-copy-${cabinetId}-${sid}`, 'error', 'Clipboard unavailable')}
+            />
+          ) : (
+            <NfcProvisioningTable
+              cabinetId={cabinetId}
+              pedestalId={pedestalId}
+              isAdmin={isAdmin}
+              onFeedback={onFeedback}
+            />
+          )}
+        </>
       )}
     </div>
   )

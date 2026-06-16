@@ -83,6 +83,16 @@ class Settings(BaseSettings):
     company_email: str = ""
     company_portal_name: str = "IoT Portal"
 
+    # v3.26 — ERP / myMarina NFC integration.
+    # erp_api_key: static key the ERP sends as the X-API-Key header on every
+    #   /api/nfc/ request. When unset, the /api/nfc/ endpoints reject all calls
+    #   (503 not configured), so the feature is opt-in via .env.
+    # erp_webhook_url: optional HTTPS endpoint the backend POSTs session updates
+    #   to (socket activated, 60 s telemetry, session ended). When unset, no
+    #   webhook is sent. Failures are logged and never block session/MQTT flow.
+    erp_api_key: Optional[str] = None
+    erp_webhook_url: Optional[str] = None
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

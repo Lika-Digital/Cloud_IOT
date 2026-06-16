@@ -1,3 +1,54 @@
+# Implementation Status — NFC provisioning + ERP NFC integration (v3.26, IN PROGRESS)
+
+## 2026-06-16 — "Go ahead. Kreni od koraka 1" (step 1: models, migrations, config)
+
+Approved decisions: (1) NFC pending = one-shot activate on UserPluggedIn; (2) new `sessions.nfc_user_id` TEXT (ERP user is a string, customer_id stays Integer); (3) X-API-Key from .env (`ERP_API_KEY`); (4) berth_id = `pedestal_configs.berth_ref`; (5) nfc tables in pedestal.db; (6) `provisioning_mode` on pedestal_configs; (7) separate `erp_webhook.py` → `ERP_WEBHOOK_URL`; (8) estimated_cost from global BillingConfig.kwh_price_eur; (9) NFC→QR restores all 4 auto_activate=True; (10) column default 'qr', UI lists NFC first; (11) Socket Settings restructures QrCodesSection in PedestalControlCenter.
+
+Build order: 1 models/migrations/config → 2 nfc_service + require_erp_api_key → 3 nfc router + main wiring → 4 mqtt hooks → 5 erp_webhook + telemetry/end → 6 provisioning_mode PATCH (auto_activate flip) → 7 frontend → 8 tests → 9 README + release (STOP before main push).
+
+### Step 1 — models, migrations, config
+- [DONE] `backend/app/models/nfc_tag.py` (NEW) — `NfcTag` (id, nfc_tag_id unique, cabinet_id, socket_id "Qn", provisioned_at, provisioned_by, is_active). pedestal.db. Invariants documented (global-unique tag, one active tag per socket) — enforced in nfc_service.
+- [DONE] `backend/app/models/nfc_pending_session.py` (NEW) — `NfcPendingSession` (id, nfc_tag_id, user_id string, cabinet_id, socket_id "Qn", created_at, expires_at, status pending|activated|expired) + index (cabinet_id, socket_id, status). Lazy-expiry documented. pedestal.db.
+- [DONE] `backend/app/models/session.py` — added `nfc_user_id` (String(128), nullable). Separate from Integer customer_id.
+- [DONE] `backend/app/models/pedestal_config.py` — added `provisioning_mode` (String, default "qr").
+- [DONE] `backend/app/database.py` — init_db imports nfc_tag + nfc_pending_session (tables auto-create); migrations added: `("sessions","nfc_user_id","TEXT")`, `("pedestal_configs","provisioning_mode","TEXT DEFAULT 'qr'")`.
+- [DONE] `backend/app/config.py` — added `erp_api_key`, `erp_webhook_url` (Optional[str]=None).
+- [DONE] `backend/.env` — added ERP_API_KEY / ERP_WEBHOOK_URL (empty = feature off).
+- [VERIFIED] smoke test (temp DB): nfc_tags + nfc_pending_sessions created; provisioning_mode on pedestal_configs; nfc_user_id on sessions. ✅ Step 1 COMPLETE.
+### Step 2 — X-API-Key dependency + nfc_service
+- [DONE] `backend/app/auth/erp_api_key.py` (NEW) — `require_erp_api_key` (Header X-API-Key vs settings.erp_api_key; 503 if not configured, 401 missing/invalid, hmac compare).
+- [DONE] `backend/app/services/nfc_service.py` (NEW) — provisioning: `provision_tag` (global-unique check → DuplicateNfcTagError(cabinet,socket); replaces active tag on same socket; reactivates same tag), `remove_tag` (is_active=False), `list_tags`, `get_active_tag_for_socket`, `get_active_tag_by_id`; pending: `create_pending` (5-min TTL), `get_live_pending` + `expire_if_past` (lazy expiry, mark stale → "expired"). PENDING_TTL_MINUTES=5.
+### Step 3 — nfc router + main wiring
+- [DONE] `backend/app/services/nfc_service.py` — added `build_session_payload(db, user_db, session)` (cabinet/socket/customer=nfc_user_id/status/duration/energy/power/estimated_cost via global BillingConfig). Shared by GET + webhook.
+- [DONE] `backend/app/routers/nfc.py` (NEW) — admin (require_admin): GET /tags/{cabinet_id}, POST /tags, POST /tags/bulk (Save All, pre-validates in-batch dup), DELETE /tags/{cabinet_id}/{socket_id}. ERP (require_erp_api_key): POST /scan (404 tag/ped, 503 fault, 409 active OR live-pending, else create pending → 200 payload w/ berth_ref), GET /session/{id} (404), POST /session/{id}/stop (404, 409 if not active = already ended by operator, else complete + _publish_session_control stop). Does NOT activate on /scan.
+- [DONE] `backend/app/main.py` — import + include `nfc_router` after qr_router (before /api/ext catch-all).
+- [VERIFIED] app imports clean; 7 /api/nfc routes registered. ✅ Step 3 COMPLETE.
+### Step 4 — MQTT NFC hooks
+- [DONE] `backend/app/services/mqtt_handlers.py` `_handle_event_user_plugged_in` — resolve cabinet_id; `nfc_service.get_live_pending` (lazy-expire); if valid → mark record "activated" + fire `_maybe_auto_activate` (one-shot, regardless of auto_activate) + skip auto path; elif auto_activate → existing; else log "activation blocked" (NFC mode no pending).
+- [DONE] `_handle_event_outlet_activated` — attach NFC user: find most recent "activated" NfcPendingSession for cabinet/socket within 10-min window → set `session.nfc_user_id`; add nfc_user_id to session_created broadcast.
+- [VERIFIED] imports clean. ✅ Step 4 COMPLETE.
+### Step 5 — ERP webhook
+- [DONE] `backend/app/services/erp_webhook.py` (NEW) — `build(db, session, event)` (sync, returns None if ERP_WEBHOOK_URL unset; payload = build_session_payload + event), `post_erp_event(payload)` (async httpx POST, X-API-Key header, never raises), `should_send_telemetry` (60s throttle per session), `mark_ended` (de-dupe ended across paths).
+- [DONE] `backend/app/services/mqtt_handlers.py` — fired webhook at: OutletActivated ("session_activated"), TelemetryUpdate ("telemetry", 60s-throttled), SessionEnded ("session_ended", mark_ended), UserPluggedOut ("session_ended", de-duped). All electricity-only, fire-and-forget via asyncio.create_task; payload built sync while db open.
+- NOTE: auto-stop overload completion relies on Opta echoing SessionEnded to fire the ended webhook (publishes stop → SessionEnded). Covered there.
+- [VERIFIED] app + erp_webhook import clean. ✅ Step 5 COMPLETE.
+### Step 6 — provisioning mode + auto_activate flip
+- [DONE] `backend/app/routers/nfc.py` — `GET /api/nfc/mode/{cabinet_id}` + `PATCH /api/nfc/mode/{cabinet_id}` (body {mode: qr|nfc}); sets PedestalConfig.provisioning_mode and flips auto_activate on ALL the cabinet's socket_configs (nfc→False, qr→True). Returns sockets_updated.
+- [VERIFIED] 8 /api/nfc routes registered. ✅ Step 6 COMPLETE (backend steps 1-6 done).
+### Step 8 (backend portion) — tests
+- [DONE] `tests/backend/conftest.py` — register nfc_tag + nfc_pending_session models so test DBs create the tables.
+- [DONE] `tests/backend/test_nfc.py` (NEW, 21 tests) — provisioning (store/duplicate-409-with-owner/replace/remove/bulk), mode flip (nfc→auto False, qr→auto True), scan (pending+berth_ref / 404 / 401 missing+invalid / 409 active / 503 fault / 409 second-scan / expired→new), session API (GET fields incl nfc_user_id, 401, 404), stop (200 ended, 409 already-ended, 401).
+- [DONE] `tests/backend/test_nfc_mqtt.py` (NEW, 8 tests) — UserPluggedIn: valid pending→one-shot activate + mark activated; expired→block+mark expired; NFC-mode no-pending→block; QR-mode→auto-activate unchanged. OutletActivated attaches nfc_user_id. Webhook fires on activate when URL set / not when unset / post_erp_event swallows errors.
+- [VERIFIED] full backend suite **506 passed** (no regressions; operator_approval, meter_load, auto_activate, workflow all green).
+### Step 7 — frontend
+- [DONE] `frontend/src/api/nfc.ts` (NEW) — own axios instance; listNfcTags, provisionNfcTag, provisionNfcTagsBulk, removeNfcTag, getProvisioningMode, setProvisioningMode; ProvisioningMode + NfcTag types.
+- [DONE] `frontend/src/components/pedestal/NfcProvisioningTable.tsx` (NEW) — per-socket rows (live status from socketComputedStates, tag input, Provision/Remove), Save All, summary; duplicate/error surfaced via onFeedback from backend 409 detail.
+- [DONE] `frontend/src/components/pedestal/PedestalControlCenter.tsx` — `QrCodesSection` → "Socket Settings": NFC/QR radio (NFC listed first, reflects saved mode), confirm + warning on NFC switch, setProvisioningMode + reflect auto_activate flip via setSocketAutoActivate(1..4); QR branch = existing SocketQrGrid (unchanged) + Download/Regenerate (QR only); NFC branch = NfcProvisioningTable.
+- [VERIFIED] `npx tsc --noEmit` clean. ✅ Step 7 COMPLETE.
+- NEXT (step 9): README changelog; commit dev + push dev (gate); STOP before main push for explicit approval.
+
+---
+
 # Implementation Status — Manual activate (auto-OFF) plug-in stays actionable
 
 ## 2026-06-15 — "kreni" (Control Center Activate; decision: pending until activate/unplug, no 15s auto-reject)

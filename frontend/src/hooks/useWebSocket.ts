@@ -45,6 +45,7 @@ export function useWebSocket() {
     clearLoadAlarm,
     addAutoStopAlarm,
     acknowledgeAutoStopAlarm,
+    setLedState,
   } = useStore()
   const { role } = useAuthStore()
 
@@ -439,16 +440,26 @@ export function useWebSocket() {
           break
         }
         case 'led_changed': {
-          // v3.10 — LED state changed (manual OR scheduled). Skip the toast
-          // for manual changes since the admin who clicked already saw the
-          // local feedback toast — only surface scheduler-driven events to
-          // confirm the schedule fired.
+          // v3.10 — LED state changed (manual OR scheduled).
+          // v3.27 — drive the ACK-confirmed LED status: a command broadcast
+          // carries confirmed:false (pending) and the matching opta/acks
+          // broadcast carries confirmed:true (source "ack"). Until the ACK,
+          // the UI shows "switching…".
           const d = msg.data
+          const pid = d.pedestal_id as number
+          if (pid) {
+            const on = typeof d.on === 'boolean' ? d.on : d.state === 'on'
+            const confirmed = d.confirmed !== false   // absent ⇒ treat as confirmed
+            setLedState(pid, {
+              on,
+              pending: !confirmed,
+              confirmedAt: confirmed ? (d.timestamp as string) ?? null : null,
+            })
+          }
           if (role === 'admin' && d?.source === 'scheduler') {
-            const color = typeof d.color === 'string' ? d.color : 'led'
             const state = d.state === 'off' ? 'OFF' : 'ON'
             addToast({
-              message: `Pedestal ${d.pedestal_id}: LED ${color} → ${state} (scheduled)`,
+              message: `Pedestal ${d.pedestal_id}: LED → ${state} (scheduled)`,
               variant: 'info',
             })
           }

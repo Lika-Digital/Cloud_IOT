@@ -1,4 +1,37 @@
-# Implementation Status — NFC provisioning + ERP NFC integration (v3.26, IN PROGRESS)
+# Implementation Status — ACK-confirmed LED status (v3.27, IN PROGRESS)
+
+## 2026-06-16 — "kreni" (single white LED; UI flips to ON only on ACK)
+
+Decisions: single-colour LED (color irrelevant) → ON/OFF; status flips to ON only on opta/cmd/led ACK (until then "switching…"); state on PedestalConfig; per-command confirmation (periodic = future firmware opta/led/status).
+
+### Backend
+- [DONE] `backend/app/models/pedestal_config.py` — `led_on` (Bool), `led_pending` (Bool), `led_confirmed_at` (DateTime).
+- [DONE] `backend/app/database.py` — migrations: led_on/led_pending (INTEGER DEFAULT 0), led_confirmed_at (DATETIME).
+- [DONE] `backend/app/routers/controls.py` — POST /pedestal/{id}/led: persist intended led_on + led_pending=True (cabinets) / confirmed-now (legacy no-ACK); broadcast led_changed {on, confirmed:false}. NEW GET /pedestal/{id}/led (require_any_role) for hydration.
+- [DONE] `backend/app/services/mqtt_handlers.py` `_handle_marina_acks` — on cmd_topic endswith "cmd/led": clear led_pending, stamp led_confirmed_at if status ok, broadcast led_changed {on, confirmed:<ok>, source:"ack"}.
+- [VERIFIED] app imports; GET+POST /api/controls/pedestal/{id}/led registered.
+### Frontend
+- [DONE] `frontend/src/api/index.ts` — `getLed(pedestalId)`.
+- [DONE] `frontend/src/store/index.ts` — `ledStates` (per pedestal {on,pending,confirmedAt}) + `setLedState` (prev-merge).
+- [DONE] `frontend/src/hooks/useWebSocket.ts` — `led_changed` now drives ledStates (pending on command, confirmed on ACK; absent confirmed ⇒ confirmed) + keeps scheduler toast.
+- [DONE] `frontend/src/components/pedestal/PedestalControlCenter.tsx` — `LedControl` rewritten: single white LED, Turn ON / Turn OFF buttons, badge ON / OFF / "Switching…" driven by ACK-confirmed store state, hydrates via getLed on mount; removed color picker + blink. `tsc --noEmit` clean.
+### Tests
+- [DONE] `tests/backend/test_led_status.py` (4) — command marks pending; ACK confirms; off→ack; failed ACK clears pending without confirming. All pass.
+- NEXT: full suite regression check; then commit dev + push dev; STOP before main for approval.
+
+---
+
+# Implementation Status — NFC docs (user manual + ERP/API guide, v3.26)
+
+## 2026-06-16 — "popravi sad user manual i API dokument" (NFC docs)
+
+- [DONE] `scripts/generate_user_guide.py` — 5.3 "QR Codes"→"Socket Settings (QR/NFC)"; What's new →v3.26; new 10.6 "NFC provisioning & ERP activation" (mode switch + auto-activate flip, provisioning steps, scan→plug-in flow, operator override). Regenerated `docs/User Guide.docx` (51 KB).
+- [DONE] `generate_erp_integration_doc.py` — TOC entry + H1 "NFC Activation API (myMarina ERP)": X-API-Key auth, operator-side provisioning, endpoints table, activation flow, payloads, status codes, optional webhook, operator-override note. Regenerated `Cloud_IOT_ERP_Integration_Guide_v3.pdf` (89 KB).
+- Generators + PDFs/docx are untracked (per earlier "c") — local doc artifacts, no git/release.
+
+---
+
+# Implementation Status — NFC provisioning + ERP NFC integration (v3.26, RELEASED decad6d)
 
 ## 2026-06-16 — "Go ahead. Kreni od koraka 1" (step 1: models, migrations, config)
 

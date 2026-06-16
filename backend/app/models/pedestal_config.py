@@ -69,6 +69,15 @@ class PedestalConfig(Base):
     # restores auto_activate=True. Default "qr" preserves every existing pedestal.
     provisioning_mode = Column(String, default="qr")  # "qr" | "nfc"
 
+    # v3.27 — LED on/off state confirmed by the firmware ACK on opta/cmd/led.
+    # The cabinet LED is single-colour (white), so only on/off matters. `led_on`
+    # is the intended state; it becomes authoritative once `led_confirmed_at` is
+    # stamped by a matching opta/acks (cmd_topic == "opta/cmd/led", status "ok").
+    # `led_pending` is True between sending the command and receiving the ACK.
+    led_on           = Column(Boolean, default=False)
+    led_pending      = Column(Boolean, default=False)
+    led_confirmed_at = Column(DateTime, nullable=True)
+
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

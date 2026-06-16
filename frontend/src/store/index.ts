@@ -191,6 +191,12 @@ interface AppStore {
   socketComputedStates: Record<string, 'idle' | 'pending' | 'active' | 'fault'>
   setSocketComputedState: (pedestal_id: number, socket_id: number, state: 'idle' | 'pending' | 'active' | 'fault') => void
 
+  // v3.27 — ACK-confirmed LED on/off state per pedestal (single-colour cabinet).
+  // `pending` is true between sending opta/cmd/led and its ACK; `on` is the
+  // confirmed state once the ACK arrives. Keyed by pedestal_id.
+  ledStates: Record<number, { on: boolean; pending: boolean; confirmedAt: string | null }>
+  setLedState: (pedestal_id: number, patch: Partial<{ on: boolean; pending: boolean; confirmedAt: string | null }>) => void
+
   // v3.8 — live breaker state + hardware metadata per socket, populated from
   // the `breaker_state_changed` WS event. Keyed by `${pedestal_id}-${socket_id}`.
   // Metadata fields are whatever the Arduino reported — NEVER hardcoded.
@@ -528,6 +534,15 @@ export const useStore = create<AppStore>((set) => ({
         [`${pedestal_id}-${socket_id}`]: state,
       },
     })),
+
+  ledStates: {},
+  setLedState: (pedestal_id, patch) =>
+    set((s) => {
+      const prev = s.ledStates[pedestal_id] ?? { on: false, pending: false, confirmedAt: null }
+      return {
+        ledStates: { ...s.ledStates, [pedestal_id]: { ...prev, ...patch } },
+      }
+    }),
 
   socketBreakerStates: {},
   setBreakerState: (pedestal_id, socket_id, patch) =>

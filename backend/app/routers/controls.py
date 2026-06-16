@@ -17,7 +17,7 @@ from ..services.mqtt_client import mqtt_service
 from ..services.websocket_manager import ws_manager
 from ..services.invoice_service import create_invoice_for_session
 from ..services.audit_service import log_transition
-from ..auth.dependencies import require_admin
+from ..auth.dependencies import require_admin, require_any_role
 from ..auth.models import User
 
 logger = logging.getLogger(__name__)
@@ -466,13 +466,29 @@ async def set_pedestal_led(
     _: User = Depends(require_admin),
 ):
     """
-    Set the pedestal LED color/state via opta/cmd/led.
+    Set the pedestal LED state via opta/cmd/led.
 
     v3.10 — broadcasts a `led_changed` WebSocket event so the dashboard sees
-    the change in real time. Source is "manual" so consumers can distinguish
-    operator-driven changes from scheduler-driven ones.
+    the change in real time.
+    v3.27 — the cabinet LED is single-colour (white): only on/off matters. We
+    record the intended state as PENDING and broadcast `confirmed: false`; the
+    state flips to confirmed-ON/OFF only when the firmware ACK arrives on
+    opta/acks (handled in mqtt_handlers). On a legacy (non-cabinet) pedestal
+    there is no ACK channel, so the change is marked confirmed immediately.
     """
     cabinet_id = _get_cabinet_id(db, pedestal_id)
+    intended_on = body.state == "on"
+
+    # Persist intended state + pending flag on the pedestal config.
+    from ..models.pedestal_config import PedestalConfig
+    cfg = db.query(PedestalConfig).filter(PedestalConfig.pedestal_id == pedestal_id).first()
+    if cfg is not None:
+        cfg.led_on = intended_on
+        cfg.led_pending = bool(cabinet_id)          # await ACK only on real cabinets
+        if not cabinet_id:
+            cfg.led_confirmed_at = datetime.utcnow()  # legacy: no ACK to wait for
+        db.commit()
+
     if cabinet_id:
         mqtt_service.publish(
             "opta/cmd/led",
@@ -490,11 +506,33 @@ async def set_pedestal_led(
             "cabinet_id": cabinet_id or "",
             "color": body.color,
             "state": body.state,
+            "on": intended_on,
+            "confirmed": not bool(cabinet_id),   # cabinets: confirmed on ACK
             "source": "manual",
             "timestamp": datetime.utcnow().isoformat(),
         },
     })
-    return {"status": "led_set", "pedestal_id": pedestal_id, "color": body.color, "state": body.state}
+    return {"status": "led_set", "pedestal_id": pedestal_id, "color": body.color,
+            "state": body.state, "on": intended_on, "pending": bool(cabinet_id)}
+
+
+@router.get("/pedestal/{pedestal_id}/led")
+def get_pedestal_led(
+    pedestal_id: int,
+    db: DBSession = Depends(get_db),
+    _: User = Depends(require_any_role),
+):
+    """v3.27 — current ACK-confirmed LED state for dashboard hydration."""
+    from ..models.pedestal_config import PedestalConfig
+    cfg = db.query(PedestalConfig).filter(PedestalConfig.pedestal_id == pedestal_id).first()
+    if cfg is None:
+        return {"pedestal_id": pedestal_id, "on": False, "pending": False, "confirmed_at": None}
+    return {
+        "pedestal_id": pedestal_id,
+        "on": bool(cfg.led_on),
+        "pending": bool(cfg.led_pending),
+        "confirmed_at": cfg.led_confirmed_at.isoformat() if cfg.led_confirmed_at else None,
+    }
 
 
 # ── Direct socket command (admin, no session required) ────────────────────────

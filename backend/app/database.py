@@ -151,6 +151,10 @@ def _migrate_schema():
         # v3.26 — NFC: ERP user attached via scan flow; cabinet provisioning mode.
         ("sessions",         "nfc_user_id",      "TEXT"),
         ("pedestal_configs", "provisioning_mode","TEXT DEFAULT 'qr'"),
+        # v3.27 — ACK-confirmed LED on/off state (single-colour cabinet LED).
+        ("pedestal_configs", "led_on",           "INTEGER DEFAULT 0"),
+        ("pedestal_configs", "led_pending",      "INTEGER DEFAULT 0"),
+        ("pedestal_configs", "led_confirmed_at", "DATETIME"),
         # v3.11 — live socket meter telemetry + load monitoring. All hardware
         # values are read from the Arduino on `opta/config/hardware`; backend
         # never assumes meter type, phase count, or rated current. Live meter

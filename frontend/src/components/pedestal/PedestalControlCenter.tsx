@@ -5,6 +5,7 @@ import {
   directSocketCmd,
   directWaterCmd,
   setLed,
+  getLed,
   resetPedestal,
   getSocketConfigs,
   setSocketConfig,
@@ -565,16 +566,6 @@ function WaterCard({
 
 // ─── LED control ─────────────────────────────────────────────────────────────
 
-const LED_COLORS = ['green', 'red', 'blue', 'yellow', 'off'] as const
-const LED_STATES = ['on', 'off', 'blink'] as const
-const COLOR_SWATCH: Record<string, string> = {
-  green: 'bg-green-500',
-  red: 'bg-red-500',
-  blue: 'bg-blue-500',
-  yellow: 'bg-yellow-400',
-  off: 'bg-gray-600',
-}
-
 function LedControl({
   pedestalId,
   isAdmin,
@@ -584,79 +575,83 @@ function LedControl({
   isAdmin: boolean
   onFeedback: (key: string, type: 'success' | 'error', text: string) => void
 }) {
-  const [color, setColor] = useState<string>('green')
-  const [ledState, setLedState] = useState<string>('on')
+  // v3.27 — single-colour (white) cabinet LED. State is ACK-confirmed: it flips
+  // to ON/OFF only when the firmware acknowledges; until then it shows pending.
+  const led = useStore((s) => s.ledStates[pedestalId])
+  const setLedStateStore = useStore((s) => s.setLedState)
   const [loading, setLoading] = useState(false)
 
-  const send = async () => {
+  // Hydrate confirmed state on mount; live updates arrive via the WS led_changed.
+  useEffect(() => {
+    let cancelled = false
+    getLed(pedestalId)
+      .then((r) => {
+        if (cancelled) return
+        setLedStateStore(pedestalId, { on: r.on, pending: r.pending, confirmedAt: r.confirmed_at })
+      })
+      .catch(() => { /* leave default */ })
+    return () => { cancelled = true }
+  }, [pedestalId, setLedStateStore])
+
+  const on = led?.on ?? false
+  const pending = led?.pending ?? false
+
+  const send = async (next: boolean) => {
     setLoading(true)
+    // Optimistic pending; the WS led_changed (command then ACK) is authoritative.
+    setLedStateStore(pedestalId, { pending: true })
     try {
-      await setLed(pedestalId, color, ledState)
-      onFeedback('led', 'success', `LED → ${color} / ${ledState}`)
+      // Colour is irrelevant for this single-white LED — send a placeholder.
+      await setLed(pedestalId, 'green', next ? 'on' : 'off')
+      onFeedback('led', 'success', `LED command sent: ${next ? 'ON' : 'OFF'} — awaiting confirmation`)
     } catch {
+      setLedStateStore(pedestalId, { pending: false })
       onFeedback('led', 'error', 'LED command failed')
     } finally {
       setLoading(false)
     }
   }
 
+  const badge = pending
+    ? { text: 'Switching…', cls: 'bg-yellow-900/40 text-yellow-300 border-yellow-700/50' }
+    : on
+      ? { text: 'ON', cls: 'bg-green-900/40 text-green-300 border-green-700/50' }
+      : { text: 'OFF', cls: 'bg-gray-800 text-gray-400 border-gray-700' }
+
   return (
     <div className="rounded-lg border border-gray-700 bg-gray-800/40 p-3 space-y-3">
       <div className="flex items-center gap-2">
         <span className="text-base">💡</span>
-        <span className="text-sm font-medium text-white">LED Control</span>
+        <span className="text-sm font-medium text-white">LED</span>
+        <span className={`ml-auto text-[11px] px-2 py-0.5 rounded border flex items-center gap-1.5 ${badge.cls}`}>
+          <span className={`w-2.5 h-2.5 rounded-full ${on && !pending ? 'bg-white' : 'bg-gray-600'}`} />
+          {badge.text}
+        </span>
       </div>
 
-      <div>
-        <p className="text-xs text-gray-500 mb-1.5">Color</p>
-        <div className="flex flex-wrap gap-1.5">
-          {LED_COLORS.map((c) => (
-            <button
-              key={c}
-              onClick={() => setColor(c)}
-              disabled={!isAdmin}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs border transition-all ${
-                color === c
-                  ? 'border-white bg-gray-700 text-white'
-                  : 'border-gray-700 bg-gray-900 text-gray-400 hover:border-gray-500'
-              } disabled:opacity-50`}
-            >
-              <span className={`w-2.5 h-2.5 rounded-full ${COLOR_SWATCH[c]}`} />
-              {c}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div>
-        <p className="text-xs text-gray-500 mb-1.5">State</p>
-        <div className="flex gap-1.5">
-          {LED_STATES.map((s) => (
-            <button
-              key={s}
-              onClick={() => setLedState(s)}
-              disabled={!isAdmin}
-              className={`px-3 py-1 rounded-lg text-xs border transition-all ${
-                ledState === s
-                  ? 'border-blue-500 bg-blue-900/30 text-blue-300'
-                  : 'border-gray-700 bg-gray-900 text-gray-400 hover:border-gray-500'
-              } disabled:opacity-50`}
-            >
-              {s.toUpperCase()}
-            </button>
-          ))}
-        </div>
-      </div>
+      {led?.confirmedAt && !pending && (
+        <p className="text-[11px] text-gray-600">
+          Confirmed: {new Date(led.confirmedAt).toLocaleString()}
+        </p>
+      )}
 
       {isAdmin && (
-        <button
-          onClick={send}
-          disabled={loading}
-          className="w-full py-1.5 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white text-xs font-medium transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-        >
-          {loading && <span className="w-3 h-3 rounded-full border-2 border-white border-t-transparent animate-spin" />}
-          Send LED Command
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => send(true)}
+            disabled={loading || pending}
+            className="flex-1 py-1.5 rounded-lg bg-green-700 hover:bg-green-600 text-white text-xs font-medium disabled:opacity-50"
+          >
+            Turn ON
+          </button>
+          <button
+            onClick={() => send(false)}
+            disabled={loading || pending}
+            className="flex-1 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-white text-xs font-medium disabled:opacity-50"
+          >
+            Turn OFF
+          </button>
+        </div>
       )}
     </div>
   )

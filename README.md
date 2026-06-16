@@ -83,6 +83,26 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-06-16 — ACK-confirmed LED status (v3.27)
+
+The cabinet LED could be switched on/off but the dashboard never reflected
+whether the command actually took — and the cabinet is single-colour (white),
+so the old colour picker was irrelevant.
+
+- **LED is now a single ON / OFF control** (white). The status badge shows the
+  real state **confirmed by the firmware**: `ON`, `OFF`, or **"Switching…"**
+  until the `opta/cmd/led` ACK arrives on `opta/acks`. If it stays "Switching…",
+  the cabinet never confirmed (link/firmware issue).
+- **Backend:** `PedestalConfig.led_on` / `led_pending` / `led_confirmed_at`.
+  `POST /api/controls/pedestal/{id}/led` records the intended state as pending and
+  broadcasts `led_changed {on, confirmed:false}`; the ACK handler
+  (`_handle_marina_acks`, `cmd_topic == opta/cmd/led`) clears pending, stamps
+  `led_confirmed_at` on `status:"ok"`, and broadcasts `led_changed {confirmed:true}`.
+  New `GET /api/controls/pedestal/{id}/led` for hydration. Legacy (non-cabinet)
+  pedestals have no ACK channel and are confirmed immediately.
+- **Note:** per-command confirmation. Continuous/periodic LED health would need a
+  firmware addition (e.g. `opta/led/status`) — not in this release.
+
 ### 2026-06-16 — NFC provisioning + ERP myMarina integration (v3.26) — `962ea99`
 
 Adds an NFC alternative to QR for socket provisioning, plus a backend API for the

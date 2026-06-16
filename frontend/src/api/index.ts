@@ -67,6 +67,10 @@ export const resetPedestal = (pedestalId: number) =>
   api.post(`/controls/pedestal/${pedestalId}/reset`).then((r) => r.data)
 export const setLed = (pedestalId: number, color: string, state: string) =>
   api.post(`/controls/pedestal/${pedestalId}/led`, { color, state }).then((r) => r.data)
+export const getLed = (pedestalId: number) =>
+  api.get<{ pedestal_id: number; on: boolean; pending: boolean; confirmed_at: string | null }>(
+    `/controls/pedestal/${pedestalId}/led`,
+  ).then((r) => r.data)
 export const directSocketCmd = (pedestalId: number, socketName: string, action: string) =>
   api.post(`/controls/pedestal/${pedestalId}/socket/${socketName}/cmd`, { action }).then((r) => r.data)
 export const directWaterCmd = (pedestalId: number, valveName: string, action: string) =>

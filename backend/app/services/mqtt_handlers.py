@@ -1574,9 +1574,36 @@ async def _handle_marina_acks(cabinet_id: str, payload: str):
     except json.JSONDecodeError:
         data = {"raw": payload}
 
+    cmd_topic = data.get("cmd_topic") or data.get("cmdTopic") or ""
+    status = data.get("status")
+    led_event = None
+
     db = SessionLocal()
     try:
         pedestal_id = _cabinet_to_pedestal_id(db, cabinet_id)
+        # v3.27 — confirm LED state from the ACK on opta/cmd/led. The intended
+        # on/off was persisted when the command was sent; the ACK flips it to
+        # confirmed (status ok) or clears the pending flag (status not ok).
+        if pedestal_id is not None and cmd_topic.endswith("cmd/led"):
+            from ..models.pedestal_config import PedestalConfig
+            cfg = db.query(PedestalConfig).filter(
+                PedestalConfig.pedestal_id == pedestal_id
+            ).first()
+            if cfg is not None:
+                cfg.led_pending = False
+                ok = status == "ok"
+                if ok:
+                    cfg.led_confirmed_at = datetime.utcnow()
+                db.commit()
+                led_event = {
+                    "pedestal_id": pedestal_id,
+                    "cabinet_id": cabinet_id,
+                    "on": bool(cfg.led_on),
+                    "state": "on" if cfg.led_on else "off",
+                    "confirmed": ok,
+                    "source": "ack",
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
     finally:
         db.close()
     logger.debug("[Marina] Ack from cabinet %s: %s", cabinet_id, payload[:200])
@@ -1589,6 +1616,8 @@ async def _handle_marina_acks(cabinet_id: str, payload: str):
             "timestamp": datetime.utcnow().isoformat(),
         },
     })
+    if led_event is not None:
+        await ws_manager.broadcast({"event": "led_changed", "data": led_event})
 
 
 # ── Opta firmware handlers ────────────────────────────────────────────────────

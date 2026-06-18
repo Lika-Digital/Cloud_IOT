@@ -83,6 +83,28 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-06-18 — Activate dedup + manual-stop auto-disable (v3.28)
+
+Two fixes for the operator-stop loop seen in the field (operator stops a socket
+but the still-plugged cable + auto-activate immediately re-energise it).
+
+- **B5 — duplicate activate dedup (backend):** a 3-second per-socket in-memory
+  lock in `_maybe_auto_activate` skips a second `activate` when two `UserPluggedIn`
+  events race (field trace showed two commands ~10 ms apart). Cleared on
+  `SessionEnded` so a genuine re-activation after a confirmed stop is never blocked.
+  Operator manual activate and the legitimate (first) NFC activate are unaffected.
+- **B6 — manual stop disables auto-activate (backend + minimal frontend):** when an
+  **operator** stops an electricity socket (`stop_session` or `direct_socket_cmd`
+  stop) the backend sets that socket's `auto_activate=False` before publishing stop,
+  so the cable still in the socket no longer re-activates it. Broadcasts
+  `socket_auto_activate_changed` → the dashboard auto-activate toggle flips OFF live
+  and a dismissable notice appears ("Auto-activate disabled for Q{n}. Re-enable in
+  socket settings."). **Only operator stops** do this — the meter overload autostop,
+  ERP `/api/nfc/session/{id}/stop`, and session timeout do NOT change `auto_activate`.
+  Re-enable anytime from the existing socket-settings toggle.
+- **Note:** the firmware-side issue (relay not de-energising on `stop`; `hw_status`
+  inverted) is separate and tracked for the firmware team — not addressed here.
+
 ### 2026-06-16 — ACK-confirmed LED status (v3.27)
 
 The cabinet LED could be switched on/off but the dashboard never reflected

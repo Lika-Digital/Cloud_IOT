@@ -1228,3 +1228,25 @@ def test_api_catalog_has_auto_stop_events():
     for e in EVENT_CATALOG:
         if e["id"].startswith("meter_load_auto_stop"):
             assert e["category"] == "Load Monitoring"
+
+
+def test_autostop_does_not_disable_auto_activate(client, auth_headers):
+    """B6 (v3.28) — the meter overload autostop sets the latch but must NOT
+    disable auto_activate (only an operator stop does that)."""
+    pid = _ensure_cabinet()
+    from app.models.socket_config import SocketConfig
+    db = _TestSession()
+    try:
+        sc = db.query(SocketConfig).filter_by(pedestal_id=pid, socket_id=1).first()
+        if sc is None:
+            sc = SocketConfig(pedestal_id=pid, socket_id=1)
+            db.add(sc)
+        sc.auto_activate = True
+        sc.auto_stop_pending_ack = False
+        db.commit()
+    finally:
+        db.close()
+    _trigger_auto_stop(pid, 1)
+    cfg = _get_socket_cfg(pid, 1)
+    assert cfg.auto_stop_pending_ack is True   # overload autostop fired
+    assert cfg.auto_activate is True           # auto_activate untouched by autostop

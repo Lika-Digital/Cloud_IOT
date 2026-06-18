@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from datetime import datetime, timedelta
 
 from ..database import SessionLocal
@@ -48,6 +49,16 @@ last_diagnostic_ok_at: dict[int, datetime] = {}
 # to re-open within 10 minutes so that diagnostic does not become an
 # accidental water-on button (D3).
 last_valve_manual_stop_at: dict[tuple[int, int], datetime] = {}
+
+# v3.28 (B5) — duplicate-activate dedup. Key: f"{pedestal_id}-{socket_id}";
+# Value: time.monotonic() of the last AUTO-activate publish. A second
+# UserPluggedIn racing within the window would otherwise publish a duplicate
+# `activate` (seen in the field, two commands ~10 ms apart). In-memory only;
+# the entry is cleared on SessionEnded so a genuine re-activation after a
+# confirmed stop is never blocked. Does NOT cover operator manual activate
+# (direct_socket_cmd publishes separately).
+_last_activate_ts: dict[str, float] = {}
+_ACTIVATE_DEDUP_WINDOW_S = 3.0
 
 # Topic patterns — legacy pedestal/... schema
 SOCKET_STATUS_RE  = re.compile(r"pedestal/(\d+)/socket/(\d+)/status")
@@ -1109,6 +1120,21 @@ async def _maybe_auto_activate(pedestal_id: int, socket_id: int, outlet_id: str)
             f"— proceeding (door is non-blocking).",
         )
 
+    # v3.28 (B5) — duplicate-activate dedup. If an auto-activate was already
+    # published for this socket within the window, skip this one (absorbs the
+    # two-UserPluggedIn race). The entry is cleared on SessionEnded so a genuine
+    # re-activation after a confirmed stop is never blocked.
+    _akey = f"{pedestal_id}-{socket_id}"
+    _now = time.monotonic()
+    _prev = _last_activate_ts.get(_akey)
+    if _prev is not None and (_now - _prev) < _ACTIVATE_DEDUP_WINDOW_S:
+        logger.warning(
+            "[AutoActivate] pedestal=%d socket=%d SKIPPED: duplicate activate within %.1fs (race)",
+            pedestal_id, socket_id, _ACTIVATE_DEDUP_WINDOW_S)
+        _log_auto_activation(pedestal_id, socket_id, "skipped", reason="duplicate activate (dedup)")
+        return
+    _last_activate_ts[_akey] = _now
+
     # Publish. Format matches direct_socket_cmd so the firmware sees an
     # identical command shape whether it came from the operator or auto.
     from .mqtt_client import mqtt_service
@@ -1496,6 +1522,10 @@ async def _handle_event_session_ended(db, pedestal_id: int, outlet_id: str, reso
     is_water = resource == "WATER"
     socket_id = _water_name_to_id(outlet_id) if is_water else _socket_name_to_id(outlet_id)
     session_type = "water" if is_water else "electricity"
+
+    # v3.28 (B5) — clear the activate-dedup entry so a legitimate re-activation
+    # after this confirmed stop is never blocked by the dedup window.
+    _last_activate_ts.pop(f"{pedestal_id}-{socket_id}", None)
 
     session = session_service.get_active_for_socket(db, pedestal_id, socket_id, session_type=session_type)
     if not session:

@@ -34,6 +34,7 @@ export function useWebSocket() {
     addOptaAck,
     setSocketComputedState,
     setSocketAutoSkipReason,
+    setSocketAutoActivate,
     clearSocketAutoSkipReason,
     addToast,
     setBreakerState,
@@ -166,6 +167,23 @@ export function useWebSocket() {
           if (sockId != null && reason) {
             setSocketAutoSkipReason(pedId, sockId, reason)
             setTimeout(() => clearSocketAutoSkipReason(pedId, sockId), 30_000)
+          }
+          break
+        }
+        case 'socket_auto_activate_changed': {
+          // B6 (v3.28) — operator stop disabled auto-activate for this socket.
+          // Flip the toggle OFF live + show a dismissable notice.
+          const pedId = msg.data.pedestal_id as number
+          const sockId = msg.data.socket_id as number
+          const enabled = msg.data.auto_activate as boolean
+          if (pedId != null && sockId != null) {
+            setSocketAutoActivate(pedId, sockId, enabled)
+            if (!enabled && role === 'admin') {
+              addToast({
+                message: `Auto-activate disabled for Q${sockId}. Re-enable in socket settings.`,
+                variant: 'info',
+              })
+            }
           }
           break
         }

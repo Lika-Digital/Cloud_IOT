@@ -1,4 +1,25 @@
-# Implementation Status — ACK-confirmed LED status (v3.27, IN PROGRESS)
+# Implementation Status — B5 activate dedup + B6 manual-stop auto-disable (v3.28, IN PROGRESS)
+
+## 2026-06-18 — "Kreni. B5 prvo, zatim B6" (decisions A–E all confirmed)
+
+Decisions: A) B5 dedup in `_maybe_auto_activate`, key `{pid}-{sid}`, 3.0s window (time.monotonic), cleared on SessionEnded. B) B6 auto-disable only in stop_session + direct_socket_cmd stop (NOT shared _publish_session_control → ERP stop + autostop excluded). C) B6 electricity Q1–Q4 only. D) new WS event `socket_auto_activate_changed`. E) toast "Auto-activate disabled for Q{n}. Re-enable in socket settings." (info, dismissable).
+
+### B5 — duplicate activate dedup
+- [DONE] `backend/app/services/mqtt_handlers.py` — `import time`; module `_last_activate_ts: dict[str,float]` + `_ACTIVATE_DEDUP_WINDOW_S=3.0`; in `_maybe_auto_activate` before publish: skip+warn+log if an auto-activate for `{pid}-{sid}` was published <3s ago, else record `time.monotonic()`; `_handle_event_session_ended` clears the entry. Operator manual activate (direct_socket_cmd) unaffected (separate publish).
+### B6 — manual stop disables auto-activate
+- [DONE] `backend/app/routers/controls.py` — new `_operator_disable_auto_activate(db,pid,sid)` (sets SocketConfig.auto_activate=False if True, broadcasts `socket_auto_activate_changed`, idempotent no-op if already off). Called in `stop_session` (electricity only) and `direct_socket_cmd` (action=="stop"), BEFORE publish. NOT in shared `_publish_session_control` → ERP stop + autostop excluded.
+- [DONE] `frontend/src/hooks/useWebSocket.ts` — case `socket_auto_activate_changed` → `setSocketAutoActivate(pid,sid,false)` + dismissable info toast "Auto-activate disabled for Q{n}. Re-enable in socket settings." (setSocketAutoActivate added to destructure). `tsc --noEmit` clean.
+### Tests
+- [DONE] `tests/backend/test_activate_dedup.py` (B5, 5): two rapid→one publish; cleared on SessionEnded→reactivate; different sockets independent; window boundary 2.9s skip / 3.1s publish; operator manual activate not blocked.
+- [DONE] `tests/backend/test_manual_stop_autodisable.py` (B6, 5): operator stop disables; broadcasts socket_auto_activate_changed; direct stop disables + idempotent; ERP stop does NOT disable; after disable UserPluggedIn does not auto-activate.
+- [DONE] `tests/backend/test_meter_load.py` (+1): autostop sets latch but does NOT disable auto_activate.
+- [VERIFIED] full backend suite **521 passed** (510 + 11 new), tsc clean — no regressions.
+- [DONE] `README.md` — v3.28 changelog (B5 + B6, firmware note).
+- NEXT: commit dev + push dev (gate); STOP before main for explicit approval.
+
+---
+
+# Implementation Status — ACK-confirmed LED status (v3.27, RELEASED ec36709)
 
 ## 2026-06-16 — "kreni" (single white LED; UI flips to ON only on ACK)
 

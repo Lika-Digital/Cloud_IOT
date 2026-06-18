@@ -30,6 +30,28 @@ def _get_cabinet_id(db: DBSession, pedestal_id: int) -> str | None:
     return getattr(cfg, "opta_client_id", None) if cfg else None
 
 
+async def _operator_disable_auto_activate(db: DBSession, pedestal_id: int, socket_id: int) -> None:
+    """B6 (v3.28) — on an OPERATOR stop, disable auto-activate for this electricity
+    socket so a still-plugged cable doesn't immediately re-activate it (stop/auto
+    loop). Broadcasts `socket_auto_activate_changed` so the dashboard toggle flips
+    OFF live. No-op if already off (idempotent). Called ONLY from the operator
+    stop endpoints — NOT from the shared _publish_session_control, so ERP stop and
+    the meter overload autostop never disable auto-activate."""
+    from ..models.socket_config import SocketConfig
+    cfg = db.query(SocketConfig).filter(
+        SocketConfig.pedestal_id == pedestal_id,
+        SocketConfig.socket_id == socket_id,
+    ).first()
+    if cfg is None or not cfg.auto_activate:
+        return
+    cfg.auto_activate = False
+    db.commit()
+    await ws_manager.broadcast({
+        "event": "socket_auto_activate_changed",
+        "data": {"pedestal_id": pedestal_id, "socket_id": socket_id, "auto_activate": False},
+    })
+
+
 def _publish_socket_approve(db: DBSession, pedestal_id: int, socket_id: int):
     """Approve socket — Opta valid actions: activate, stop only."""
     cabinet_id = _get_cabinet_id(db, pedestal_id)
@@ -262,6 +284,11 @@ async def stop_session(
     session = _get_session_or_404(session_id, db)
     if session.status != "active":
         raise HTTPException(status_code=400, detail=f"Session is {session.status}, expected active")
+
+    # B6 (v3.28) — operator stop disables auto-activate for this electricity
+    # socket (before publishing stop) so the still-plugged cable doesn't loop.
+    if session.type == "electricity" and session.socket_id is not None:
+        await _operator_disable_auto_activate(db, session.pedestal_id, session.socket_id)
 
     session_service.complete(db, session)
     _publish_session_control(db, session, "stop")
@@ -592,6 +619,10 @@ async def direct_socket_cmd(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Socket was automatically stopped due to overload. Acknowledge the alarm before re-activating.",
             )
+
+    # B6 (v3.28) — operator stop disables auto-activate for this socket (before publish).
+    if body.action == "stop":
+        await _operator_disable_auto_activate(db, pedestal_id, socket_id)
 
     cabinet_id = _get_cabinet_id(db, pedestal_id)
     msg_id = str(int(datetime.utcnow().timestamp() * 1000))

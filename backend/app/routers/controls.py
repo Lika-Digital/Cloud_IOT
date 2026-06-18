@@ -621,7 +621,10 @@ async def direct_socket_cmd(
             )
 
     # B6 (v3.28) — operator stop disables auto-activate for this socket (before publish).
-    if body.action == "stop":
+    # v3.29 — a manual Activate ALSO disables auto-activate: the three socket modes
+    # (Auto / Activate / Stop) are mutually exclusive, so explicitly activating (or
+    # stopping) is the operator taking manual control and turns Auto off.
+    if body.action in ("stop", "activate"):
         await _operator_disable_auto_activate(db, pedestal_id, socket_id)
 
     cabinet_id = _get_cabinet_id(db, pedestal_id)

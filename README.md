@@ -83,6 +83,23 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-06-18 — Plugged-aware Activate + 3 socket modes (v3.29)
+
+Three explicit per-socket modes — **Auto / Activate / Stop** — and full use of the
+firmware v3.0.0 `plugged` field so an already-inserted cable is immediately actionable.
+
+- **Plugged-aware Activate:** the `opta/diagnostic` response now carries `plugged`
+  per socket. The backend marks a plugged-but-idle socket `awaiting_activation`, so the
+  dashboard **Activate** button enables even when no fresh `UserPluggedIn` event was
+  emitted (e.g. the cable was already in when Smart Mode was turned on). Unplugging
+  clears the marker. Older firmware without the field is a no-op.
+- **Diagnostic on Smart Mode ON:** turning Smart Mode ON now also publishes
+  `opta/cmd/diagnostic {"request":"all"}` so the cabinet reports current plug state at
+  once — no waiting for the next periodic poll.
+- **Mutually-exclusive modes:** a manual **Activate** now also turns **Auto** off
+  (broadcasts `socket_auto_activate_changed` → UI toggle off + toast), matching the
+  existing behaviour of a manual **Stop**. Toggling **Auto** back on re-arms auto-activate.
+
 ### 2026-06-18 — SmartMode (firmware v3.0.0) (v3.28)
 
 Firmware v3.0.0 adds **SmartMode**, a per-cabinet operating mode:

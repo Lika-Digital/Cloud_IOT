@@ -2763,6 +2763,44 @@ async def _handle_opta_diagnostic(payload: str):
                 [f"{w['id']}:{w.get('hw','?')}" for w in water_arr],
                 data.get("time", "?"))
 
+    # v3.28 — plug-state sync. The firmware reports `plugged` per socket in the
+    # diagnostic response. Mark a plugged-but-idle electricity socket as
+    # `awaiting_activation` so the dashboard Activate button enables even WITHOUT
+    # a fresh UserPluggedIn event (e.g. a cable already inserted when Smart Mode
+    # was turned on). `awaiting_activation` is exempt from the 15 s pending
+    # auto-reject sweep (which targets only legacy "pending").
+    for item in power_arr:
+        if "plugged" not in item:
+            continue   # older firmware without the field → don't touch state
+        sid = _socket_name_to_id(item.get("id", "Q1"))
+        plugged = bool(item.get("plugged"))
+        db = SessionLocal()
+        try:
+            from ..models.pedestal_config import SocketState
+            ss = db.query(SocketState).filter(
+                SocketState.pedestal_id == pedestal_id, SocketState.socket_id == sid,
+            ).first()
+            if ss is None:
+                # The cabinet is clearly online (it just answered a diagnostic).
+                ss = SocketState(pedestal_id=pedestal_id, socket_id=sid, connected=True)
+                db.add(ss)
+            active = session_service.get_active_for_socket(
+                db, pedestal_id, sid, session_type="electricity")
+            has_active = active is not None and active.status == "active"
+            if plugged and not has_active:
+                if ss.operator_status not in ("pending", "awaiting_activation"):
+                    ss.operator_status = "awaiting_activation"
+                    ss.operator_status_at = datetime.utcnow()
+            elif not plugged and ss.operator_status == "awaiting_activation":
+                ss.operator_status = None
+                ss.operator_status_at = None
+            db.commit()
+            display = _compute_socket_display_state(
+                db, pedestal_id, sid, raw_state="", hw_status="")
+        finally:
+            db.close()
+        await _broadcast_socket_state(pedestal_id, sid, display, resource="POWER")
+
     # v3.9 — stamp the last-diagnostic-response timestamp and fire post-diag
     # valve auto-open for each valve that reported ok. Each task is
     # self-contained (own DB session) and runs the full precondition set —

@@ -1,4 +1,27 @@
-# Implementation Status — SmartMode (firmware v3.0.0) (v3.28, IN PROGRESS)
+# Implementation Status — Plugged-aware Activate + 3 socket modes (v3.29)
+
+## 2026-06-18 — "citaj plugged polje... tri moda upravljanja auto/active/stop... posalji dijagnozu kad se aktivira smart. dakle 1,2,3"
+
+Three-mode per-socket model: **Auto / Activate / Stop**. Stop → Auto turns off (B6, exists). Activate → Auto also turns off (new). Auto toggle → activates Auto (exists). Firmware v3.0.0 now reports `plugged` per socket in `opta/diagnostic`; NUC must consume it so an already-inserted cable becomes actionable (Activate enabled) without waiting for a `UserPluggedIn` event. Auto-send a diagnostic request when Smart Mode is switched ON so the cabinet reports current plug state immediately.
+
+- [DONE] **(1)** `backend/app/services/mqtt_handlers.py` `_handle_opta_diagnostic` — loop over `power` items that carry `plugged`: when `plugged:true` & no active electricity session → set `SocketState.operator_status="awaiting_activation"` (same exempt-from-15s-sweep marker as `_handle_event_user_plugged_in`); when `plugged:false` → clear that marker (only if it was `awaiting_activation`, leaving legacy pending/rejected alone). Creates SocketState with `connected=True` if missing (cabinet just answered a diagnostic → online; avoids spurious `_compute_socket_display_state` "fault"). Broadcasts `socket_state_changed` per socket. Older firmware without the field → no-op (guarded by `if "plugged" not in item`).
+- [DONE] **(2)** `backend/app/routers/pedestal_config.py` `set_smart_mode` — after publishing `opta/cmd/smartmode`, when `body.value` is True also publish `opta/cmd/diagnostic {"cabinetId": <cab>, "request": "all"}` so the cabinet reports current plug state immediately on Smart Mode ON.
+- [DONE] **(3)** `backend/app/routers/controls.py` `direct_socket_cmd` — B6 disable-auto block widened from `action=="stop"` to `action in ("stop","activate")`: a manual Activate now also calls `_operator_disable_auto_activate` (broadcasts `socket_auto_activate_changed` → UI Auto toggle off + toast). Three modes are mutually exclusive. (Session-approval path `approve_socket` left unchanged — scope is the Activate button.)
+- [DONE] `tests/backend/test_plugged_activate.py` (NEW, 9 cases): plugged:true→awaiting_activation; plugged:false→cleared; missing field→no-op; legacy "pending" untouched on plugged:false; plugged:true+active session→no pending; Smart Mode ON publishes opta/cmd/diagnostic; Smart Mode OFF does not; manual Activate disables auto; Activate broadcasts socket_auto_activate_changed.
+- [DONE] `README.md` — v3.29 changelog entry (plugged-aware Activate, diagnostic-on-ON, mutually-exclusive Auto/Activate/Stop).
+- [NO CHANGE] Frontend: existing SocketCard Activate gating (`!isPending`) now enables via the diagnostic-driven `awaiting_activation`→"pending" display state; `socket_auto_activate_changed` handler already toggles Auto off + toast. No frontend file change required.
+- [VERIFIED] full backend suite **539 passed** (530 + 9 new), 0 failed (2026-06-18).
+- STATUS: committed to develop, pushed; **awaiting explicit approval before merge to main**.
+
+## 2026-06-18 — "dokumentiraj ovaj dio u user guide i prema ERP APIju"
+
+- [DONE] `scripts/generate_user_guide.py` — What's-new heading → v3.28; new 10.7 "Smart Mode — the master switch" (default OFF = standalone cabinet, ON = NUC controls; where the toggle is; resets OFF on reboot; Activate disabled when OFF) + 10.8 "Per-socket Start/Stop" (Activate gating, always-available Stop, manual-Stop-disables-Auto-activate). Regenerated `docs/User Guide.docx` (52 KB).
+- [DONE] `generate_erp_integration_doc.py` — new "Prerequisite — Smart Mode must be ON" subsection in the NFC Activation API section (smart_mode field in health/opta_status, POST /smartmode endpoint, ERP guidance to check smart_mode before driving a pedestal). Regenerated `Cloud_IOT_ERP_Integration_Guide_v3.pdf` (90 KB).
+- Generators + docx/pdf untracked (per earlier "c") — local artifacts, no git/release.
+
+---
+
+# Implementation Status — SmartMode (firmware v3.0.0) (v3.28, RELEASED 7575d62)
 
 ## 2026-06-18 — "Kreni" (SmartMode; decisions A–G confirmed; bundled with B5/B6)
 

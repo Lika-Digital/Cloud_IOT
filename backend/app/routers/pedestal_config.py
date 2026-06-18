@@ -353,6 +353,17 @@ def set_smart_mode(
     from ..services.mqtt_client import mqtt_service
     mqtt_service.publish("opta/cmd/smartmode", json.dumps({"value": bool(body.value)}))
 
+    # v3.29 — when switching Smart Mode ON, immediately ask the cabinet for a
+    # full diagnostic so it reports current per-socket plug state. The diagnostic
+    # response carries `plugged` per socket; `_handle_opta_diagnostic` consumes it
+    # to mark already-inserted cables as awaiting_activation (Activate enabled)
+    # without waiting for a fresh UserPluggedIn event.
+    if bool(body.value):
+        mqtt_service.publish(
+            "opta/cmd/diagnostic",
+            json.dumps({"cabinetId": cabinet_id, "request": "all"}),
+        )
+
     cfg.smart_mode = bool(body.value)
     db.commit()
     return {"cabinet_id": cabinet_id, "smart_mode": bool(body.value)}

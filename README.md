@@ -83,6 +83,28 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-06-18 — SmartMode (firmware v3.0.0) (v3.28)
+
+Firmware v3.0.0 adds **SmartMode**, a per-cabinet operating mode:
+- **OFF (default on every boot):** the Opta runs **standalone** — it manages sockets
+  itself and ignores NUC commands. The dashboard is effectively read-only for that
+  pedestal (telemetry still shown).
+- **ON:** the Opta hands **full control to the NUC** — sessions, NFC, auto-activate,
+  load monitoring, and billing all work.
+
+- **Backend:** new `pedestal_configs.smart_mode` column (default False). The
+  `opta/status` handler parses the firmware `smartMode` field (only when present —
+  an absent field never clobbers the stored value), persists it, and includes
+  `smart_mode` in the `opta_status` WebSocket broadcast and the
+  `GET /api/pedestals/health` response. New `POST /api/pedestals/{cabinet_id}/smartmode`
+  (admin) publishes `opta/cmd/smartmode {"value": bool}` and optimistically stores it.
+- **Frontend:** a prominent, system-level **Smart Mode** toggle + explanatory text at
+  the top of each pedestal's Cabinet Status (distinct from per-socket controls). It
+  updates live from the `opta_status` broadcast (so a firmware reboot resetting it to
+  OFF is reflected automatically) and reverts on API failure. When SmartMode is OFF the
+  socket **Activate** buttons stay visible but are disabled with the tooltip "Enable
+  Smart Mode to activate sockets." Telemetry remains readable in both modes.
+
 ### 2026-06-18 — Activate dedup + manual-stop auto-disable (v3.28)
 
 Two fixes for the operator-stop loop seen in the field (operator stops a socket

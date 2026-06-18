@@ -155,6 +155,8 @@ def _migrate_schema():
         ("pedestal_configs", "led_on",           "INTEGER DEFAULT 0"),
         ("pedestal_configs", "led_pending",      "INTEGER DEFAULT 0"),
         ("pedestal_configs", "led_confirmed_at", "DATETIME"),
+        # v3.28 — firmware SmartMode (fw v3.0.0): NUC control vs standalone.
+        ("pedestal_configs", "smart_mode",       "INTEGER DEFAULT 0"),
         # v3.11 — live socket meter telemetry + load monitoring. All hardware
         # values are read from the Arduino on `opta/config/hardware`; backend
         # never assumes meter type, phase count, or rated current. Live meter

@@ -135,6 +135,7 @@ export interface SnmpDevice {
 export interface PedestalHealth {
   opta_connected: boolean
   opta_client_id: string | null
+  smart_mode?: boolean        // v3.28 — firmware SmartMode
   last_heartbeat: string | null
   camera_reachable: boolean
   last_camera_check: string | null
@@ -174,3 +175,9 @@ export const runSnmpScan = (id: number, subnet?: string) =>
 
 export const getPedestalHealth = () =>
   api.get<Record<number, PedestalHealth>>('/pedestals/health').then((r) => r.data)
+
+// v3.28 — toggle firmware SmartMode for a cabinet (opta_client_id).
+export const setSmartMode = (cabinetId: string, value: boolean) =>
+  api.post<{ cabinet_id: string; smart_mode: boolean }>(
+    `/pedestals/${cabinetId}/smartmode`, { value },
+  ).then((r) => r.data)

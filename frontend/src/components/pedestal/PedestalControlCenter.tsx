@@ -14,6 +14,7 @@ import {
   regeneratePedestalQrs,
 } from '../../api'
 import { getValveConfigs, setValveConfig } from '../../api/valveConfig'
+import { setSmartMode } from '../../api/pedestalConfig'
 import LedScheduleSection from './LedScheduleSection'
 import { SocketQrGrid } from './SocketQrGrid'
 import NfcProvisioningTable from './NfcProvisioningTable'
@@ -97,6 +98,7 @@ function SocketCard({
   ownerLabel,
   isAdmin,
   onFeedback,
+  smartMode,
 }: {
   socketName: string
   socketState: OptaSocketState | null
@@ -110,6 +112,9 @@ function SocketCard({
   ownerLabel: string | null
   isAdmin: boolean
   onFeedback: (key: string, type: 'success' | 'error', text: string) => void
+  /** v3.28 — firmware SmartMode for this pedestal. When false, Activate is
+   *  disabled with a "Enable Smart Mode" warning (Opta ignores NUC commands). */
+  smartMode: boolean
 }) {
   const [loading, setLoading] = useState<string | null>(null)
   const [autoBusy, setAutoBusy] = useState(false)
@@ -281,11 +286,13 @@ function SocketCard({
               <CmdButton
                 label="Activate"
                 color="green"
-                disabled={!isPending || loading !== null || autoStopPending}
+                disabled={!smartMode || !isPending || loading !== null || autoStopPending}
                 loading={loading === 'activate'}
                 onClick={() => sendCmd('activate')}
                 title={
-                  autoStopPending
+                  !smartMode
+                    ? 'Enable Smart Mode to activate sockets.'
+                    : autoStopPending
                     ? 'Acknowledge the overload alarm first'
                     : isIdle ? 'No plug inserted'
                     : isPending ? pendingTip
@@ -566,6 +573,89 @@ function WaterCard({
 
 // ─── LED control ─────────────────────────────────────────────────────────────
 
+// ─── Smart Mode control (v3.28) ──────────────────────────────────────────────
+
+function SmartModeControl({
+  pedestalId,
+  cabinetId,
+  isAdmin,
+  onFeedback,
+}: {
+  pedestalId: number
+  cabinetId: string
+  isAdmin: boolean
+  onFeedback: (key: string, type: 'success' | 'error', text: string) => void
+}) {
+  const live = useStore((s) => s.optaStatusInfo[pedestalId]?.smart_mode)
+  const fromHealth = useStore((s) => s.pedestalHealth[pedestalId]?.smart_mode)
+  const [optimistic, setOptimistic] = useState<boolean | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const on = optimistic ?? (live ?? fromHealth ?? false)
+
+  // Clear the optimistic override once the firmware-reported value catches up
+  // (handles a firmware reboot that resets SmartMode to false).
+  useEffect(() => {
+    if (optimistic !== null && live !== undefined && live === optimistic) setOptimistic(null)
+  }, [live, optimistic])
+
+  const toggle = async () => {
+    if (!isAdmin || busy) return
+    const next = !on
+    setBusy(true)
+    setOptimistic(next)
+    try {
+      await setSmartMode(cabinetId, next)
+      onFeedback('smartmode', 'success', `Smart Mode ${next ? 'enabled' : 'disabled'}`)
+    } catch {
+      setOptimistic(null)   // revert to the store-reported value
+      onFeedback('smartmode', 'error', 'Smart Mode change failed — reverted')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className={`rounded-lg border p-3 ${on ? 'border-emerald-600 bg-emerald-900/20' : 'border-amber-600 bg-amber-900/20'}`}>
+      <div className="flex items-center gap-3">
+        <span className="text-lg">🧠</span>
+        <div className="flex-1">
+          <p className={`text-sm font-semibold ${on ? 'text-emerald-300' : 'text-amber-300'}`}>
+            Smart Mode — {on ? 'ON' : 'OFF'}
+          </p>
+          {on ? (
+            <p className="text-xs text-gray-300 mt-0.5 leading-relaxed">
+              Full Pedestal SW control active.<br />
+              NUC manages all socket sessions and monitoring.
+            </p>
+          ) : (
+            <p className="text-xs text-gray-300 mt-0.5 leading-relaxed">
+              Opta is running in standalone mode.<br />
+              Enable Smart Mode to activate full Pedestal SW control<br />
+              (sessions, NFC, load monitoring, billing).
+            </p>
+          )}
+        </div>
+        {isAdmin && (
+          <button
+            type="button"
+            onClick={toggle}
+            disabled={busy}
+            role="switch"
+            aria-checked={on}
+            aria-label="Toggle Smart Mode"
+            title={on ? 'Disable Smart Mode' : 'Enable Smart Mode'}
+            className={`relative inline-flex h-7 w-12 flex-shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${on ? 'bg-emerald-500' : 'bg-gray-600'}`}
+          >
+            <span className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${on ? 'translate-x-6' : 'translate-x-1'}`} />
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+
 function LedControl({
   pedestalId,
   isAdmin,
@@ -826,6 +916,8 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
   const pedestal = pedestals.find((p) => p.id === pedestalId)
   const health = pedestalHealth[pedestalId]
   const statusInfo = optaStatusInfo[pedestalId]
+  // v3.28 — live SmartMode (WS opta_status) wins; fall back to the health snapshot.
+  const smartOn = statusInfo?.smart_mode ?? health?.smart_mode ?? false
   const doorState = marinaDoorState[pedestalId]
   const events = optaEvents[pedestalId] ?? []
   const acks = optaAcks[pedestalId] ?? []
@@ -911,6 +1003,16 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
         />
       )}
 
+      {/* ── Smart Mode (v3.28) — system-level prerequisite for NUC control ── */}
+      {health?.opta_client_id && (
+        <SmartModeControl
+          pedestalId={pedestalId}
+          cabinetId={health.opta_client_id}
+          isAdmin={isAdmin}
+          onFeedback={show}
+        />
+      )}
+
       {/* ── Cabinet Status ──────────────────────────────────────────────── */}
       <div className="rounded-lg border border-gray-700 bg-gray-800/40 p-3">
         <div className="flex items-center gap-2 mb-2">
@@ -988,6 +1090,7 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
                 ownerLabel={ownerLabel}
                 isAdmin={isAdmin}
                 onFeedback={show}
+                smartMode={smartOn}
               />
             )
           })}

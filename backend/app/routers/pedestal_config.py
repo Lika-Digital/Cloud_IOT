@@ -327,6 +327,37 @@ async def discover_snmp(
     return {"discovered": found}
 
 
+class SmartModeBody(BaseModel):
+    value: bool
+
+
+@router.post("/api/pedestals/{cabinet_id}/smartmode")
+def set_smart_mode(
+    cabinet_id: str,
+    body: SmartModeBody,
+    db: Session = Depends(get_db),
+    _user = Depends(require_admin),
+):
+    """v3.28 — enable/disable firmware SmartMode for a cabinet.
+
+    Publishes `opta/cmd/smartmode {"value": bool}` and optimistically stores the
+    new value (firmware confirms it on the next opta/status heartbeat). 404 if the
+    cabinet_id (opta_client_id) is unknown.
+    """
+    cfg = db.query(PedestalConfig).filter(
+        PedestalConfig.opta_client_id == cabinet_id
+    ).first()
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="Cabinet not found")
+
+    from ..services.mqtt_client import mqtt_service
+    mqtt_service.publish("opta/cmd/smartmode", json.dumps({"value": bool(body.value)}))
+
+    cfg.smart_mode = bool(body.value)
+    db.commit()
+    return {"cabinet_id": cabinet_id, "smart_mode": bool(body.value)}
+
+
 @router.get("/api/pedestals/health")
 def get_health(
     db: Session = Depends(get_db),
@@ -346,6 +377,7 @@ def get_health(
         result[cfg.pedestal_id] = {
             "opta_connected": bool(cfg.opta_connected),
             "opta_client_id": cfg.opta_client_id,  # v3.7 — needed by QR UI
+            "smart_mode": bool(cfg.smart_mode),     # v3.28 — firmware SmartMode
             "last_heartbeat": cfg.last_heartbeat.isoformat() if cfg.last_heartbeat else None,
             "camera_reachable": bool(cfg.camera_reachable),
             "last_camera_check": cfg.last_camera_check.isoformat() if cfg.last_camera_check else None,

@@ -376,6 +376,7 @@ export function useWebSocket() {
             seq: msg.data.seq as number,
             uptime_ms: msg.data.uptime_ms as number,
             door: msg.data.door as string | undefined,
+            smart_mode: msg.data.smart_mode as boolean | undefined,  // v3.28
             timestamp: msg.data.timestamp as string,
           })
           // Heartbeat carries door field — sync marinaDoorState so the

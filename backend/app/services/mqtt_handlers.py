@@ -651,9 +651,21 @@ async def _handle_marina_status(cabinet_id: str, payload: str):
         logger.warning("[Marina] Bad status payload from cabinet %s: %s", cabinet_id, e)
         return
 
+    smart_mode_val = None
     db = SessionLocal()
     try:
         pedestal_id = _cabinet_to_pedestal_id(db, cabinet_id)
+        if pedestal_id is not None:
+            from ..models.pedestal_config import PedestalConfig
+            cfg = db.query(PedestalConfig).filter(PedestalConfig.pedestal_id == pedestal_id).first()
+            # v3.28 — update SmartMode ONLY when the firmware includes the field;
+            # an absent `smartMode` must not clobber the stored value.
+            if cfg is not None and "smartMode" in data:
+                new_sm = bool(data["smartMode"])
+                if cfg.smart_mode != new_sm:
+                    cfg.smart_mode = new_sm
+                    db.commit()
+            smart_mode_val = bool(cfg.smart_mode) if cfg is not None else None
     finally:
         db.close()
 
@@ -679,6 +691,7 @@ async def _handle_marina_status(cabinet_id: str, payload: str):
             "seq": data.get("seq", 0),
             "uptime_ms": data.get("uptime_ms", 0),
             "door": data.get("door"),
+            "smart_mode": smart_mode_val,
             "timestamp": datetime.utcnow().isoformat(),
         },
     })

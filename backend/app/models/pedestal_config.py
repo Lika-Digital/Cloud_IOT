@@ -78,6 +78,13 @@ class PedestalConfig(Base):
     led_pending      = Column(Boolean, default=False)
     led_confirmed_at = Column(DateTime, nullable=True)
 
+    # v3.28 — firmware SmartMode (fw v3.0.0). False = Opta runs standalone and
+    # ignores NUC commands (dashboard read-only for this pedestal); True = Opta
+    # hands full control to the NUC (sessions/NFC/auto-activate/load/billing).
+    # Defaults False on every firmware boot; updated from the `smartMode` field
+    # on opta/status and via POST /api/pedestals/{cabinet_id}/smartmode.
+    smart_mode = Column(Boolean, default=False)
+
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

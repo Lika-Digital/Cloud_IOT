@@ -99,6 +99,7 @@ export interface BerthStatus {
 export interface PedestalHealth {
   opta_connected: boolean
   opta_client_id?: string | null
+  smart_mode?: boolean   // v3.28 — firmware SmartMode
   last_heartbeat: string | null
   camera_reachable: boolean
   last_camera_check: string | null
@@ -130,6 +131,7 @@ export interface OptaStatusInfo {
   seq: number
   uptime_ms: number
   door?: string
+  smart_mode?: boolean   // v3.28 — firmware SmartMode (null/undefined = unknown)
   timestamp: string
 }
 

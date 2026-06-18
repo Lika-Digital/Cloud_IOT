@@ -1,4 +1,29 @@
-# Implementation Status — B5 activate dedup + B6 manual-stop auto-disable (v3.28, IN PROGRESS)
+# Implementation Status — SmartMode (firmware v3.0.0) (v3.28, IN PROGRESS)
+
+## 2026-06-18 — "Kreni" (SmartMode; decisions A–G confirmed; bundled with B5/B6)
+
+SmartMode: fw v3.0.0 flag. False = Opta standalone (ignores NUC cmds, dashboard read-only); True = NUC full control. Defaults False on boot.
+
+### Backend
+- [DONE] `backend/app/models/pedestal_config.py` — `smart_mode = Column(Boolean, default=False)`.
+- [DONE] `backend/app/database.py` — migration `("pedestal_configs","smart_mode","INTEGER DEFAULT 0")`.
+- [DONE] `backend/app/services/mqtt_handlers.py` `_handle_marina_status` — parse `smartMode` ONLY if present in opta/status payload → persist cfg.smart_mode; include `smart_mode` in `opta_status` broadcast.
+- [DONE] `backend/app/routers/pedestal_config.py` — `smart_mode` added to `GET /api/pedestals/health`; new `POST /api/pedestals/{cabinet_id}/smartmode` (require_admin, body {value:bool}) → publish `opta/cmd/smartmode {"value":bool}` + optimistic cfg.smart_mode + 404 unknown cabinet.
+- [VERIFIED] smoke: smart_mode column created; /api/pedestals/{cabinet_id}/smartmode registered; app imports.
+### Frontend
+- [DONE] `frontend/src/store/index.ts` — `smart_mode?` on `OptaStatusInfo` + `PedestalHealth`.
+- [DONE] `frontend/src/hooks/useWebSocket.ts` — opta_status handler passes `smart_mode` to setOptaStatusInfo.
+- [DONE] `frontend/src/api/pedestalConfig.ts` — `setSmartMode(cabinetId, value)` + smart_mode on PedestalHealth type.
+- [DONE] `frontend/src/components/pedestal/PedestalControlCenter.tsx` — new `SmartModeControl` (distinct emerald/amber card + switch + exact OFF/ON text) rendered above Cabinet Status (only when opta_client_id); optimistic toggle reverts on failure; live from optaStatusInfo, hydrate from health. SocketCard gains `smartMode` prop → Activate disabled + tooltip "Enable Smart Mode to activate sockets." when off. `tsc --noEmit` clean.
+### Tests
+- [DONE] `tests/backend/test_smartmode.py` (9) — status true/false/absent(preserve), opta_status broadcast includes smart_mode, POST true/false publishes opta/cmd/smartmode + returns, missing-auth 401/403, unknown cabinet 404, health includes smart_mode.
+- [VERIFIED] full backend suite **530 passed** (521 + 9 SmartMode), tsc clean — no regressions.
+- [DONE] `README.md` — v3.28 SmartMode changelog entry (alongside B5/B6).
+- RELEASE: user approved "merge i push na main" — SmartMode + B5/B6 commits → develop → main (one release).
+
+---
+
+# Implementation Status — B5 activate dedup + B6 manual-stop auto-disable (v3.28, RELEASED-PENDING)
 
 ## 2026-06-18 — "Kreni. B5 prvo, zatim B6" (decisions A–E all confirmed)
 

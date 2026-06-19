@@ -29,6 +29,7 @@ def _isolate():
 
     mh._standalone_usage_last.clear()
     mh._standalone_usage_low_since.clear()
+    mh._meter_energy_last.clear()
 
     db = _S()
     try:
@@ -111,15 +112,38 @@ def test_standalone_session_created_on_draw():
     assert s.customer_id is None
 
 
-def test_standalone_energy_integrates():
-    _set_mode(smart=False)
-    _set_power(1, 0.49)
+def test_meter_handler_integrates_energy_power_x_time():
+    """v3.32 — energy is integrated by the live meter path (power × time) for
+    whatever session is active, since the Opta's energyKwh register reads 0."""
+    from app.services import mqtt_handlers as mh
+    from app.models.session import Session as SModel
+    # An active session (any kind) on Q1.
+    db = _S()
+    try:
+        s = SModel(pedestal_id=PID, socket_id=1, type="electricity",
+                   status="active", started_at=datetime(2026, 6, 19, 12, 0, 0),
+                   energy_kwh=0.0)
+        db.add(s); db.commit(); db.refresh(s)
+        sid = s.id
+    finally:
+        db.close()
+
+    mh._meter_energy_last.clear()
     t0 = datetime(2026, 6, 19, 12, 0, 0)
-    _tick(t0)                       # create
-    _tick(t0 + timedelta(hours=1))  # integrate ~0.49 kWh over 1h
-    s = _active(1)
-    assert s is not None
-    assert s.energy_kwh == pytest.approx(0.49, abs=1e-3)
+    db = _S()
+    try:
+        mh._integrate_session_energy(db, PID, 1, 1.0, now=t0)                       # baseline
+        mh._integrate_session_energy(db, PID, 1, 1.0, now=t0 + timedelta(seconds=30))  # +30 s @ 1 kW
+        db.commit()
+        s = db.get(SModel, sid)
+        assert s.energy_kwh == pytest.approx(1.0 * 30 / 3600, abs=1e-6)   # 0.008333 kWh
+        # Gap > 60 s (e.g. a restart) is ignored, not over-counted.
+        mh._integrate_session_energy(db, PID, 1, 1.0, now=t0 + timedelta(hours=2))
+        db.commit()
+        s = db.get(SModel, sid)
+        assert s.energy_kwh == pytest.approx(1.0 * 30 / 3600, abs=1e-6)   # unchanged
+    finally:
+        db.close()
 
 
 def test_standalone_completes_when_draw_stops_and_shows_in_history():
@@ -128,11 +152,10 @@ def test_standalone_completes_when_draw_stops_and_shows_in_history():
     _set_power(1, 0.49)
     t0 = datetime(2026, 6, 19, 12, 0, 0)
     _tick(t0)                                  # create
-    _tick(t0 + timedelta(hours=1))             # integrate
     _set_power(1, 0.0)                          # draw stops
-    _tick(t0 + timedelta(hours=1, seconds=10))  # below threshold -> low_since
+    _tick(t0 + timedelta(seconds=10))           # below threshold -> low_since
     assert _active(1) is not None              # still within grace
-    _tick(t0 + timedelta(hours=1, seconds=200))  # past 120s grace -> complete
+    _tick(t0 + timedelta(seconds=200))          # past 120s grace -> complete
     assert _active(1) is None
 
     db = _S()
@@ -141,8 +164,7 @@ def test_standalone_completes_when_draw_stops_and_shows_in_history():
     finally:
         db.close()
     assert len(rows) == 1
-    assert rows[0]["customer_name"] is None
-    assert rows[0]["energy_kwh"] == pytest.approx(0.49, abs=1e-3)
+    assert rows[0]["customer_name"] is None     # standalone — customer blank
 
 
 def test_no_standalone_session_when_smart_mode_on():

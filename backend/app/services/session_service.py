@@ -124,7 +124,10 @@ class SessionService:
                 # Firmware sends session-cumulative energy (resets to 0 at session
                 # start, rises to session total). Final value = max, which also
                 # covers short sessions where only the SessionEnded reading exists.
-                session.energy_kwh = max(kwh_readings)
+                # v3.32 — never below the live power×time integration accumulated
+                # on the session row (the Opta's energyKwh register reads 0, so
+                # that integral is the real source of energy for most sockets).
+                session.energy_kwh = max(max(kwh_readings), session.energy_kwh or 0.0)
         elif session.type == "water":
             liter_readings = [r.value for r in readings
                               if r.type == "total_liters" and r.value < _MAX_SANE_LITERS_PER_SESSION]

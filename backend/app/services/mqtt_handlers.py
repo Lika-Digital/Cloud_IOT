@@ -1014,6 +1014,35 @@ _STANDALONE_TICK_S = 30
 _standalone_usage_last: dict = {}        # (pid, sid) -> (datetime, power_kw)
 _standalone_usage_low_since: dict = {}   # (pid, sid) -> datetime first below threshold
 
+# v3.32 — per-socket power×time energy integration state for the LIVE meter
+# handler: (pid, sid) -> (last_sample_time, last_power_kw, session_id).
+_meter_energy_last: dict = {}
+
+
+def _integrate_session_energy(db, pedestal_id: int, socket_id: int, power_kw, now=None) -> None:
+    """Accumulate energy_kwh on the active electricity session from power × time.
+
+    Called on every meter tick (~5 s). Because the Opta's cumulative `energyKwh`
+    register reads 0, this trapezoidal integral is the real source of energy for
+    ANY active session (operator / customer / NFC OR standalone). dt is the gap
+    between received samples, clamped to ignore restarts; resets per session id.
+    """
+    now = now or datetime.utcnow()
+    from .session_service import session_service as _ss
+    active = _ss.get_active_for_socket(db, pedestal_id, socket_id, session_type="electricity")
+    key = (pedestal_id, socket_id)
+    if active is None:
+        _meter_energy_last.pop(key, None)
+        return
+    p = float(power_kw or 0.0)
+    last = _meter_energy_last.get(key)
+    if last is not None and last[2] == active.id:
+        dt_s = (now - last[0]).total_seconds()
+        if 0 < dt_s <= 60:
+            avg_kw = (last[1] + p) / 2.0
+            active.energy_kwh = (active.energy_kwh or 0.0) + avg_kw * (dt_s / 3600.0)
+    _meter_energy_last[key] = (now, p, active.id)
+
 
 async def _standalone_usage_tick(now: datetime) -> None:
     """One pass over every electricity socket: open/integrate/close standalone
@@ -1048,7 +1077,6 @@ async def _standalone_usage_tick(now: datetime) -> None:
 
             if _socket_delivering_power(sc):
                 _standalone_usage_low_since.pop(key, None)
-                power = float(getattr(sc, "meter_power_kw", 0.0) or 0.0)
                 if open_sess is None:
                     s = _Session(
                         pedestal_id=pid, socket_id=sid, type="electricity",
@@ -1057,17 +1085,10 @@ async def _standalone_usage_tick(now: datetime) -> None:
                     )
                     db.add(s)
                     db.flush()
-                    _standalone_usage_last[key] = (now, power)
                     broadcasts.append(("session_created", s, pid, sid))
-                elif standalone_open is not None:
-                    last = _standalone_usage_last.get(key)
-                    if last is not None:
-                        dt_h = (now - last[0]).total_seconds() / 3600.0
-                        if dt_h > 0:
-                            avg_kw = (last[1] + power) / 2.0
-                            standalone_open.energy_kwh = (standalone_open.energy_kwh or 0.0) + avg_kw * dt_h
-                    _standalone_usage_last[key] = (now, power)
-                # else: a non-standalone session is open in OFF — leave it alone.
+                # Energy is integrated by the live meter handler (every ~5 s) for
+                # whatever session is active — including this standalone one — so
+                # the watchdog only opens/closes; it never touches energy_kwh.
             else:
                 if standalone_open is not None:
                     first_low = _standalone_usage_low_since.setdefault(key, now)
@@ -2801,6 +2822,9 @@ async def _handle_opta_meter_telemetry(socket_name: str, payload: str) -> None:
                     resolved = _resolve_open("auto-resolve")
                     if resolved:
                         broadcasts.append({"event": "meter_load_resolved"})
+
+        # v3.32 — integrate session energy from power × time on every meter tick.
+        _integrate_session_energy(db, pedestal_id, socket_id, cfg.meter_power_kw)
 
         db.commit()
     finally:

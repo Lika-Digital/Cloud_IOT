@@ -366,6 +366,22 @@ def set_smart_mode(
 
     cfg.smart_mode = bool(body.value)
     db.commit()
+
+    # v3.30 — Smart Mode OFF reconciliation. Turning ON requests a diagnostic to
+    # light up the Activate button for already-inserted cables; turning OFF must
+    # do the symmetric cleanup, otherwise stale `awaiting_activation`/`pending`
+    # markers and never-activated pending sessions keep showing actionable
+    # "pending" badges on a now read-only (standalone) pedestal. Fire-and-forget
+    # onto the MQTT event loop so the HTTP response is not blocked.
+    if not bool(body.value):
+        import asyncio
+        from ..services.mqtt_handlers import reconcile_pedestal_standalone
+        loop = getattr(mqtt_service, "_loop", None)
+        if loop is not None and loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                reconcile_pedestal_standalone(cfg.pedestal_id), loop
+            )
+
     return {"cabinet_id": cabinet_id, "smart_mode": bool(body.value)}
 
 

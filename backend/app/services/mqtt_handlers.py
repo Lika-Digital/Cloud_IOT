@@ -449,6 +449,26 @@ async def _handle_marina_socket(cabinet_id: str, socket_name: str, payload: str)
         else:
             state_row = SocketState(pedestal_id=pedestal_id, socket_id=socket_id, connected=is_connected)
             db.add(state_row)
+
+        # v3.30 — standalone defensive clear. In Smart Mode OFF the dashboard is
+        # read-only, so a socket the firmware reports `idle` with no session must
+        # not linger as `awaiting_activation`/`pending` (that marker only makes
+        # sense for the NUC-driven Activate flow). Without this, a marker set
+        # while Smart Mode was ON survives the periodic idle poll forever. Gated
+        # on smart_mode=False so the sticky-pending behaviour is untouched while
+        # the NUC is in control.
+        if (
+            raw_state == "idle"
+            and data.get("session") is None
+            and state_row.operator_status in ("pending", "awaiting_activation")
+        ):
+            from ..models.pedestal_config import PedestalConfig
+            _cfg = db.query(PedestalConfig).filter(
+                PedestalConfig.pedestal_id == pedestal_id
+            ).first()
+            if _cfg is not None and not _cfg.smart_mode:
+                state_row.operator_status = None
+                state_row.operator_status_at = None
         db.commit()
 
         # v3.18 — adopt a session the hardware is already running. If the Opta
@@ -879,6 +899,58 @@ def _set_socket_connected(db, pedestal_id: int, socket_id: int, connected: bool)
             connected=connected,
         )
         db.add(state)
+
+
+async def reconcile_pedestal_standalone(pedestal_id: int) -> None:
+    """v3.30 — Smart Mode OFF reconciliation.
+
+    When a cabinet drops to standalone (firmware controls power directly; the
+    dashboard is read-only for that pedestal), the NUC must not keep showing
+    actionable "pending" badges left over from the Smart Mode session/plug-in
+    flow. Clear any stale per-socket `operator_status` markers
+    (awaiting_activation/pending) and deny any electricity session still stuck in
+    `pending` (created but never activated), then re-broadcast the resolved
+    display state so the dashboard falls back to idle/fault.
+
+    Active sessions are left untouched — an adopted live session stays tracked.
+    Fault precedence is preserved: a tripped breaker / hardware fault still wins,
+    so a faulted socket keeps showing `fault`, not `idle`.
+    """
+    from ..models.pedestal_config import SocketState
+    from ..models.session import Session as _S
+
+    changed_sockets: set[int] = set()
+    states: dict[int, str] = {}
+    db = SessionLocal()
+    try:
+        for ss in db.query(SocketState).filter(
+            SocketState.pedestal_id == pedestal_id
+        ).all():
+            if ss.operator_status in ("pending", "awaiting_activation"):
+                ss.operator_status = None
+                ss.operator_status_at = None
+                changed_sockets.add(ss.socket_id)
+        # Tear down sessions never activated; leave live `active` sessions alone.
+        for s in db.query(_S).filter(
+            _S.pedestal_id == pedestal_id,
+            _S.type == "electricity",
+            _S.status == "pending",
+        ).all():
+            session_service.deny(db, s, reason="Smart Mode disabled")  # commits
+            if s.socket_id is not None:
+                changed_sockets.add(s.socket_id)
+        db.commit()
+
+        for sid in changed_sockets:
+            states[sid] = _compute_socket_display_state(db, pedestal_id, sid)
+    finally:
+        db.close()
+
+    for sid, st in states.items():
+        await _broadcast_socket_state(pedestal_id, sid, st, resource="POWER")
+    if states:
+        logger.info("[Standalone] pedestal=%d reconciled sockets %s on Smart Mode OFF",
+                    pedestal_id, sorted(states.keys()))
 
 
 async def _handle_event_user_plugged_in(db, pedestal_id: int, outlet_id: str, resource: str, data: dict):

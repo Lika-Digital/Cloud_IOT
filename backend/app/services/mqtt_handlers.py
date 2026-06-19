@@ -1002,6 +1002,112 @@ async def reconcile_pedestal_standalone(pedestal_id: int) -> None:
                     pedestal_id, sorted(states.keys()))
 
 
+# ── v3.32 — standalone usage recording ───────────────────────────────────────
+# When Smart Mode is OFF the Opta runs the sockets standalone and emits no
+# control session, but it DOES report the meter. This watchdog turns sustained
+# consumption into a usage session (origin="standalone", customer blank) so it
+# shows in Usage History, and integrates energy from power x time because the
+# firmware reports energyKwh=0. When Smart Mode is ON the control flow owns
+# sessions, so any lingering standalone session is completed and handed back.
+_STANDALONE_USAGE_STOP_GRACE_S = 120     # complete after this long below threshold
+_STANDALONE_TICK_S = 30
+_standalone_usage_last: dict = {}        # (pid, sid) -> (datetime, power_kw)
+_standalone_usage_low_since: dict = {}   # (pid, sid) -> datetime first below threshold
+
+
+async def _standalone_usage_tick(now: datetime) -> None:
+    """One pass over every electricity socket: open/integrate/close standalone
+    usage sessions based on the live meter and the pedestal's Smart Mode."""
+    from ..models.socket_config import SocketConfig
+    from ..models.pedestal_config import PedestalConfig
+    from ..models.session import Session as _Session
+    from .session_service import session_service as _ss
+
+    broadcasts: list[tuple] = []
+    db = SessionLocal()
+    try:
+        smart_off = {
+            c.pedestal_id for c in db.query(PedestalConfig).all() if not c.smart_mode
+        }
+        for sc in db.query(SocketConfig).all():
+            pid, sid = sc.pedestal_id, sc.socket_id
+            key = (pid, sid)
+            open_sess = _ss.get_active_for_socket(db, pid, sid, session_type="electricity")
+            standalone_open = open_sess if (
+                open_sess is not None and getattr(open_sess, "origin", None) == "standalone"
+            ) else None
+
+            if pid not in smart_off:
+                # Smart Mode ON — hand control back: complete any standalone session.
+                if standalone_open is not None:
+                    _ss.complete(db, standalone_open)
+                    _standalone_usage_last.pop(key, None)
+                    _standalone_usage_low_since.pop(key, None)
+                    broadcasts.append(("session_completed", standalone_open, pid, sid))
+                continue
+
+            if _socket_delivering_power(sc):
+                _standalone_usage_low_since.pop(key, None)
+                power = float(getattr(sc, "meter_power_kw", 0.0) or 0.0)
+                if open_sess is None:
+                    s = _Session(
+                        pedestal_id=pid, socket_id=sid, type="electricity",
+                        status="active", started_at=now, energy_kwh=0.0,
+                        customer_id=None, origin="standalone",
+                    )
+                    db.add(s)
+                    db.flush()
+                    _standalone_usage_last[key] = (now, power)
+                    broadcasts.append(("session_created", s, pid, sid))
+                elif standalone_open is not None:
+                    last = _standalone_usage_last.get(key)
+                    if last is not None:
+                        dt_h = (now - last[0]).total_seconds() / 3600.0
+                        if dt_h > 0:
+                            avg_kw = (last[1] + power) / 2.0
+                            standalone_open.energy_kwh = (standalone_open.energy_kwh or 0.0) + avg_kw * dt_h
+                    _standalone_usage_last[key] = (now, power)
+                # else: a non-standalone session is open in OFF — leave it alone.
+            else:
+                if standalone_open is not None:
+                    first_low = _standalone_usage_low_since.setdefault(key, now)
+                    if (now - first_low).total_seconds() >= _STANDALONE_USAGE_STOP_GRACE_S:
+                        _ss.complete(db, standalone_open)
+                        _standalone_usage_last.pop(key, None)
+                        _standalone_usage_low_since.pop(key, None)
+                        broadcasts.append(("session_completed", standalone_open, pid, sid))
+        db.commit()
+        for evt, sess, pid, sid in broadcasts:
+            db.refresh(sess)
+    finally:
+        db.close()
+
+    for evt, sess, pid, sid in broadcasts:
+        await ws_manager.broadcast({
+            "event": evt,
+            "data": {
+                "session_id": sess.id, "pedestal_id": pid, "socket_id": sid,
+                "type": "electricity",
+                "status": sess.status,
+                "energy_kwh": sess.energy_kwh,
+                "customer_id": None, "customer_name": None,
+                "origin": "standalone",
+                "started_at": sess.started_at.isoformat() if sess.started_at else None,
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+        })
+
+
+async def run_standalone_usage_watchdog() -> None:
+    """Lifespan task — ticks every 30 s."""
+    while True:
+        await asyncio.sleep(_STANDALONE_TICK_S)
+        try:
+            await _standalone_usage_tick(datetime.utcnow())
+        except Exception as e:
+            logger.warning("[StandaloneUsage] tick failed: %s", e)
+
+
 async def _handle_event_user_plugged_in(db, pedestal_id: int, outlet_id: str, resource: str, data: dict):
     """UserPluggedIn — marks socket as physically connected and moves the
     computed socket state to `pending` when no session is running. A session

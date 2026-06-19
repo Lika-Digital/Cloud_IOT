@@ -38,6 +38,12 @@ class Session(Base):
     # Integer FK to our local Customer table). NULL for non-NFC sessions.
     nfc_user_id: Mapped[str] = mapped_column(String(128), nullable=True)
 
+    # v3.32 — provenance. NULL for normal control sessions; "standalone" for
+    # meter-driven usage records the NUC opens while Smart Mode is OFF (the Opta
+    # runs standalone with no control session, but consumption is still logged
+    # to Usage History). customer_id / nfc_user_id stay NULL for these.
+    origin: Mapped[str] = mapped_column(String(32), nullable=True)
+
     pedestal: Mapped["Pedestal"] = relationship("Pedestal", back_populates="sessions")  # noqa: F821
     sensor_readings: Mapped[list["SensorReading"]] = relationship(  # noqa: F821
         "SensorReading", back_populates="session"

@@ -83,6 +83,32 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-06-19 — Socket state correctness in both modes (v3.32)
+
+Driven by field MQTT/UI review: the dashboard now reflects what the Opta actually
+reports, in **both** Smart Mode ON and OFF.
+
+- **Breaker state hydrated on load** — the per-socket breaker panel was populated
+  only by the change-only `breaker_state_changed` WS event, so a browser that
+  connected after the (retained) message was processed showed "Unknown /
+  Not reported". `PedestalView` now fetches each socket's breaker status on mount,
+  so a tripped breaker (e.g. Q3) shows **BREAKER TRIPPED** as the visible fault reason.
+- **Meter-aware socket state** — a socket physically delivering power (live meter
+  ≥ 50 W or 0.3 A) now shows **active** even with no NUC session, so a standalone
+  socket passing power no longer shows "idle". Fault still wins.
+- **Overload is a non-terminal alarm** — the ≥90% load status was sticky (a socket
+  briefly overloaded kept showing "AUTO-STOP" at 10% load). It now auto-resolves
+  when the load drops, like warning/critical. The NUC still never stops the socket
+  (alarm-only since v3.30); UI copy corrected to "OVERLOAD ALARM".
+- **Standalone usage recording** — when Smart Mode is OFF the NUC now logs sustained
+  consumption as a usage session (`origin="standalone"`, customer blank) with energy
+  integrated from power × time (the firmware reports `energyKwh=0`), so standalone
+  consumption appears in **Usage History**. Completed on draw-stop; handed back to
+  control when Smart Mode is turned ON.
+- **History UI** — the per-outlet "History" button is now **Usage**; electricity
+  sockets gain an **Alarms** button opening an **Operational Alarms History**
+  (breaker trips + load alarms, merged newest-first).
+
 ### 2026-06-19 — Socket/valve usage history + monthly reports (v3.31)
 
 Per-socket and per-valve **usage history**, viewable in the dashboard and downloadable

@@ -633,6 +633,8 @@ async def lifespan(app: FastAPI):
     cleanup_task         = asyncio.create_task(_hourly_log_purge())
     retention_task       = asyncio.create_task(_data_retention_purge())
     usage_report_task    = asyncio.create_task(_monthly_usage_report_writer())  # v3.31
+    from .services.mqtt_handlers import run_standalone_usage_watchdog
+    standalone_usage_task = asyncio.create_task(run_standalone_usage_watchdog())  # v3.32
     status_writer_task   = asyncio.create_task(_status_snapshot_writer())
     watchdog_task        = asyncio.create_task(_pending_session_watchdog())
     socket_pending_task  = asyncio.create_task(_socket_pending_watchdog())
@@ -654,6 +656,7 @@ async def lifespan(app: FastAPI):
     cleanup_task.cancel()
     retention_task.cancel()
     usage_report_task.cancel()
+    standalone_usage_task.cancel()
     status_writer_task.cancel()
     watchdog_task.cancel()
     socket_pending_task.cancel()

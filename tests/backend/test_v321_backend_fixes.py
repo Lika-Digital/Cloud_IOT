@@ -197,6 +197,63 @@ def test_b2_hw_ok_active_session_displays_active():
     assert state == "active"
 
 
+def test_b2_meter_draw_displays_active_without_session():
+    """v3.32 — a socket physically delivering power shows active even with NO
+    NUC session (covers Smart Mode OFF / standalone passing power)."""
+    pid = _ensure_cabinet()
+    _seed_hw_config(pid, 1, rated_amps=32.0, breaker_state="closed", meter_power_kw=0.49)
+    _seed_socket_state(pid, 1, connected=True)
+    from app.services.mqtt_handlers import _compute_socket_display_state
+    db = _TestSession()
+    try:
+        state = _compute_socket_display_state(db, pid, 1, raw_state="idle", hw_status="off")
+    finally:
+        db.close()
+    assert state == "active"
+
+
+def test_b2_no_meter_draw_stays_idle():
+    """v3.32 — below the small power/current threshold the badge stays idle."""
+    pid = _ensure_cabinet()
+    _seed_hw_config(pid, 1, rated_amps=32.0, breaker_state="closed",
+                    meter_power_kw=0.0, meter_current_amps=0.0,
+                    meter_current_l1=0.0, meter_current_l2=0.0, meter_current_l3=0.0)
+    _seed_socket_state(pid, 1, connected=True)
+    # Clear leftover operator_status + any session on the shared row so the only
+    # signal under test is the (absent) meter draw.
+    from app.models.pedestal_config import SocketState
+    from app.models.session import Session as _Sess
+    _db = _TestSession()
+    try:
+        _row = _db.query(SocketState).filter_by(pedestal_id=pid, socket_id=1).first()
+        _row.operator_status = None
+        _db.query(_Sess).filter_by(pedestal_id=pid, socket_id=1).delete(synchronize_session=False)
+        _db.commit()
+    finally:
+        _db.close()
+    from app.services.mqtt_handlers import _compute_socket_display_state
+    db = _TestSession()
+    try:
+        state = _compute_socket_display_state(db, pid, 1, raw_state="idle", hw_status="off")
+    finally:
+        db.close()
+    assert state == "idle"
+
+
+def test_b2_meter_draw_does_not_override_fault():
+    """v3.32 — fault still wins over a live meter draw (tripped breaker)."""
+    pid = _ensure_cabinet()
+    _seed_hw_config(pid, 1, rated_amps=32.0, breaker_state="tripped", meter_power_kw=0.49)
+    _seed_socket_state(pid, 1, connected=True)
+    from app.services.mqtt_handlers import _compute_socket_display_state
+    db = _TestSession()
+    try:
+        state = _compute_socket_display_state(db, pid, 1)
+    finally:
+        db.close()
+    assert state == "fault"
+
+
 def test_b2_fault_precedence_in_websocket_broadcast():
     pid = _ensure_cabinet()
     _seed_hw_config(pid, 1, rated_amps=16.0, breaker_state="closed")

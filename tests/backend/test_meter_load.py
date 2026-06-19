@@ -863,21 +863,21 @@ def test_autostop_terminal_does_not_fire_again():
         db.close()
 
 
-def test_autostop_terminal_persists_when_load_drops_below_90():
-    """TC-ML-40 — D1: auto_stop is terminal. After the trip, even if load
-    drops to 0%, status stays auto_stop until the operator's ack endpoint
-    clears the latch."""
+def test_autostop_auto_resolves_when_load_drops_below_90():
+    """TC-ML-40 (v3.32) — overload is NON-terminal: after the alarm, when load
+    drops back to normal the status follows the live load and the latch clears
+    (no more stale 'AUTO-STOP' badge on a socket that is now idle)."""
     pid = _ensure_cabinet()
     _seed_hw_config(pid, 1, meter_type="ABB", phases=1, rated_amps=32.0)
 
     captured, mqtt_patch = _capture_mqtt_publishes()
     with mqtt_patch:
-        _trip_to(95, pid)   # auto-stop
+        _trip_to(95, pid)   # overload alarm
         _trip_to(40, pid)   # load drops back into normal range
 
     cfg = _get_socket_cfg(pid, 1)
-    assert cfg.meter_load_status == "auto_stop"
-    assert bool(cfg.auto_stop_pending_ack) is True
+    assert cfg.meter_load_status == "normal"
+    assert bool(cfg.auto_stop_pending_ack) is False
 
 
 def _seed_socket_state(pedestal_id: int, socket_id: int, **fields) -> None:
@@ -1199,7 +1199,7 @@ def test_autostop_supersedes_open_warning_critical_rows():
         ).all()
         assert len(crit_rows) == 1
         assert crit_rows[0].resolved_at is not None
-        assert crit_rows[0].resolved_by == "auto-stop-supersedes"
+        assert crit_rows[0].resolved_by == "overload-supersedes"
 
         autostop_open = db.query(MeterLoadAlarm).filter_by(
             pedestal_id=pid, socket_id=1, alarm_type="auto_stop", resolved_at=None,

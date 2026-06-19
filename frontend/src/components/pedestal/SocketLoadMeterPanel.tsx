@@ -30,10 +30,10 @@ const STATUS_BAR_COLOR: Record<LoadStatus, string> = {
   normal:    'bg-green-500',
   warning:   'bg-yellow-500',
   critical:  'bg-red-500 animate-pulse',
-  // v3.12 — solid red with strong pulse to distinguish from `critical`
-  // (which also pulses but is a yellow→red transition state). The
-  // `auto_stop` bar is rendered at 90 %+ fill regardless of live amps
-  // because the socket has been forcibly de-energised.
+  // v3.12 — solid red with strong pulse to distinguish from `critical`.
+  // v3.30/v3.32 — `auto_stop` is an OVERLOAD ALARM only (the NUC never stops
+  // the socket; the Opta/breaker owns protection) and is non-terminal: it
+  // auto-resolves when the load drops back below threshold.
   auto_stop: 'bg-red-600 ring-2 ring-red-400 animate-pulse',
   unknown:   'bg-gray-500',
 }
@@ -42,7 +42,7 @@ const STATUS_TEXT: Record<LoadStatus, string> = {
   normal:    'Normal',
   warning:   'High load',
   critical:  'CRITICAL load — act now',
-  auto_stop: 'AUTO-STOP — overload protection',
+  auto_stop: 'OVERLOAD (≥90%)',
   unknown:   'Unknown',
 }
 
@@ -225,10 +225,10 @@ export default function SocketLoadMeterPanel({
           aria-live="assertive"
         >
           <p className="text-sm font-bold">
-            ⚡ AUTO-STOP — OVERLOAD PROTECTION ACTIVATED
+            ⚡ OVERLOAD ALARM
           </p>
           <p className="text-[12px] leading-snug">
-            Socket stopped automatically at{' '}
+            Reached{' '}
             <span className="font-mono">
               {fmtNum(autoStopAlarm?.load_pct ?? loadPct, 0, '%')}
             </span>{' '}
@@ -237,10 +237,10 @@ export default function SocketLoadMeterPanel({
               ({fmtNum(autoStopAlarm?.current_amps ?? totalAmps, 1, 'A')} /{' '}
               {fmtNum(autoStopAlarm?.rated_amps ?? ratedAmps, 0, 'A')})
             </span>
-            .
+            . The NUC reports only — the Opta/breaker owns protection.
           </p>
           <p className="text-[12px] text-red-200/90">
-            Investigate the load before re-activating.
+            Investigate the load. This clears automatically when the load drops.
           </p>
           {isAdmin && (
             <button
@@ -249,7 +249,7 @@ export default function SocketLoadMeterPanel({
               disabled={ackBusy}
               className="text-xs px-3 py-1 rounded bg-red-600 hover:bg-red-500 text-white font-medium disabled:opacity-40"
             >
-              {ackBusy ? 'Acknowledging…' : 'Acknowledge & Enable Re-activation'}
+              {ackBusy ? 'Acknowledging…' : 'Acknowledge'}
             </button>
           )}
         </div>

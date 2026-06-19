@@ -855,15 +855,38 @@ async def _broadcast_socket_state(pedestal_id: int, socket_id: int, new_state: s
     })
 
 
+# v3.32 — a socket is "delivering power" when the live meter shows real draw.
+# Small thresholds so standby/measurement noise does not flicker the badge.
+_METER_ACTIVE_KW = 0.05       # >= 50 W
+_METER_ACTIVE_AMPS = 0.30     # >= 0.3 A on any phase
+
+
+def _socket_delivering_power(cfg) -> bool:
+    """True when the live meter shows real current/power above a small
+    threshold. Handles single- and three-phase configs (the Opta reports the
+    meter in BOTH Smart Mode ON and OFF)."""
+    if cfg is None:
+        return False
+    pwr = getattr(cfg, "meter_power_kw", None)
+    if pwr is not None and pwr >= _METER_ACTIVE_KW:
+        return True
+    for field in ("meter_current_amps", "meter_current_l1", "meter_current_l2", "meter_current_l3"):
+        c = getattr(cfg, field, None)
+        if c is not None and c >= _METER_ACTIVE_AMPS:
+            return True
+    return False
+
+
 def _compute_socket_display_state(
     db, pedestal_id: int, socket_id: int, *, raw_state: str = "", hw_status: str = "",
 ) -> str:
     """B2 (v3.21) — unified socket display state with fault precedence.
 
-    Precedence: fault > active > pending > idle. A hardware fault or a tripped
-    breaker always wins over the logical session state. This affects DISPLAY
-    only — the internal session is never modified, so when the fault clears the
-    resolved state automatically falls back to the live session state.
+    Precedence: fault > active(session or live meter) > pending > idle. A
+    hardware fault or a tripped breaker always wins. v3.32 — a socket that is
+    physically delivering power (live meter above threshold) is shown active
+    even with no NUC session, so a standalone (Smart Mode OFF) socket passing
+    power shows active instead of idle. Display only — sessions are untouched.
 
     Fault signals (D5): the live message reports `fault`, OR the persisted
     `SocketConfig.breaker_state == "tripped"`, OR `SocketState.connected is
@@ -888,6 +911,11 @@ def _compute_socket_display_state(
     ).first()
     if ss is not None and ss.connected is False:
         return "fault"
+
+    # v3.32 — live meter shows real draw → active, regardless of session
+    # bookkeeping (covers Smart Mode OFF / standalone sockets passing power).
+    if _socket_delivering_power(cfg):
+        return "active"
 
     from .session_service import session_service as _ss
     active = _ss.get_active_for_socket(db, pedestal_id, socket_id, session_type="electricity")
@@ -2553,72 +2581,54 @@ async def _handle_opta_meter_telemetry(socket_name: str, payload: str) -> None:
         # the live readings (already done above) and emit the per-tick
         # telemetry broadcast at the bottom of the function so the dashboard
         # sees current load_pct even while suspended.
-        if prev_status == "auto_stop":
+        # v3.32 — overload (>=90%) is a NON-terminal alarm state. Previously it
+        # latched terminally ("auto_stop" stayed until an operator ack), which
+        # left the dashboard showing "AUTO-STOP — overload protection" long
+        # after the load had dropped (e.g. a socket at 10% still flagged). It
+        # now raises an alarm on the way UP and auto-resolves on the way DOWN,
+        # exactly like warning/critical. The NUC still never shuts the socket
+        # down (v3.30 — alarm-only); the Opta/breaker owns protection.
+        if load_pct >= 90.0:
             new_status = "auto_stop"
             cfg.meter_load_status = "auto_stop"
-
-        # v3.12 — New 90% threshold crossing. Steps 1-7 from the spec, all
-        # persisted in the surrounding db.commit() at the bottom of this
-        # branch so a crash mid-sequence cannot leave the latch and the
-        # session in inconsistent states.
-        elif load_pct >= 90.0:
-            new_status = "auto_stop"
-
-            # Step 1 — status + latch. v3.30 — the NUC NO LONGER shuts the
-            # socket down on overload; it ONLY raises an alarm. The Opta owns
-            # protective action (the breaker). We keep the `auto_stop` status +
-            # latch purely as a sticky "overload — please acknowledge" signal
-            # for the dashboard; it does NOT stop the session, does NOT publish
-            # any stop command, and (since v3.30) does NOT block re-activation.
-            cfg.meter_load_status = "auto_stop"
-            cfg.auto_stop_pending_ack = True
-
-            # v3.30 — Steps 2 (complete session) and 3 (publish opta stop) were
-            # REMOVED. Overload is alarm-only now; the session is left running
-            # and the operator decides what to do.
-
-            # Resolve any open warning/critical rows — they are superseded
-            # by the overload alarm. Overload (auto_stop) alarms themselves are
-            # NOT auto-resolved; the operator's ack endpoint owns that.
-            now = datetime.utcnow()
-            opens = db.query(MeterLoadAlarm).filter(
-                MeterLoadAlarm.pedestal_id == pedestal_id,
-                MeterLoadAlarm.socket_id == socket_id,
-                MeterLoadAlarm.resolved_at.is_(None),
-                MeterLoadAlarm.alarm_type.in_(["warning", "critical"]),
-            ).all()
-            for r in opens:
-                r.resolved_at = now
-                r.resolved_by = "auto-stop-supersedes"
-
-            # Step 4 — alarm row with new alarm_type "auto_stop".
-            db.add(MeterLoadAlarm(
-                pedestal_id=pedestal_id,
-                socket_id=socket_id,
-                alarm_type="auto_stop",
-                current_amps=float(current_for_load),
-                rated_amps=snapshot_rated,
-                load_pct=load_pct,
-                phases=snapshot_phases,
-                meter_type=snapshot_meter_type,
-                triggered_at=datetime.utcnow(),
-            ))
-
-            # Step 6 — meter_load_auto_stop broadcast queued; the session_id
-            # of the just-ended session is attached during dispatch.
-            broadcasts.append({"event": "meter_load_auto_stop"})
-
-            # Step 7 — log so the event is visible in journalctl.
-            logger.warning(
-                "[AutoStop] OVERLOAD pedestal=%d socket=%s current=%.2fA rated=%.2fA load_pct=%.1f%% session=%s",
-                pedestal_id, socket_name,
-                float(current_for_load), snapshot_rated, load_pct,
-                auto_stop_session_id,
-            )
+            if prev_status != "auto_stop":
+                # Transition INTO overload — raise one alarm + set the
+                # "needs ack" flag; supersede any open warning/critical rows.
+                cfg.auto_stop_pending_ack = True
+                now = datetime.utcnow()
+                for r in db.query(MeterLoadAlarm).filter(
+                    MeterLoadAlarm.pedestal_id == pedestal_id,
+                    MeterLoadAlarm.socket_id == socket_id,
+                    MeterLoadAlarm.resolved_at.is_(None),
+                    MeterLoadAlarm.alarm_type.in_(["warning", "critical"]),
+                ).all():
+                    r.resolved_at = now
+                    r.resolved_by = "overload-supersedes"
+                db.add(MeterLoadAlarm(
+                    pedestal_id=pedestal_id,
+                    socket_id=socket_id,
+                    alarm_type="auto_stop",
+                    current_amps=float(current_for_load),
+                    rated_amps=snapshot_rated,
+                    load_pct=load_pct,
+                    phases=snapshot_phases,
+                    meter_type=snapshot_meter_type,
+                    triggered_at=datetime.utcnow(),
+                ))
+                broadcasts.append({"event": "meter_load_auto_stop"})
+                logger.warning(
+                    "[Overload] pedestal=%d socket=%s current=%.2fA rated=%.2fA load_pct=%.1f%%",
+                    pedestal_id, socket_name,
+                    float(current_for_load), snapshot_rated, load_pct,
+                )
+            # else: still in overload — keep status, do not re-fire the alarm.
 
         else:
-            # Existing 60%/80% state machine — UNCHANGED per D2.
-            new_status = _classify_load(load_pct, prev_status, warn, crit)
+            # 60/80% state machine. v3.32 — also handles DESCENT from overload:
+            # treat a prior "auto_stop" like "critical" so hysteresis behaves,
+            # clear the latch, and resolve the open overload alarm.
+            effective_prev = "critical" if prev_status == "auto_stop" else prev_status
+            new_status = _classify_load(load_pct, effective_prev, warn, crit)
             cfg.meter_load_status = new_status
 
             def _resolve_open(reason: str) -> int:
@@ -2650,19 +2660,34 @@ async def _handle_opta_meter_telemetry(socket_name: str, payload: str) -> None:
                 db.add(row)
                 return row
 
-            # State-machine matrix.
-            if prev_status != new_status:
-                if new_status == "warning" and prev_status in ("normal", "unknown"):
-                    _open_row("warning")
-                    broadcasts.append({"event": "meter_load_warning"})
-                elif new_status == "critical" and prev_status in ("normal", "unknown"):
+            # v3.32 — descent from overload: clear the latch, resolve the open
+            # overload alarm, and open the alarm matching the now-current load.
+            if prev_status == "auto_stop":
+                cfg.auto_stop_pending_ack = False
+                _resolve_open("overload-cleared")
+                if new_status == "critical":
                     _open_row("critical")
                     broadcasts.append({"event": "meter_load_critical"})
-                elif new_status == "critical" and prev_status == "warning":
+                elif new_status == "warning":
+                    _open_row("warning")
+                    broadcasts.append({"event": "meter_load_warning"})
+                else:
+                    broadcasts.append({"event": "meter_load_resolved"})
+
+            # State-machine matrix (uses effective_prev so a descent from
+            # overload is handled above, not here).
+            elif effective_prev != new_status:
+                if new_status == "warning" and effective_prev in ("normal", "unknown"):
+                    _open_row("warning")
+                    broadcasts.append({"event": "meter_load_warning"})
+                elif new_status == "critical" and effective_prev in ("normal", "unknown"):
+                    _open_row("critical")
+                    broadcasts.append({"event": "meter_load_critical"})
+                elif new_status == "critical" and effective_prev == "warning":
                     _resolve_open("auto-upgrade")
                     _open_row("critical")
                     broadcasts.append({"event": "meter_load_critical"})
-                elif new_status == "warning" and prev_status == "critical":
+                elif new_status == "warning" and effective_prev == "critical":
                     _resolve_open("auto-downgrade")
                     _open_row("warning")
                     broadcasts.append({"event": "meter_load_warning"})

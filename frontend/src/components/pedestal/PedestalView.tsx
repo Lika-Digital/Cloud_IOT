@@ -6,6 +6,7 @@ import pedestalImg from '../../assets/pedestal.jpg'
 import CameraModal from './CameraModal'
 import PedestalControlCenter from './PedestalControlCenter'
 import SocketUsageHistoryModal from './SocketUsageHistoryModal'
+import OperationalAlarmsModal from './OperationalAlarmsModal'
 
 // Zone definitions — positions as % of image dimensions
 // Each zone is positioned over the actual socket/pipe on the image
@@ -349,6 +350,7 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
   const { pendingSessions, activeSessions, socketLiveData, pendingSockets, optaWaterStates, socketComputedStates, socketBreakerStates, socketLoadStates, socketHardwareConfig, optaStatusInfo, pedestalHealth } = useStore()
   const isAdmin = useAuthStore((s) => s.role) === 'admin'
   const [histOpen, setHistOpen] = useState(false)
+  const [alarmsOpen, setAlarmsOpen] = useState(false)
 
   const isWater = zoneId === 'water-left' || zoneId === 'water-right'
   const isCamera = zoneId === 'camera'
@@ -419,8 +421,18 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
             className="text-[10px] px-1.5 py-0.5 rounded border border-gray-600 text-gray-300 hover:bg-gray-700/60"
             title="Usage history + monthly report"
           >
-            History
+            Usage
           </button>
+          {!isWater && socketId !== null && (
+            <button
+              type="button"
+              onClick={() => setAlarmsOpen(true)}
+              className="text-[10px] px-1.5 py-0.5 rounded border border-gray-600 text-gray-300 hover:bg-gray-700/60"
+              title="Operational alarms history (breaker trips + load alarms)"
+            >
+              Alarms
+            </button>
+          )}
           {/* v3.30 — Smart Mode at a glance. OFF = standalone (Opta in control). */}
           <span
             className={`badge text-[10px] ${smartMode
@@ -546,6 +558,15 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
           label={isWater ? (valveName ?? 'V?') : (socketId !== null ? `Q${socketId}` : '?')}
           isAdmin={isAdmin}
           onClose={() => setHistOpen(false)}
+        />
+      )}
+
+      {alarmsOpen && !isWater && socketId !== null && (
+        <OperationalAlarmsModal
+          pedestalId={pedestalId}
+          socketId={socketId}
+          label={`Q${socketId}`}
+          onClose={() => setAlarmsOpen(false)}
         />
       )}
     </div>

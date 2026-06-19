@@ -22,6 +22,7 @@ import { getProvisioningMode, setProvisioningMode, type ProvisioningMode } from 
 import SocketBreakerPanel from './SocketBreakerPanel'
 import SocketLoadMeterPanel from './SocketLoadMeterPanel'
 import SocketUsageHistoryModal from './SocketUsageHistoryModal'
+import OperationalAlarmsModal from './OperationalAlarmsModal'
 import type { OptaSocketState, OptaWaterState, OptaLogEntry } from '../../store'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -122,6 +123,7 @@ function SocketCard({
   const [autoJustSaved, setAutoJustSaved] = useState(false)
   const [qrOpen, setQrOpen] = useState(false)
   const [histOpen, setHistOpen] = useState(false)
+  const [alarmsOpen, setAlarmsOpen] = useState(false)
 
   const socketId = Number(socketName.replace('Q', ''))
   // v3.12 — when the auto-stop latch is set the Activate button must be
@@ -202,7 +204,15 @@ function SocketCard({
             className="text-[10px] px-1.5 py-0.5 rounded border border-gray-600 text-gray-300 hover:bg-gray-700/60"
             title="Usage history + monthly report for this socket"
           >
-            History
+            Usage
+          </button>
+          <button
+            type="button"
+            onClick={() => setAlarmsOpen(true)}
+            className="text-[10px] px-1.5 py-0.5 rounded border border-gray-600 text-gray-300 hover:bg-gray-700/60"
+            title="Operational alarms history (breaker trips + load alarms)"
+          >
+            Alarms
           </button>
           {isAdmin && (
             <button
@@ -339,6 +349,15 @@ function SocketCard({
           label={socketName}
           isAdmin={isAdmin}
           onClose={() => setHistOpen(false)}
+        />
+      )}
+
+      {alarmsOpen && (
+        <OperationalAlarmsModal
+          pedestalId={pedestalId}
+          socketId={socketId}
+          label={socketName}
+          onClose={() => setAlarmsOpen(false)}
         />
       )}
     </div>
@@ -550,7 +569,7 @@ function WaterCard({
             className="text-[10px] px-1.5 py-0.5 rounded border border-gray-600 text-gray-300 hover:bg-gray-700/60"
             title="Usage history + monthly report for this valve"
           >
-            History
+            Usage
           </button>
           <StateBadge state={state} />
         </div>

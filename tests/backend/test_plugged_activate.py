@@ -35,6 +35,7 @@ def plug_pid(client, auth_headers):
         if cfg is None:
             cfg = PedestalConfig(pedestal_id=pid); db.add(cfg)
         cfg.opta_client_id = CAB
+        cfg.smart_mode = True   # v3.30 — control endpoints require SmartMode ON
         for sid in (1, 2, 3, 4):
             if db.query(SocketConfig).filter(
                 SocketConfig.pedestal_id == pid, SocketConfig.socket_id == sid).first() is None:
@@ -77,6 +78,19 @@ def _get_auto(pid, sid):
     try:
         return db.query(SocketConfig).filter(
             SocketConfig.pedestal_id == pid, SocketConfig.socket_id == sid).first().auto_activate
+    finally:
+        db.close()
+
+
+def _set_smart_mode(pid, value):
+    # v3.30 — re-assert SmartMode (the module-scoped fixture is shared and an
+    # earlier test toggles it OFF via the smartmode endpoint).
+    from app.models.pedestal_config import PedestalConfig
+    db = _S()
+    try:
+        cfg = db.query(PedestalConfig).filter(PedestalConfig.pedestal_id == pid).first()
+        if cfg:
+            cfg.smart_mode = value; db.commit()
     finally:
         db.close()
 
@@ -176,6 +190,7 @@ def test_smartmode_off_does_not_publish_diagnostic(client, auth_headers, plug_pi
 # --- (3) manual Activate disables auto ------------------------------------
 
 def test_manual_activate_disables_auto(client, auth_headers, plug_pid):
+    _set_smart_mode(plug_pid, True)
     _set_auto(plug_pid, 2, True)
     _set_op_status(plug_pid, 2, "awaiting_activation", connected=True)
     with patch("app.services.mqtt_client.mqtt_service.publish"):
@@ -186,6 +201,7 @@ def test_manual_activate_disables_auto(client, auth_headers, plug_pid):
 
 
 def test_manual_activate_broadcasts_auto_change(client, auth_headers, plug_pid):
+    _set_smart_mode(plug_pid, True)
     _set_auto(plug_pid, 3, True)
     _set_op_status(plug_pid, 3, "awaiting_activation", connected=True)
     from app.services.websocket_manager import ws_manager

@@ -81,7 +81,19 @@ def _pedestal_id_for_cabinet() -> int:
 def _ensure_cabinet_registered() -> int:
     """Trigger a first MQTT contact so the cabinet row exists."""
     _publish("opta/status", {"cabinetId": CABINET, "seq": 1, "uptime_ms": 1000})
-    return _pedestal_id_for_cabinet()
+    pid = _pedestal_id_for_cabinet()
+    # v3.30 — valve auto-open is SmartMode-gated (NUC in control). These tests
+    # exercise the ON behavior, so seed smart_mode=True.
+    from app.models.pedestal_config import PedestalConfig
+    db = _TestSession()
+    try:
+        cfg = db.query(PedestalConfig).filter_by(pedestal_id=pid).first()
+        if cfg is not None and not cfg.smart_mode:
+            cfg.smart_mode = True
+            db.commit()
+    finally:
+        db.close()
+    return pid
 
 
 def _publish(topic: str, payload: dict) -> tuple[list[dict], list[tuple[str, str]]]:
@@ -187,6 +199,27 @@ def test_post_diag_skips_valve_with_auto_activate_false():
     v2_publishes = [p for p in publishes if p[0] == "opta/cmd/water/V2"]
     assert len(v1_publishes) == 0, "V1 had auto_activate=False — must NOT publish activate"
     assert len(v2_publishes) == 1
+
+
+def test_post_diag_skips_all_valves_when_smart_mode_off():
+    """v3.30 — SmartMode OFF master gate: post-diagnostic valve auto-open must
+    publish nothing, even with auto_activate=True and the sensor OK."""
+    pid = _ensure_cabinet_registered()
+    _seed_valve_config(pid, 1, auto_activate=True)
+    _seed_valve_config(pid, 2, auto_activate=True)
+    from app.models.pedestal_config import PedestalConfig
+    db = _TestSession()
+    try:
+        cfg = db.query(PedestalConfig).filter_by(pedestal_id=pid).first()
+        cfg.smart_mode = False
+        db.commit()
+    finally:
+        db.close()
+
+    _broadcasts, publishes = _publish("opta/diagnostic", _build_diag_payload(CABINET, v1_ok=True, v2_ok=True))
+
+    valve_publishes = [p for p in publishes if p[0].startswith("opta/cmd/water/")]
+    assert valve_publishes == [], "SmartMode OFF must suppress all valve auto-open"
 
 
 # ── TC-VA-03 ──────────────────────────────────────────────────────────────────

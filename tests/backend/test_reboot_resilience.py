@@ -25,10 +25,15 @@ PID = 99
 
 
 def _ensure_cfg():
+    # v3.30 — adoption + auto-activate are SmartMode-gated (NUC in control).
+    # These tests exercise the ON behavior, so seed smart_mode=True.
     db = TestSession()
-    if not db.query(PedestalConfig).filter_by(opta_client_id=CAB).first():
-        db.add(PedestalConfig(pedestal_id=PID, opta_client_id=CAB))
-        db.commit()
+    cfg = db.query(PedestalConfig).filter_by(opta_client_id=CAB).first()
+    if cfg is None:
+        db.add(PedestalConfig(pedestal_id=PID, opta_client_id=CAB, smart_mode=True))
+    else:
+        cfg.smart_mode = True
+    db.commit()
     db.close()
 
 
@@ -102,6 +107,40 @@ def test_active_water_valve_is_adopted():
         asyncio.run(mqtt_handlers._handle_marina_water(CAB, "V1", payload))
     assert len(_active_sessions(1, "water")) == 1
     _clear()
+
+
+def _set_smart_mode(value: bool) -> None:
+    db = TestSession()
+    try:
+        cfg = db.query(PedestalConfig).filter_by(opta_client_id=CAB).first()
+        if cfg:
+            cfg.smart_mode = value; db.commit()
+    finally:
+        db.close()
+
+
+def test_active_socket_not_adopted_when_smart_mode_off():
+    """v3.30 — in standalone (SmartMode OFF) the NUC is monitor-only and must
+    NOT adopt/create a session even when the Opta reports the socket active."""
+    _ensure_cfg(); _clear()
+    _set_smart_mode(False)
+    _simulate_socket("Q1", "active")
+    assert len(_active_sessions(1)) == 0
+    _set_smart_mode(True); _clear()
+
+
+def test_active_water_valve_not_adopted_when_smart_mode_off():
+    """v3.30 — same monitor-only rule for valves: no adopted (unattributed)
+    water session while SmartMode is OFF."""
+    _ensure_cfg(); _clear()
+    _set_smart_mode(False)
+    payload = json.dumps({"cabinetId": CAB, "id": "V1", "state": "active",
+                          "total_l": 1.0, "session_l": 0.5, "session": None})
+    with patch.object(mqtt_handlers, "SessionLocal", TestSession), \
+         patch("app.services.mqtt_handlers.ws_manager.broadcast", new=AsyncMock()):
+        asyncio.run(mqtt_handlers._handle_marina_water(CAB, "V1", payload))
+    assert len(_active_sessions(1, "water")) == 0
+    _set_smart_mode(True); _clear()
 
 
 # ── D: door non-blocking ────────────────────────────────────────────────────────

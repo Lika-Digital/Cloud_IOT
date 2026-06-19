@@ -33,6 +33,7 @@ def b6_pid(client, auth_headers):
         if cfg is None:
             cfg = PedestalConfig(pedestal_id=pid); db.add(cfg)
         cfg.opta_client_id = CAB
+        cfg.smart_mode = True   # v3.30 — control endpoints require SmartMode ON
         for sid in (1, 2, 3, 4):
             if db.query(SocketConfig).filter(
                 SocketConfig.pedestal_id == pid, SocketConfig.socket_id == sid).first() is None:

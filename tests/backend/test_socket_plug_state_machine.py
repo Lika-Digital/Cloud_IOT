@@ -90,6 +90,23 @@ def _seed_connected(pedestal_id: int, socket_id: int, connected: bool) -> None:
         db.close()
 
 
+def _seed_smart_mode(pedestal_id: int, value: bool = True) -> None:
+    """v3.30 — direct socket control requires SmartMode ON. Seeds the config so
+    the plug-state path (not the SmartMode gate) is what these tests exercise."""
+    from app.models.pedestal_config import PedestalConfig
+    db = _TestSession()
+    try:
+        cfg = db.query(PedestalConfig).filter_by(pedestal_id=pedestal_id).first()
+        if cfg is None:
+            cfg = PedestalConfig(pedestal_id=pedestal_id, smart_mode=value)
+            db.add(cfg)
+        else:
+            cfg.smart_mode = value
+        db.commit()
+    finally:
+        db.close()
+
+
 def _pedestal_id_for_cabinet(cabinet_id: str = "TEST_CABINET") -> int:
     """Return the numeric pedestal_id that the MQTT handler resolves cabinet_id to.
     The first event for an unknown cabinet auto-creates a Pedestal row, so
@@ -142,6 +159,7 @@ def test_user_plugged_in_sets_pending_and_broadcasts(clean_state):
 # ── TC-SP-02 ─────────────────────────────────────────────────────────────────
 
 def test_activate_accepted_when_plug_inserted(client, auth_headers, clean_state):
+    _seed_smart_mode(1, True)
     _seed_connected(1, 1, True)
     with patch("app.routers.controls.mqtt_service.publish"):
         r = client.post(
@@ -156,6 +174,7 @@ def test_activate_accepted_when_plug_inserted(client, auth_headers, clean_state)
 # ── TC-SP-03 ─────────────────────────────────────────────────────────────────
 
 def test_activate_rejected_when_no_plug(client, auth_headers, clean_state):
+    _seed_smart_mode(1, True)
     _seed_connected(1, 1, False)
     with patch("app.routers.controls.mqtt_service.publish") as pub:
         r = client.post(

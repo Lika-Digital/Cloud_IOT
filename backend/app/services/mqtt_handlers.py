@@ -330,6 +330,20 @@ def _water_name_to_id(name: str) -> int:
     return int(digits) if digits else 1
 
 
+def _smart_mode_on(db, pedestal_id: int) -> bool:
+    """v3.30 — True if the pedestal's firmware SmartMode is ON (NUC in control).
+
+    When OFF the Opta runs standalone and the NUC is monitor + alarms only: it
+    must NOT create/adopt sessions, auto-activate sockets, or auto-open valves.
+    Used as the master gate for every NUC-initiated action.
+    """
+    from ..models.pedestal_config import PedestalConfig
+    cfg = db.query(PedestalConfig).filter(
+        PedestalConfig.pedestal_id == pedestal_id
+    ).first()
+    return bool(cfg and cfg.smart_mode)
+
+
 def _coerce_bool(value):
     """Coerce a firmware-reported flag to a real bool for Boolean DB columns.
 
@@ -475,7 +489,10 @@ async def _handle_marina_socket(cabinet_id: str, socket_name: str, payload: str)
         # reports the socket ACTIVE but we have no open session (e.g. the Opta
         # ran standalone and the NUC just (re)connected), materialize one so the
         # live session is TRACKED rather than torn down by a later event.
-        if raw_state == "active":
+        # v3.30 — only when SmartMode is ON. In standalone the NUC is monitor-
+        # only and must not create NUC sessions (that produced the spurious
+        # "unattributed" sessions while the Opta owned everything).
+        if raw_state == "active" and _smart_mode_on(db, pedestal_id):
             from .session_service import session_service as _ss
             if _ss.get_active_for_socket(db, pedestal_id, socket_id, session_type="electricity") is None:
                 _adopted = _ss.create_pending(db, pedestal_id, socket_id, "electricity")
@@ -578,11 +595,15 @@ async def _handle_marina_water(cabinet_id: str, water_name: str, payload: str):
     logger.debug("[Marina] cabinet=%s water=%s total_l=%.3f session_l=%.3f", cabinet_id, water_name, total_l, session_l)
 
     # v3.18 — adopt a live water session on (re)connect (same as electricity).
+    # v3.30 — SmartMode-gated: in standalone the NUC must not create sessions
+    # (this was the source of the "unattributed" valve badge while OFF).
     if data.get("state") == "active":
         adb = SessionLocal()
         try:
             from .session_service import session_service as _ss
-            if _ss.get_active_for_socket(adb, pedestal_id, valve_id, session_type="water") is None:
+            if not _smart_mode_on(adb, pedestal_id):
+                pass
+            elif _ss.get_active_for_socket(adb, pedestal_id, valve_id, session_type="water") is None:
                 _adopted = _ss.create_pending(adb, pedestal_id, valve_id, "water")
                 _ss.activate(adb, _adopted)
                 logger.info("[Adopt] pedestal=%d valve=%d adopted live water session %d",
@@ -1095,6 +1116,11 @@ def _auto_activate_precondition_check(db, pedestal_id: int, socket_id: int) -> s
     from ..models.pedestal_config import PedestalConfig
     from ..models.session import Session as SessionModel
 
+    # 0. v3.30 — SmartMode must be ON. In standalone the Opta owns control and
+    #    ignores NUC commands; the NUC must not auto-activate.
+    if not _smart_mode_on(db, pedestal_id):
+        return "smart mode off"
+
     # 1. Door state is NO LONGER a blocking precondition (v3.18). An open or
     #    unknown door only raises a WARNING at activation time (see
     #    _maybe_auto_activate) — sockets must work with the door open (common
@@ -1125,16 +1151,9 @@ def _auto_activate_precondition_check(db, pedestal_id: int, socket_id: int) -> s
     if last_diag and (datetime.utcnow() - last_diag).total_seconds() < _DIAGNOSTIC_LOCKOUT_S:
         return "diagnostic in progress"
 
-    # 6. v3.12 — auto-stop overload alarm pending acknowledgment (D8). Blocks
-    # auto-activation until an admin acknowledges via the dedicated endpoint.
-    # Mirrors the manual-activate guard in routers/controls.py::approve_socket.
-    from ..models.socket_config import SocketConfig
-    sc = db.query(SocketConfig).filter(
-        SocketConfig.pedestal_id == pedestal_id,
-        SocketConfig.socket_id == socket_id,
-    ).first()
-    if sc is not None and getattr(sc, "auto_stop_pending_ack", False):
-        return "overload alarm pending acknowledgment"
+    # 6. v3.30 — an overload alarm no longer blocks auto-activation (alarm-only;
+    # the NUC never withholds control). The previous auto_stop_pending_ack guard
+    # was removed to match approve_socket / direct_socket_cmd.
 
     return None
 
@@ -1253,6 +1272,7 @@ async def _maybe_auto_open_valve(pedestal_id: int, valve_id: int, cabinet_id: st
     and reports that this valve's sensor is ok.
 
     Guards (in order, first failure logs + returns):
+      0. SmartMode is ON (v3.30 — standalone NUC never auto-opens).
       1. ValveConfig.auto_activate is True for this (pedestal, valve).
       2. No active water session on this valve.
       3. Operator has not manually stopped this valve in the last 10 minutes.
@@ -1267,6 +1287,12 @@ async def _maybe_auto_open_valve(pedestal_id: int, valve_id: int, cabinet_id: st
     try:
         from ..models.valve_config import ValveConfig
         from ..models.session import Session as SessionModel
+
+        # 0. v3.30 — SmartMode master gate.
+        if not _smart_mode_on(db, pedestal_id):
+            logger.info("[ValveAutoOpen] pedestal=%d valve=%d SKIPPED: smart mode off",
+                        pedestal_id, valve_id)
+            return
 
         cfg = db.query(ValveConfig).filter(
             ValveConfig.pedestal_id == pedestal_id,
@@ -2043,11 +2069,14 @@ async def _handle_event_breaker_tripped(
     Steps:
       1. Resolve socket_id from outlet_id ("Q1" → 1).
       2. Append a `breaker_events` row with event_type="tripped".
-      3. Stop any active power session on that socket with end_reason="breaker_trip".
-      4. Broadcast `breaker_alarm` WS event for the dashboard banner + Notification.
+      3. Broadcast `breaker_alarm` WS event for the dashboard banner + Notification.
+
+    v3.30 — the NUC NO LONGER stops the session on a breaker trip. A tripped
+    breaker has already physically cut the socket; the NUC's job is to REPORT
+    (audit row + alarm), not to act. The session is left as-is so the operator
+    decides; fault precedence already shows the socket as faulted on the UI.
     """
     from ..models.breaker_event import BreakerEvent
-    from ..models.session import Session as _Session
 
     socket_id  = _socket_name_to_id(outlet_id) if outlet_id else 0
     breaker    = data.get("breaker", {}) or {}
@@ -2073,38 +2102,7 @@ async def _handle_event_breaker_tripped(
     db.add(evt)
     db.commit()
 
-    # 2. Stop active POWER session only — water sessions unaffected (D5).
-    active = (
-        db.query(_Session)
-        .filter(
-            _Session.pedestal_id == pedestal_id,
-            _Session.socket_id == socket_id,
-            _Session.type == "electricity",
-            _Session.status.in_(["pending", "active"]),
-        )
-        .first()
-    )
-    if active is not None:
-        try:
-            from .session_service import session_service as _ss
-            _ss.complete(db, active, end_reason="breaker_trip")
-        except Exception as e:
-            logger.warning("[Breaker] failed to stop session %d on breaker trip: %s", active.id, e)
-        else:
-            await ws_manager.broadcast({
-                "event": "session_completed",
-                "data": {
-                    "session_id": active.id,
-                    "pedestal_id": pedestal_id,
-                    "socket_id": socket_id,
-                    "energy_kwh": active.energy_kwh,
-                    "water_liters": active.water_liters,
-                    "end_reason": "breaker_trip",
-                    "timestamp": datetime.utcnow().isoformat(),
-                },
-            })
-
-    # 3. Persistent dashboard alarm — survives page navigation via Zustand +
+    # 2. Persistent dashboard alarm — survives page navigation via Zustand +
     # sessionStorage ack on the frontend. Admin clients also get a Browser
     # Notification (useWebSocket handler).
     await ws_manager.broadcast({
@@ -2566,60 +2564,21 @@ async def _handle_opta_meter_telemetry(socket_name: str, payload: str) -> None:
         elif load_pct >= 90.0:
             new_status = "auto_stop"
 
-            # Step 1 — status + latch.
+            # Step 1 — status + latch. v3.30 — the NUC NO LONGER shuts the
+            # socket down on overload; it ONLY raises an alarm. The Opta owns
+            # protective action (the breaker). We keep the `auto_stop` status +
+            # latch purely as a sticky "overload — please acknowledge" signal
+            # for the dashboard; it does NOT stop the session, does NOT publish
+            # any stop command, and (since v3.30) does NOT block re-activation.
             cfg.meter_load_status = "auto_stop"
             cfg.auto_stop_pending_ack = True
 
-            # Step 2 — complete any active electricity session for this socket.
-            from ..models.session import Session as _Session
-            active = (
-                db.query(_Session)
-                .filter(
-                    _Session.pedestal_id == pedestal_id,
-                    _Session.socket_id == socket_id,
-                    _Session.type == "electricity",
-                    _Session.status.in_(["pending", "active"]),
-                )
-                .first()
-            )
-            if active is not None:
-                try:
-                    session_service.complete(db, active, end_reason="auto_stop_overload")
-                    auto_stop_session_id = active.id
-                except Exception as e:
-                    logger.warning("[AutoStop] failed to stop session %d: %s", active.id, e)
-                else:
-                    broadcasts.append({
-                        "event": "session_completed",
-                        "data": {
-                            "session_id": active.id,
-                            "pedestal_id": pedestal_id,
-                            "socket_id": socket_id,
-                            "energy_kwh": active.energy_kwh,
-                            "end_reason": "auto_stop_overload",
-                            "timestamp": datetime.utcnow().isoformat(),
-                        },
-                    })
-
-            # Step 3 — publish stop command on opta/cmd/socket/{Q1..Q4}.
-            # Reuses the exact direct_socket_cmd payload shape so firmware
-            # cannot tell whether the operator or the safety system asked.
-            try:
-                from .mqtt_client import mqtt_service
-                ts_ms = int(datetime.utcnow().timestamp() * 1000)
-                mqtt_service.publish(
-                    f"opta/cmd/socket/{socket_name}",
-                    json.dumps({
-                        "msgId": f"autostop-{ts_ms}",
-                        "cabinetId": cabinet_id,
-                        "action": "stop",
-                    }),
-                )
-            except Exception as e:
-                logger.warning("[AutoStop] MQTT publish failed for %s: %s", socket_name, e)
+            # v3.30 — Steps 2 (complete session) and 3 (publish opta stop) were
+            # REMOVED. Overload is alarm-only now; the session is left running
+            # and the operator decides what to do.
 
             # Resolve any open warning/critical rows — they are superseded
-            # by the protective auto-stop. Auto-stop alarms themselves are
+            # by the overload alarm. Overload (auto_stop) alarms themselves are
             # NOT auto-resolved; the operator's ack endpoint owns that.
             now = datetime.utcnow()
             opens = db.query(MeterLoadAlarm).filter(
@@ -2744,8 +2703,9 @@ async def _handle_opta_meter_telemetry(socket_name: str, payload: str) -> None:
         elif evt == "meter_load_warning":
             payload_data["severity"] = "WARNING"
         elif evt == "meter_load_auto_stop":
-            # v3.12 — severity tag plus the session_id of the ended session
-            # so dashboards can deep-link to the audit trail.
+            # v3.30 — overload alarm severity. session_id is None: the NUC no
+            # longer ends a session on overload (alarm-only), so there is no
+            # ended-session to deep-link to.
             payload_data["severity"] = "AUTO_STOP"
             payload_data["session_id"] = auto_stop_session_id
         await ws_manager.broadcast({"event": evt, "data": dict(payload_data)})

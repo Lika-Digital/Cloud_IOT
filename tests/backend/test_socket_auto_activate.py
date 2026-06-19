@@ -70,6 +70,19 @@ def _set_door(pid: int, door: str) -> None:
         db.close()
 
 
+def _set_smart_mode(pid: int, value: bool) -> None:
+    # v3.30 — auto-activate requires SmartMode ON (NUC in control).
+    from app.models.pedestal_config import PedestalConfig
+    db = _TestSession()
+    try:
+        cfg = db.query(PedestalConfig).filter_by(pedestal_id=pid).first()
+        if cfg:
+            cfg.smart_mode = value
+            db.commit()
+    finally:
+        db.close()
+
+
 def _set_auto_activate(pid: int, sid: int, value: bool) -> None:
     from app.models.socket_config import SocketConfig
     db = _TestSession()
@@ -230,6 +243,7 @@ def test_auto_activate_true_publishes_after_delay(clean_state):
     asyncio.run(_fire_user_plugged_in_capture(outlet="Q1"))   # registers cabinet
     pid = _pedestal_id_for_cabinet()
     _set_auto_activate(pid, 1, True)
+    _set_smart_mode(pid, True)
     _set_door(pid, "closed")
     _refresh_heartbeat(pid)
 
@@ -274,6 +288,7 @@ def test_auto_activate_skip_paths(scenario, reason_substring, setup, clean_state
     asyncio.run(_fire_user_plugged_in_capture(outlet="Q1"))
     pid = _pedestal_id_for_cabinet()
     _set_auto_activate(pid, 1, True)
+    _set_smart_mode(pid, True)
     _set_door(pid, "closed")
     _refresh_heartbeat(pid)
     # Apply the scenario-specific override AFTER the defaults.
@@ -294,12 +309,33 @@ def test_auto_activate_skip_paths(scenario, reason_substring, setup, clean_state
     assert "timestamp" in skipped[-1]["data"]
 
 
+def test_auto_activate_skipped_when_smart_mode_off(clean_state):
+    """v3.30 — SmartMode OFF is the master gate: even with auto_activate on and
+    every other precondition satisfied, auto-activate must skip with reason
+    'smart mode off' and publish no activate."""
+    asyncio.run(_fire_user_plugged_in_capture(outlet="Q1"))
+    pid = _pedestal_id_for_cabinet()
+    _set_auto_activate(pid, 1, True)
+    _set_smart_mode(pid, False)   # standalone — NUC monitor-only
+    _set_door(pid, "closed")
+    _refresh_heartbeat(pid)
+
+    broadcasts, publishes = asyncio.run(_fire_user_plugged_in_capture(outlet="Q1"))
+
+    activates = [(t, p) for (t, p) in publishes if p.get("action") == "activate"]
+    assert not activates, f"activate leaked while smart mode off: {activates}"
+    skipped = _events_of(broadcasts, "socket_auto_activate_skipped")
+    assert skipped, f"no skip broadcast; got {[b.get('event') for b in broadcasts]}"
+    assert "smart mode off" in skipped[-1]["data"]["reason"].lower()
+
+
 def test_auto_activate_skip_when_already_active(clean_state):
     """TC-AA-08 — an existing active session makes auto-activate a no-op."""
     # Register pedestal via a plug event, then seed an active session on Q1.
     asyncio.run(_fire_user_plugged_in_capture(outlet="Q1"))
     pid = _pedestal_id_for_cabinet()
     _set_auto_activate(pid, 1, True)
+    _set_smart_mode(pid, True)
     _set_door(pid, "closed")
     _refresh_heartbeat(pid)
 

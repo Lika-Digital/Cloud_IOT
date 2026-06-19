@@ -51,6 +51,22 @@ def _dispose_dc_engines():
 
 # ── MQTT simulation helper ────────────────────────────────────────────────────
 
+def _seed_smart_mode(pedestal_id: int = 1, value: bool = True) -> None:
+    """v3.30 — direct socket/valve cmd endpoints require SmartMode ON."""
+    from app.models.pedestal_config import PedestalConfig
+    db = _TestSession()
+    try:
+        cfg = db.query(PedestalConfig).filter_by(pedestal_id=pedestal_id).first()
+        if cfg is None:
+            cfg = PedestalConfig(pedestal_id=pedestal_id, smart_mode=value)
+            db.add(cfg)
+        else:
+            cfg.smart_mode = value
+        db.commit()
+    finally:
+        db.close()
+
+
 def _simulate_mqtt(topic: str, payload: str) -> list[dict]:
     """Run handle_message and return all WS broadcasts captured."""
     broadcasts: list[dict] = []
@@ -79,6 +95,7 @@ def test_direct_socket_cmd_publishes_mqtt(client, auth_headers, action):
     Activate now requires SocketState.connected=True (see test_socket_plug_state_machine
     TC-SP-03); seed the plug-in state so the activate path is reachable.
     """
+    _seed_smart_mode(1, True)
     # Seed plug-in state for the activate path.
     from app.models.pedestal_config import SocketState
     db = _TestSession()
@@ -147,6 +164,7 @@ def test_direct_socket_invalid_action(client, auth_headers):
 @pytest.mark.parametrize("action", ["activate", "stop"])
 def test_direct_water_cmd_publishes_mqtt(client, auth_headers, action):
     """TC-DC-05/06  POST water cmd → MQTT published to opta/cmd/water/V{n}."""
+    _seed_smart_mode(1, True)
     published: list[tuple] = []
 
     def mock_publish(topic, payload, qos=1):
@@ -169,6 +187,35 @@ def test_direct_water_cmd_publishes_mqtt(client, auth_headers, action):
     assert any("V1" in t or "water" in t for t in topics), f"No water MQTT publish seen in {topics}"
     payloads = [p[1] for p in published]
     assert any(p.get("action") == action for p in payloads)
+
+
+def test_direct_socket_cmd_409_when_smart_mode_off(client, auth_headers):
+    """v3.30 — standalone (SmartMode OFF) rejects socket control with 409."""
+    _seed_smart_mode(1, False)
+    with patch("app.routers.controls.mqtt_service.publish") as pub:
+        r = client.post(
+            "/api/controls/pedestal/1/socket/Q1/cmd",
+            json={"action": "activate"},
+            headers=auth_headers,
+        )
+    assert r.status_code == 409, r.text
+    assert "smart mode" in r.json()["detail"].lower()
+    assert pub.call_count == 0
+    _seed_smart_mode(1, True)   # restore for sibling tests sharing pedestal 1
+
+
+def test_direct_water_cmd_409_when_smart_mode_off(client, auth_headers):
+    """v3.30 — standalone (SmartMode OFF) rejects valve control with 409."""
+    _seed_smart_mode(1, False)
+    with patch("app.routers.controls.mqtt_service.publish") as pub:
+        r = client.post(
+            "/api/controls/pedestal/1/water/V1/cmd",
+            json={"action": "activate"},
+            headers=auth_headers,
+        )
+    assert r.status_code == 409, r.text
+    assert pub.call_count == 0
+    _seed_smart_mode(1, True)
 
 
 def test_direct_water_invalid_name(client, auth_headers):

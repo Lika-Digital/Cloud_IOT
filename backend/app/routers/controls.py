@@ -338,6 +338,24 @@ async def stop_session(
 
 # ── Socket-level operator approval (before any session exists) ────────────────
 
+def _require_smart_mode(db: DBSession, pedestal_id: int) -> None:
+    """v3.30 — block NUC control when the pedestal is in standalone (SmartMode
+    OFF). The Opta owns control and ignores NUC commands, so the dashboard is
+    read-only; the API mirrors that by refusing socket/valve control actions.
+    Returns 409 so the UI (which also grays the buttons) and any API client get
+    a consistent, explainable rejection."""
+    from ..models.pedestal_config import PedestalConfig
+    cfg = db.query(PedestalConfig).filter(
+        PedestalConfig.pedestal_id == pedestal_id
+    ).first()
+    if cfg is None or not cfg.smart_mode:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Smart Mode is OFF — the cabinet is in standalone control. "
+                   "Enable Smart Mode to control sockets and valves from the dashboard.",
+        )
+
+
 def _get_socket_state_or_400(db: DBSession, pedestal_id: int, socket_id: int) -> SocketState:
     state = db.query(SocketState).filter(
         SocketState.pedestal_id == pedestal_id,
@@ -366,19 +384,9 @@ async def approve_socket(
     if existing and existing.status == "active":
         raise HTTPException(status_code=409, detail="Socket already has an active session")
 
-    # v3.12 — block re-activation when an auto-stop overload alarm is
-    # awaiting operator acknowledgment. The latch is cleared only by the
-    # acknowledge endpoint, not by the load dropping back below 90%.
-    from ..models.socket_config import SocketConfig as _SocketConfig
-    sc = db.query(_SocketConfig).filter(
-        _SocketConfig.pedestal_id == pedestal_id,
-        _SocketConfig.socket_id == socket_id,
-    ).first()
-    if sc is not None and getattr(sc, "auto_stop_pending_ack", False):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Socket was automatically stopped due to overload. Acknowledge the alarm before re-activating.",
-        )
+    # v3.30 — an overload alarm no longer blocks re-activation. The NUC raises
+    # the alarm (operator acknowledges it) but never withholds control; the
+    # operator may activate at any time.
 
     session = session_service.create_pending(db, pedestal_id, socket_id, "electricity")
     session_service.activate(db, session)
@@ -591,6 +599,9 @@ async def direct_socket_cmd(
     if socket_name not in ("Q1", "Q2", "Q3", "Q4"):
         raise HTTPException(status_code=400, detail="socket_name must be one of Q1, Q2, Q3, Q4")
 
+    # v3.30 — standalone cabinets reject all socket control (activate AND stop).
+    _require_smart_mode(db, pedestal_id)
+
     from ..services.mqtt_handlers import _socket_name_to_id
     socket_id = _socket_name_to_id(socket_name)
 
@@ -605,20 +616,9 @@ async def direct_socket_cmd(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Socket has no plug inserted",
             )
-        # v3.12 — block re-activation while an auto-stop overload alarm is
-        # awaiting operator acknowledgment. Stop commands are intentionally
-        # NOT guarded — the operator can always stop a socket regardless of
-        # alarm state.
-        from ..models.socket_config import SocketConfig as _SocketConfig
-        sc = db.query(_SocketConfig).filter(
-            _SocketConfig.pedestal_id == pedestal_id,
-            _SocketConfig.socket_id == socket_id,
-        ).first()
-        if sc is not None and getattr(sc, "auto_stop_pending_ack", False):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Socket was automatically stopped due to overload. Acknowledge the alarm before re-activating.",
-            )
+        # v3.30 — an overload alarm no longer blocks re-activation (alarm-only;
+        # the NUC never withholds control). The previous auto_stop_pending_ack
+        # 409 guard was removed here and in approve_socket.
 
     # B6 (v3.28) — operator stop disables auto-activate for this socket (before publish).
     # v3.29 — a manual Activate ALSO disables auto-activate: the three socket modes
@@ -678,6 +678,10 @@ async def direct_water_cmd(
     """
     if valve_name not in ("V1", "V2"):
         raise HTTPException(status_code=400, detail="valve_name must be V1 or V2")
+
+    # v3.30 — standalone cabinets reject all valve control.
+    _require_smart_mode(db, pedestal_id)
+
     cabinet_id = _get_cabinet_id(db, pedestal_id)
     msg_id = str(int(datetime.utcnow().timestamp() * 1000))
     if cabinet_id:

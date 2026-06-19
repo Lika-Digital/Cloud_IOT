@@ -154,6 +154,10 @@ def _ensure_cabinet() -> int:
     db = _TestSession()
     try:
         cfg = db.query(PedestalConfig).filter_by(opta_client_id=CABINET).first()
+        # v3.30 — control endpoints + auto-activate require SmartMode ON.
+        if cfg is not None and not cfg.smart_mode:
+            cfg.smart_mode = True
+            db.commit()
         return cfg.pedestal_id if cfg else 0
     finally:
         db.close()
@@ -738,8 +742,9 @@ def test_autostop_does_not_fire_at_89_9_pct():
     assert not any("autostop-" in p for _, p in captured)
 
 
-def test_autostop_publishes_correct_mqtt_payload():
-    """TC-ML-33 — publish on opta/cmd/socket/Q{n} with action=stop + autostop-{ts} msgId."""
+def test_autostop_does_not_publish_stop_command():
+    """TC-ML-33 (v3.30) — overload is alarm-only: the NUC must NOT publish any
+    stop command on opta/cmd/socket/Q{n}. The Opta/breaker owns protection."""
     pid = _ensure_cabinet()
     _seed_hw_config(pid, 1, meter_type="ABB", phases=1, rated_amps=32.0)
 
@@ -748,15 +753,12 @@ def test_autostop_publishes_correct_mqtt_payload():
         _trip_to(95, pid)
 
     autostop_pubs = [(t, p) for t, p in captured if t == "opta/cmd/socket/Q1"]
-    assert len(autostop_pubs) == 1
-    payload = json.loads(autostop_pubs[0][1])
-    assert payload["action"] == "stop"
-    assert payload["cabinetId"] == CABINET
-    assert payload["msgId"].startswith("autostop-")
+    assert autostop_pubs == []
 
 
-def test_autostop_completes_active_session_with_end_reason():
-    """TC-ML-34 — active electricity session is completed with end_reason='auto_stop_overload'."""
+def test_autostop_leaves_active_session_running():
+    """TC-ML-34 (v3.30) — overload is alarm-only: the active electricity session
+    is NOT completed by the NUC. The operator decides what to do."""
     pid = _ensure_cabinet()
     _seed_hw_config(pid, 1, meter_type="ABB", phases=1, rated_amps=32.0)
     sid = _seed_active_session(pid, 1)
@@ -769,8 +771,8 @@ def test_autostop_completes_active_session_with_end_reason():
     db = _TestSession()
     try:
         s = db.get(_Session, sid)
-        assert s.status == "completed"
-        assert s.end_reason == "auto_stop_overload"
+        assert s.status == "active"
+        assert s.end_reason is None
     finally:
         db.close()
 
@@ -812,11 +814,12 @@ def test_autostop_sets_pending_ack_latch():
     assert bool(cfg.auto_stop_pending_ack) is True
 
 
-def test_autostop_broadcast_payload_has_severity_and_session_id():
-    """TC-ML-37 — meter_load_auto_stop event carries severity=AUTO_STOP and the ended session_id."""
+def test_autostop_broadcast_payload_has_severity_and_no_session_id():
+    """TC-ML-37 (v3.30) — meter_load_auto_stop event carries severity=AUTO_STOP.
+    session_id is None: the NUC no longer ends a session on overload."""
     pid = _ensure_cabinet()
     _seed_hw_config(pid, 1, meter_type="ABB", phases=1, rated_amps=32.0)
-    sid = _seed_active_session(pid, 1)
+    _seed_active_session(pid, 1)
 
     captured, mqtt_patch = _capture_mqtt_publishes()
     with mqtt_patch:
@@ -828,14 +831,14 @@ def test_autostop_broadcast_payload_has_severity_and_session_id():
     assert d["pedestal_id"] == pid
     assert d["socket_id"] == 1
     assert d["severity"] == "AUTO_STOP"
-    assert d["session_id"] == sid
+    assert d["session_id"] is None
     assert d["load_pct"] == pytest.approx(95.0, rel=1e-2)
 
 
 def test_autostop_terminal_does_not_fire_again():
-    """TC-ML-39 — when prev_status='auto_stop', subsequent ticks at >= 90%
-    do NOT publish another stop, do NOT add another alarm row, do NOT
-    broadcast another auto_stop event."""
+    """TC-ML-39 (v3.30) — when prev_status='auto_stop', subsequent ticks at
+    >= 90% do NOT add another alarm row and do NOT re-broadcast auto_stop. (No
+    stop command is ever published now — overload is alarm-only.)"""
     pid = _ensure_cabinet()
     _seed_hw_config(pid, 1, meter_type="ABB", phases=1, rated_amps=32.0)
 
@@ -847,7 +850,7 @@ def test_autostop_terminal_does_not_fire_again():
 
     assert not any(b.get("event") == "meter_load_auto_stop" for b in broadcasts)
     autostop_pubs = [(t, p) for t, p in captured if "autostop-" in p]
-    assert len(autostop_pubs) == 1   # only the first trip published
+    assert len(autostop_pubs) == 0   # alarm-only: never publishes a stop
 
     from app.models.meter_load_alarm import MeterLoadAlarm
     db = _TestSession()
@@ -907,16 +910,16 @@ def _set_auto_stop_latch(pedestal_id: int, socket_id: int, value: bool) -> None:
         db.close()
 
 
-def test_approve_socket_returns_409_when_auto_stop_pending_ack(client, auth_headers):
-    """TC-ML-41 — admin approve endpoint blocked while latch is set."""
+def test_approve_socket_not_blocked_by_auto_stop_latch(client, auth_headers):
+    """TC-ML-41 (v3.30) — an overload alarm is non-blocking: admin approve
+    succeeds even while auto_stop_pending_ack is set."""
     pid = _ensure_cabinet()
     _seed_socket_state(pid, 1, operator_status="pending", connected=True)
     _set_auto_stop_latch(pid, 1, True)
 
-    r = client.post(f"/api/controls/sockets/{pid}/1/approve", headers=auth_headers)
-    assert r.status_code == 409
-    assert "automatically stopped" in r.json()["detail"].lower()
-    assert "acknowledge" in r.json()["detail"].lower()
+    with patch("app.routers.controls.mqtt_service.publish"):
+        r = client.post(f"/api/controls/sockets/{pid}/1/approve", headers=auth_headers)
+    assert r.status_code == 200, r.text
 
 
 def test_approve_socket_works_when_latch_cleared(client, auth_headers):
@@ -932,8 +935,9 @@ def test_approve_socket_works_when_latch_cleared(client, auth_headers):
     assert r.status_code == 200, r.text
 
 
-def test_direct_socket_cmd_activate_returns_409_when_latch_set(client, auth_headers):
-    """TC-ML-43 — direct admin activate also guarded."""
+def test_direct_socket_cmd_activate_not_blocked_by_latch(client, auth_headers):
+    """TC-ML-43 (v3.30) — direct admin activate is no longer guarded by the
+    overload latch (alarm-only; the NUC never withholds control)."""
     pid = _ensure_cabinet()
     _seed_socket_state(pid, 1, connected=True)
     _set_auto_stop_latch(pid, 1, True)
@@ -944,8 +948,8 @@ def test_direct_socket_cmd_activate_returns_409_when_latch_set(client, auth_head
             json={"action": "activate"},
             headers=auth_headers,
         )
-    assert r.status_code == 409
-    assert "automatically stopped" in r.json()["detail"].lower()
+    assert r.status_code == 200, r.text
+    assert r.json()["action"] == "activate"
 
 
 def test_direct_socket_cmd_stop_works_when_latch_set(client, auth_headers):
@@ -964,10 +968,10 @@ def test_direct_socket_cmd_stop_works_when_latch_set(client, auth_headers):
     assert r.json()["action"] == "stop"
 
 
-def test_auto_activate_precondition_returns_overload_reason_when_latch_set():
-    """TC-ML-45 — D8: _auto_activate_precondition_check skips with the
-    documented reason string when auto_stop_pending_ack is True. This
-    guards the auto-activation path that fires from UserPluggedIn."""
+def test_auto_activate_precondition_not_blocked_by_latch():
+    """TC-ML-45 (v3.30) — _auto_activate_precondition_check no longer skips on
+    auto_stop_pending_ack (overload is alarm-only). With every other check
+    passing it must return None."""
     pid = _ensure_cabinet()
     _seed_socket_state(pid, 1, connected=True)
     _set_auto_stop_latch(pid, 1, True)
@@ -1000,7 +1004,7 @@ def test_auto_activate_precondition_returns_overload_reason_when_latch_set():
             reason = _mh._auto_activate_precondition_check(db, pid, 1)
     finally:
         db.close()
-    assert reason == "overload alarm pending acknowledgment"
+    assert reason is None
 
 
 def _trigger_auto_stop(pedestal_id: int, socket_id: int = 1) -> None:
@@ -1096,24 +1100,23 @@ def test_acknowledge_endpoint_returns_409_when_nothing_pending(client, auth_head
     assert r.status_code == 409
 
 
-def test_socket_can_be_reactivated_after_acknowledge(client, auth_headers):
-    """TC-ML-50 — after ack, the approve flow no longer returns 409."""
+def test_acknowledge_clears_latch_and_approve_succeeds(client, auth_headers):
+    """TC-ML-50 (v3.30) — the overload ack still clears the latch (sticky alarm
+    cleared), and approve works. Approve is no longer blocked pre-ack either,
+    but this verifies the ack→approve happy path end-to-end."""
     pid = _ensure_cabinet()
     _trigger_auto_stop(pid, 1)
     _seed_socket_state(pid, 1, operator_status="pending", connected=True)
 
-    # Pre-ack: approve is blocked.
-    r1 = client.post(f"/api/controls/sockets/{pid}/1/approve", headers=auth_headers)
-    assert r1.status_code == 409
-
-    # Ack.
+    # Ack clears the sticky overload latch.
     r2 = client.post(
         f"/api/pedestals/{pid}/sockets/1/load/auto-stop/acknowledge",
         headers=auth_headers,
     )
     assert r2.status_code == 200
+    assert bool(_get_socket_cfg(pid, 1).auto_stop_pending_ack) is False
 
-    # Post-ack: approve succeeds.
+    # Approve succeeds.
     with patch("app.routers.controls.mqtt_service.publish"):
         r3 = client.post(f"/api/controls/sockets/{pid}/1/approve", headers=auth_headers)
     assert r3.status_code == 200, r3.text

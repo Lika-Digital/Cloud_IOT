@@ -288,7 +288,10 @@ def test_breaker_tripped_event_logs_and_broadcasts():
 
 # ── TC-BR-05: BreakerTripped stops active power session ─────────────────────
 
-def test_breaker_tripped_stops_active_session_with_end_reason():
+def test_breaker_tripped_leaves_session_running():
+    """v3.30 — a breaker trip is alarm/audit-only: the NUC no longer completes
+    the active session. The trip has physically cut the socket; fault precedence
+    shows it faulted on the UI, but the session row is left untouched."""
     from app.models.session import Session
     pid = _pedestal_id_for_cabinet()
 
@@ -314,10 +317,10 @@ def test_breaker_tripped_stops_active_session_with_end_reason():
 
     db = _TestSession()
     try:
-        finished = db.get(Session, sid)
-        assert finished.status == "completed"
-        assert finished.end_reason == "breaker_trip"
-        assert finished.ended_at is not None
+        unchanged = db.get(Session, sid)
+        assert unchanged.status == "active"
+        assert unchanged.end_reason is None
+        assert unchanged.ended_at is None
     finally:
         db.close()
 

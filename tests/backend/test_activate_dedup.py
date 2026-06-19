@@ -33,6 +33,7 @@ def dedup_pid(client, auth_headers):
             cfg = PedestalConfig(pedestal_id=pid); db.add(cfg)
         cfg.opta_client_id = CAB
         cfg.door_state = "closed"
+        cfg.smart_mode = True   # v3.30 — control endpoints require SmartMode ON
         for sid in (3, 4):
             if db.query(SocketState).filter(
                 SocketState.pedestal_id == pid, SocketState.socket_id == sid).first() is None:

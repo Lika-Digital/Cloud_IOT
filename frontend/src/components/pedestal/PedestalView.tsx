@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useStore } from '../../store'
 import { useAuthStore } from '../../store/authStore'
+import { getSocketBreakerStatus } from '../../api/breakers'
 import pedestalImg from '../../assets/pedestal.jpg'
 import CameraModal from './CameraModal'
 import PedestalControlCenter from './PedestalControlCenter'
@@ -30,8 +31,39 @@ export default function PedestalView({ pedestalId }: PedestalViewProps) {
   const [activeTab, setActiveTab] = useState<'overview' | 'control'>('overview')
 
   const { pedestals, temperatureData, moistureData, marinaDoorState } = useStore()
+  const setBreakerState = useStore((s) => s.setBreakerState)
   const pedestal = pedestals.find((p) => p.id === pedestalId)
   const doorState = marinaDoorState[pedestalId]
+
+  // v3.32 — hydrate breaker state on load. `breaker_state_changed` is a
+  // change-only WS event published once (often when the backend processes the
+  // retained breaker message at startup), so a browser that connects later
+  // never receives it and the panel shows "Unknown / Not reported". Fetch the
+  // current state for every socket from the DB so the badge, the click-panel,
+  // and the Control Center all reflect reality (incl. a tripped breaker as the
+  // fault reason) regardless of when the page loaded — in BOTH smart modes.
+  useEffect(() => {
+    let cancelled = false
+    for (const sid of [1, 2, 3, 4]) {
+      getSocketBreakerStatus(pedestalId, sid)
+        .then((r) => {
+          if (cancelled) return
+          setBreakerState(pedestalId, sid, {
+            breaker_state: r.breaker_state,
+            trip_cause: r.breaker_trip_cause,
+            breaker_type: r.breaker_type,
+            breaker_rating: r.breaker_rating,
+            breaker_poles: r.breaker_poles,
+            breaker_rcd: r.breaker_rcd,
+            breaker_rcd_sensitivity: r.breaker_rcd_sensitivity,
+            last_trip_at: r.breaker_last_trip_at,
+            trip_count: r.breaker_trip_count,
+          })
+        })
+        .catch(() => { /* leave as 'unknown' — socket may have no breaker yet */ })
+    }
+    return () => { cancelled = true }
+  }, [pedestalId, setBreakerState])
 
   const temp = temperatureData[pedestalId]
   const moist = moistureData[pedestalId]

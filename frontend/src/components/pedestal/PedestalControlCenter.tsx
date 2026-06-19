@@ -252,7 +252,15 @@ function SocketCard({
       />
 
       {isAdmin && (
-        <>
+        // v3.30 — Smart Mode is the master gate. When OFF the Opta is in
+        // standalone control and ignores NUC commands, so every control here is
+        // disabled + grayed; the dashboard is read-only for this pedestal.
+        <div className={!smartMode ? 'opacity-50 pointer-events-none select-none' : undefined}>
+          {!smartMode && (
+            <div className="text-[11px] text-gray-400 bg-gray-900/40 border border-gray-700 rounded px-2 py-1 mb-1">
+              Standalone — Smart Mode is OFF. Controls are disabled (Opta in control).
+            </div>
+          )}
           <label className="flex items-center justify-between gap-2 pt-1 text-xs text-gray-300 select-none cursor-pointer">
             <span className="flex items-center gap-1.5">
               Auto-activate
@@ -262,7 +270,7 @@ function SocketCard({
               type="checkbox"
               checked={autoActivate}
               onChange={handleAutoToggle}
-              disabled={autoBusy}
+              disabled={autoBusy || !smartMode}
               className="h-3 w-3 accent-green-500 cursor-pointer"
               aria-label={`Auto-activate ${socketName}`}
             />
@@ -278,9 +286,10 @@ function SocketCard({
               <CmdButton
                 label="Stop"
                 color="red"
-                disabled={loading !== null}
+                disabled={loading !== null || !smartMode}
                 loading={loading === 'stop'}
                 onClick={() => sendCmd('stop')}
+                title={!smartMode ? 'Standalone — Opta in control' : undefined}
               />
             ) : (
               <CmdButton
@@ -301,7 +310,7 @@ function SocketCard({
               />
             )}
           </div>
-        </>
+        </div>
       )}
 
       {qrOpen && (
@@ -437,6 +446,7 @@ function WaterCard({
   showFlowWarning,
   unattributedSession,
   onFeedback,
+  smartMode,
 }: {
   valveName: string
   valveState: OptaWaterState | null
@@ -447,6 +457,11 @@ function WaterCard({
   showFlowWarning: boolean
   unattributedSession: boolean
   onFeedback: (key: string, type: 'success' | 'error', text: string) => void
+  /** v3.30 — firmware SmartMode for this pedestal. When false the Opta is in
+   *  standalone control; all valve controls are disabled and the
+   *  "unattributed" badge (only meaningful when the NUC tracks sessions) is
+   *  hidden. */
+  smartMode: boolean
 }) {
   const [loading, setLoading] = useState<string | null>(null)
   const [autoBusy, setAutoBusy] = useState(false)
@@ -497,7 +512,7 @@ function WaterCard({
               AUTO
             </span>
           )}
-          {unattributedSession && (
+          {unattributedSession && smartMode && (
             <span
               className="text-[10px] font-bold text-amber-300 border border-amber-500/50 rounded px-1 py-px"
               title="Active session has no customer attached (auto-open / firmware-initiated)"
@@ -533,7 +548,14 @@ function WaterCard({
       )}
 
       {isAdmin && (
-        <>
+        // v3.30 — Smart Mode master gate: standalone cabinets disable all valve
+        // control (the Opta owns the valves and ignores NUC commands).
+        <div className={!smartMode ? 'opacity-50 pointer-events-none select-none' : undefined}>
+          {!smartMode && (
+            <div className="text-[11px] text-gray-400 bg-gray-900/40 border border-gray-700 rounded px-2 py-1 mb-1">
+              Standalone — Smart Mode is OFF. Controls are disabled (Opta in control).
+            </div>
+          )}
           <label className="flex items-center justify-between gap-2 pt-1 text-xs text-gray-300 select-none cursor-pointer">
             <span className="flex items-center gap-1.5">
               Auto-activate
@@ -543,7 +565,7 @@ function WaterCard({
               type="checkbox"
               checked={autoActivate}
               onChange={handleAutoToggle}
-              disabled={autoBusy}
+              disabled={autoBusy || !smartMode}
               className="h-3 w-3 accent-green-500 cursor-pointer"
               aria-label={`Auto-activate ${valveName}`}
             />
@@ -553,19 +575,21 @@ function WaterCard({
             <CmdButton
               label="Activate"
               color="green"
-              disabled={state === 'active' || loading !== null}
+              disabled={state === 'active' || loading !== null || !smartMode}
               loading={loading === 'activate'}
               onClick={() => sendCmd('activate')}
+              title={!smartMode ? 'Standalone — Opta in control' : undefined}
             />
             <CmdButton
               label="Stop"
               color="red"
-              disabled={state === 'idle' || loading !== null}
+              disabled={state === 'idle' || loading !== null || !smartMode}
               loading={loading === 'stop'}
               onClick={() => sendCmd('stop')}
+              title={!smartMode ? 'Standalone — Opta in control' : undefined}
             />
           </div>
-        </>
+        </div>
       )}
     </div>
   )
@@ -1120,6 +1144,7 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
                 showFlowWarning={valveFlowWarnings.includes(key)}
                 unattributedSession={unattributed}
                 onFeedback={show}
+                smartMode={smartOn}
               />
             )
           })}

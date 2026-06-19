@@ -1,7 +1,5 @@
 import { useState, useEffect } from 'react'
 import { useStore } from '../../store'
-import { useAuthStore } from '../../store/authStore'
-import { stopSession, approveSocket, rejectSocket, directWaterCmd } from '../../api'
 import pedestalImg from '../../assets/pedestal.jpg'
 import CameraModal from './CameraModal'
 import PedestalControlCenter from './PedestalControlCenter'
@@ -311,12 +309,10 @@ function ZoneButton({
 // ─── Socket Detail Panel ─────────────────────────────────────────────────────
 
 function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pedestalId: number; onClose: () => void }) {
-  const { pendingSessions, activeSessions, socketLiveData, updateSession, pendingSockets, addSession, removePendingSocket, optaWaterStates, socketComputedStates, socketBreakerStates, socketLoadStates, socketHardwareConfig } = useStore()
-  const { role } = useAuthStore()
-  const isAdmin = role === 'admin'
-  const [actionError, setActionError] = useState<string | null>(null)
-  const [denyReason, setDenyReason] = useState('')
-  const [approvalLoading, setApprovalLoading] = useState<'approve' | 'reject' | null>(null)
+  // v3.30 — this panel is INFORMATION-ONLY. All control (activate/stop/approve/
+  // reject) lives in the Control Center; clicking a socket only surfaces its
+  // state, live readings, session counter, and the pedestal's Smart Mode.
+  const { pendingSessions, activeSessions, socketLiveData, pendingSockets, optaWaterStates, socketComputedStates, socketBreakerStates, socketLoadStates, socketHardwareConfig, optaStatusInfo, pedestalHealth } = useStore()
 
   const isWater = zoneId === 'water-left' || zoneId === 'water-right'
   const isCamera = zoneId === 'camera'
@@ -330,6 +326,9 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
   // Camera zone is handled by modal; this panel shouldn't appear for it
   if (isCamera) return null
   const zone = SOCKET_ZONES.find((z) => z.id === zoneId)!
+
+  // v3.30 — Smart Mode indicator: live opta_status first, health snapshot fallback.
+  const smartMode = optaStatusInfo[pedestalId]?.smart_mode ?? pedestalHealth[pedestalId]?.smart_mode ?? false
 
   // Water sessions are tracked per-valve via firmware state. Since backend
   // session rows use socket_id=None for water (shared V1/V2), use the live
@@ -357,50 +356,6 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
   const loadState = !isWater && socketId !== null ? socketLoadStates[skey] : undefined
   const hwConfig = !isWater && socketId !== null ? socketHardwareConfig[skey] : undefined
 
-  const handleStop = async () => {
-    setActionError(null)
-    try {
-      if (isWater && valveName) {
-        await directWaterCmd(pedestalId, valveName, 'stop')
-      } else if (activeSession) {
-        const updated = await stopSession(activeSession.id)
-        updateSession({ id: updated.id, status: 'completed' })
-      }
-    } catch {
-      setActionError('Stop failed — check connection and try again.')
-    }
-  }
-
-  const handleApprove = async () => {
-    if (!socketId) return
-    setApprovalLoading('approve')
-    setActionError(null)
-    try {
-      const session = await approveSocket(pedestalId, socketId)
-      addSession({ ...session, status: 'active' })
-      removePendingSocket(pedestalId, socketId)
-    } catch {
-      setActionError('Approve failed — check connection and try again.')
-    } finally {
-      setApprovalLoading(null)
-    }
-  }
-
-  const handleReject = async () => {
-    if (!socketId) return
-    setApprovalLoading('reject')
-    setActionError(null)
-    try {
-      await rejectSocket(pedestalId, socketId, denyReason || undefined)
-      removePendingSocket(pedestalId, socketId)
-      setDenyReason('')
-    } catch {
-      setActionError('Reject failed — check connection and try again.')
-    } finally {
-      setApprovalLoading(null)
-    }
-  }
-
   return (
     <div className="card space-y-4">
       {/* Header */}
@@ -421,15 +376,21 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
             {breakerTripped ? 'Breaker Tripped' : isFault ? 'Fault' : isActive ? 'Active' : pendingSession ? 'Starting…' : 'Idle'}
           </span>
         </div>
-        <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-xl leading-none">✕</button>
-      </div>
-
-      {/* Action error */}
-      {actionError && (
-        <div className="bg-red-900/30 border border-red-700/50 text-red-300 text-sm px-3 py-2 rounded-lg">
-          {actionError}
+        <div className="flex items-center gap-2">
+          {/* v3.30 — Smart Mode at a glance. OFF = standalone (Opta in control). */}
+          <span
+            className={`badge text-[10px] ${smartMode
+              ? 'bg-green-900/40 text-green-300 border border-green-700/50'
+              : 'bg-gray-800 text-gray-400 border border-gray-700'}`}
+            title={smartMode
+              ? 'Smart Mode ON — the NUC controls this pedestal.'
+              : 'Smart Mode OFF — standalone; the Opta controls this pedestal (dashboard read-only).'}
+          >
+            {smartMode ? 'Smart Mode: ON' : 'Smart Mode: OFF'}
+          </span>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-xl leading-none">✕</button>
         </div>
-      )}
+      </div>
 
       {/* Breaker tripped — highest priority; mirrors the ⚡ marker on the socket */}
       {breakerTripped && (
@@ -443,9 +404,6 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
             <p className="text-xs text-gray-500">
               Rated: {hwConfig.rated_amps} A{hwConfig.meter_type ? ` · ${hwConfig.meter_type}` : ''}
             </p>
-          )}
-          {isAdmin && activeSession && (
-            <button className="btn-warning w-full mt-1" onClick={handleStop}>Stop Session</button>
           )}
         </div>
       )}
@@ -461,38 +419,13 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
         </div>
       )}
 
-      {/* Socket-level pending: MQTT connected, waiting for operator/mobile approval */}
+      {/* Socket-level pending: device connected, awaiting approval (info-only) */}
       {socketPending && !pendingSession && !isActive && !breakerTripped && !isFault && (
-        <div className="bg-amber-900/20 border border-amber-700/40 rounded-lg p-4 space-y-3">
+        <div className="bg-amber-900/20 border border-amber-700/40 rounded-lg p-4 space-y-1">
           <p className="text-amber-300 font-medium">Device Connected — Awaiting Approval</p>
-          <p className="text-xs text-gray-400">A device was plugged in. Approve to start the session or reject to deny.</p>
-          {isAdmin && (
-            <>
-              <input
-                type="text"
-                placeholder="Rejection reason (optional)"
-                value={denyReason}
-                onChange={(e) => setDenyReason(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200 placeholder-gray-500"
-              />
-              <div className="flex gap-2">
-                <button
-                  onClick={handleApprove}
-                  disabled={approvalLoading !== null}
-                  className="flex-1 py-2 px-4 rounded-lg text-sm font-medium bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white transition-colors"
-                >
-                  {approvalLoading === 'approve' ? 'Approving…' : 'Approve'}
-                </button>
-                <button
-                  onClick={handleReject}
-                  disabled={approvalLoading !== null}
-                  className="flex-1 py-2 px-4 rounded-lg text-sm font-medium bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white transition-colors"
-                >
-                  {approvalLoading === 'reject' ? 'Rejecting…' : 'Reject'}
-                </button>
-              </div>
-            </>
-          )}
+          <p className="text-xs text-gray-400">
+            A device was plugged in. Approve or reject it from the Control Center.
+          </p>
         </div>
       )}
 
@@ -506,34 +439,29 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
         </div>
       )}
 
-      {/* Active state */}
+      {/* Active state — live readings + session counter (info-only) */}
       {isActive && !breakerTripped && !isFault && (
-        <div className="space-y-3">
-          <div className="bg-green-900/20 border border-green-700/40 rounded-lg p-4 space-y-3">
-            {!isWater && liveData && (
-              <>
-                <LiveMetric label="Power" value={`${liveData.watts.toFixed(0)} W`} big />
-                <LiveMetric label="Total Energy" value={`${liveData.kwh_total.toFixed(4)} kWh`} />
-              </>
-            )}
-            {!isWater && loadState && (loadState.voltage_v != null || loadState.current_amps != null || loadState.power_factor != null) && (
-              <>
-                {loadState.voltage_v != null && <LiveMetric label="Voltage" value={`${loadState.voltage_v.toFixed(0)} V`} />}
-                {loadState.current_amps != null && <LiveMetric label="Current" value={`${loadState.current_amps.toFixed(1)} A`} />}
-                {loadState.power_factor != null && <LiveMetric label="Power factor" value={loadState.power_factor.toFixed(2)} />}
-              </>
-            )}
-            {isWater && valveState && (
-              <>
-                <LiveMetric label="Session Volume" value={`${(valveState.session_l ?? 0).toFixed(2)} L`} big />
-                <LiveMetric label="Total" value={`${(valveState.total_l ?? 0).toFixed(2)} L`} />
-              </>
-            )}
-            {activeSession && <SessionTimer startedAt={activeSession.started_at} />}
-          </div>
-          {isAdmin && (
-            <button className="btn-warning w-full" onClick={handleStop}>Stop Session</button>
+        <div className="bg-green-900/20 border border-green-700/40 rounded-lg p-4 space-y-3">
+          {!isWater && liveData && (
+            <>
+              <LiveMetric label="Power" value={`${liveData.watts.toFixed(0)} W`} big />
+              <LiveMetric label="Total Energy" value={`${liveData.kwh_total.toFixed(4)} kWh`} />
+            </>
           )}
+          {!isWater && loadState && (loadState.voltage_v != null || loadState.current_amps != null || loadState.power_factor != null) && (
+            <>
+              {loadState.voltage_v != null && <LiveMetric label="Voltage" value={`${loadState.voltage_v.toFixed(0)} V`} />}
+              {loadState.current_amps != null && <LiveMetric label="Current" value={`${loadState.current_amps.toFixed(1)} A`} />}
+              {loadState.power_factor != null && <LiveMetric label="Power factor" value={loadState.power_factor.toFixed(2)} />}
+            </>
+          )}
+          {isWater && valveState && (
+            <>
+              <LiveMetric label="Session Volume" value={`${(valveState.session_l ?? 0).toFixed(2)} L`} big />
+              <LiveMetric label="Total" value={`${(valveState.total_l ?? 0).toFixed(2)} L`} />
+            </>
+          )}
+          {activeSession && <SessionTimer startedAt={activeSession.started_at} />}
         </div>
       )}
 
@@ -560,6 +488,11 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
           )}
         </div>
       )}
+
+      {/* v3.30 — controls moved out: this panel is read-only. */}
+      <p className="text-[11px] text-gray-500 border-t border-gray-700/50 pt-2">
+        Controls (activate, stop, approve/reject) are in the Control Center.
+      </p>
     </div>
   )
 }

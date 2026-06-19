@@ -21,6 +21,7 @@ import NfcProvisioningTable from './NfcProvisioningTable'
 import { getProvisioningMode, setProvisioningMode, type ProvisioningMode } from '../../api/nfc'
 import SocketBreakerPanel from './SocketBreakerPanel'
 import SocketLoadMeterPanel from './SocketLoadMeterPanel'
+import SocketUsageHistoryModal from './SocketUsageHistoryModal'
 import type { OptaSocketState, OptaWaterState, OptaLogEntry } from '../../store'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -120,6 +121,7 @@ function SocketCard({
   const [autoBusy, setAutoBusy] = useState(false)
   const [autoJustSaved, setAutoJustSaved] = useState(false)
   const [qrOpen, setQrOpen] = useState(false)
+  const [histOpen, setHistOpen] = useState(false)
 
   const socketId = Number(socketName.replace('Q', ''))
   // v3.12 — when the auto-stop latch is set the Activate button must be
@@ -194,6 +196,14 @@ function SocketCard({
           )}
         </div>
         <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setHistOpen(true)}
+            className="text-[10px] px-1.5 py-0.5 rounded border border-gray-600 text-gray-300 hover:bg-gray-700/60"
+            title="Usage history + monthly report for this socket"
+          >
+            History
+          </button>
           {isAdmin && (
             <button
               type="button"
@@ -318,6 +328,17 @@ function SocketCard({
           pedestalId={pedestalId}
           socketName={socketName}
           onClose={() => setQrOpen(false)}
+        />
+      )}
+
+      {histOpen && (
+        <SocketUsageHistoryModal
+          pedestalId={pedestalId}
+          socketId={socketId}
+          resource="electricity"
+          label={socketName}
+          isAdmin={isAdmin}
+          onClose={() => setHistOpen(false)}
         />
       )}
     </div>
@@ -466,6 +487,7 @@ function WaterCard({
   const [loading, setLoading] = useState<string | null>(null)
   const [autoBusy, setAutoBusy] = useState(false)
   const [autoJustSaved, setAutoJustSaved] = useState(false)
+  const [histOpen, setHistOpen] = useState(false)
   const state = valveState?.state ?? 'idle'
   const label = `Valve ${valveName}`
   const valveId = Number(valveName.replace('V', ''))
@@ -521,7 +543,17 @@ function WaterCard({
             </span>
           )}
         </div>
-        <StateBadge state={state} />
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setHistOpen(true)}
+            className="text-[10px] px-1.5 py-0.5 rounded border border-gray-600 text-gray-300 hover:bg-gray-700/60"
+            title="Usage history + monthly report for this valve"
+          >
+            History
+          </button>
+          <StateBadge state={state} />
+        </div>
       </div>
 
       {valveState && (
@@ -590,6 +622,17 @@ function WaterCard({
             />
           </div>
         </div>
+      )}
+
+      {histOpen && (
+        <SocketUsageHistoryModal
+          pedestalId={pedestalId}
+          socketId={valveId}
+          resource="water"
+          label={valveName}
+          isAdmin={isAdmin}
+          onClose={() => setHistOpen(false)}
+        />
       )}
     </div>
   )

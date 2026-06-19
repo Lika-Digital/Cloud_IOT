@@ -41,6 +41,12 @@ ENDPOINT_CATALOG = [
     {"id": "load.socket_history_ext", "path": "/api/ext/pedestals/{pedestal_id}/sockets/{socket_id}/load/history",     "method": "GET", "category": "Load Monitoring", "allow_bidirectional": False},
     # v3.12 — auto-stop overload protection: ERP-driven acknowledgment.
     {"id": "load.auto_stop_ack_ext",  "path": "/api/ext/pedestals/{pedestal_id}/sockets/{socket_id}/load/auto-stop/acknowledge", "method": "POST", "category": "Load Monitoring", "allow_bidirectional": True},
+    # v3.31 — Usage history + monthly reports (read-only for ERP; proxied to the
+    # internal admin routes). Report DELETION is intentionally NOT listed — it
+    # stays admin-only on the dashboard (gateway monitor-mode permits GET only).
+    {"id": "usage.history",           "path": "/api/pedestals/{pedestal_id}/usage/history",            "method": "GET", "category": "Usage History", "allow_bidirectional": False},
+    {"id": "usage.reports_list",      "path": "/api/pedestals/{pedestal_id}/usage/reports",            "method": "GET", "category": "Usage History", "allow_bidirectional": False},
+    {"id": "usage.report_download",   "path": "/api/pedestals/{pedestal_id}/usage/reports/{month}",     "method": "GET", "category": "Usage History", "allow_bidirectional": False},
     # Mobile QR-claim + monitoring (v3.6)
     {"id": "mobile.qr_claim",        "path": "/api/mobile/qr/claim",                                            "method": "POST",  "category": "Mobile", "allow_bidirectional": True},
     {"id": "mobile.session_live",    "path": "/api/mobile/sessions/{session_id}/live",                          "method": "GET",   "category": "Mobile", "allow_bidirectional": False},

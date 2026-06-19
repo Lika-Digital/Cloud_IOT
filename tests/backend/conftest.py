@@ -19,6 +19,10 @@ os.environ.setdefault("JWT_SECRET", "test-secret-key-for-ci")
 os.environ.setdefault("DEFAULT_ADMIN_EMAIL", "admin@test.local")
 os.environ.setdefault("DEFAULT_ADMIN_PASSWORD", "testadmin1234")
 os.environ.setdefault("MQTT_BROKER_HOST", "localhost")
+# v3.31 — keep usage-report files out of the real ./reports dir. Set via env
+# (read at Settings construction) so every imported module tree agrees, rather
+# than monkeypatching one settings object.
+os.environ.setdefault("REPORTS_DIR", "./tests/test_reports")
 
 # ── Test DB URLs (file-based so cross-module fixtures share state) ────────────
 TEST_DB     = "sqlite:///./tests/test_pedestal.db"

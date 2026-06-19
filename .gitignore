@@ -39,3 +39,8 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# v3.31 — usage-history monthly report files (runtime output + test artifacts)
+/reports/
+backend/reports/
+tests/test_reports/

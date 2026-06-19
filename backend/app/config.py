@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     # Pending session / socket approval timeout (seconds)
     pending_timeout_seconds: int = 15
 
+    # v3.31 — Usage-history monthly reports. Plain-text reports are written here,
+    # one file per pedestal per month. MUST be on PERSISTENT storage that
+    # survives a `cloud-iot upgrade` (the app's static/ dir may be replaced),
+    # so the default sits next to the SQLite DB (the working dir) rather than
+    # under the package. Override with REPORTS_DIR in .env on the NUC. This data
+    # is deleted only by an admin via the API — never by the retention sweeper.
+    reports_dir: str = "./reports"
+
     # v3.10 — Marina-local time zone for the LED schedule. Operators enter
     # `on_time` / `off_time` in this zone via the Control Center. Default is
     # UTC so a fresh dev install behaves predictably; production .env on the

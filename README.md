@@ -83,6 +83,50 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-06-19 — Socket/valve usage history + monthly reports (v3.31)
+
+Per-socket and per-valve **usage history**, viewable in the dashboard and downloadable
+as a plain-text **monthly report**. Reports are protected: only an admin can delete
+them, never the system.
+
+- **History view:** a **History** button on every socket and valve (Control Center cards
+  + the read-only socket-detail panel) opens a month-filtered list of completed sessions —
+  start/end time, kWh or liters, and the customer / NFC user when known. When Smart Mode
+  was off (standalone Opta), the customer columns are simply blank — we show only what the
+  session row actually holds.
+- **Monthly reports on disk:** one plain-text file per pedestal per month
+  (`pedestal-{id}_{YYYY}-{MM}.txt`, sectioned by socket/valve with per-outlet and grand
+  totals), written under `REPORTS_DIR` — **persistent storage that survives
+  `cloud-iot upgrade`** (default `./reports`; set `REPORTS_DIR` in the NUC `.env` to a
+  durable path). A monthly job writes the previous month at rollover; a download for any
+  missing month is generated on demand (lazy backfill).
+- **Protected data:** the retention sweeper only prunes DB telemetry tables and never
+  touches the reports directory; the monthly job only *creates* files. Deletion is a
+  single admin-only, audited endpoint (`DELETE …/usage/reports/{month}`).
+- **API:** internal admin endpoints `GET/DELETE /api/pedestals/{id}/usage/{history,reports,…}`.
+  The read-only GETs are opt-in exposable to the ERP via the API Gateway (added to the
+  catalog under **Usage History**); report deletion stays dashboard-only (gateway
+  monitor-mode permits GET only).
+
+### 2026-06-19 — Alarm-only safety + monitor-only standalone (v3.30) — `d9339c5`, `ca57635`, `08671ee`
+
+Smart Mode is now the master switch for whether the NUC *acts*, and the NUC no longer
+shuts sockets down on its own.
+
+- **No NUC-initiated shutdown (both modes):** the overload (≥90%) auto-stop and the
+  breaker-trip handler no longer end the session or publish a stop command — they only
+  raise the alarm (kept) and audit row. The overload acknowledge is now non-blocking
+  (an alarm never withholds control); the three `auto_stop_pending_ack` 409 guards were removed.
+- **Monitor-only when Smart Mode OFF:** session adoption (socket + water), post-diagnostic
+  valve auto-open, and auto-activate are gated on Smart Mode ON — removing the spurious
+  "unattributed" sessions while standalone. `direct_socket_cmd` / `direct_water_cmd` return
+  409 when Smart Mode is OFF (the dashboard is read-only for that pedestal).
+- **Standalone reconcile:** turning Smart Mode OFF clears stale `awaiting_activation`/`pending`
+  markers and denies never-activated pending sessions, so sockets don't get stuck "pending".
+- **UI:** all socket *and* valve controls gray out when Smart Mode is OFF; the socket-click
+  panel is now information-only (state, live readings, session counter, Smart Mode badge) —
+  controls live in the Control Center; the "unattributed" valve badge is hidden when OFF.
+
 ### 2026-06-18 — Plugged-aware Activate + 3 socket modes (v3.29)
 
 Three explicit per-socket modes — **Auto / Activate / Stop** — and full use of the

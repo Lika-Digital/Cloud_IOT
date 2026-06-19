@@ -44,6 +44,7 @@ from .routers import meter_load as meter_load_router
 from .routers import ext_meter_load_endpoints as ext_meter_load_router
 from .routers import settings as settings_router
 from .routers import config_backup as config_backup_router
+from .routers import usage_history as usage_history_router  # v3.31 — usage history + monthly reports
 from .auth.user_database import init_user_db, UserSessionLocal
 from .auth.models import User
 from .auth.customer_models import BillingConfig
@@ -85,6 +86,31 @@ async def _data_retention_purge():
             purge_old_data()
         except Exception as e:
             logger.warning(f"Data retention purge failed: {e}")
+
+
+async def _monthly_usage_report_writer():
+    """Generate each pedestal's previous-month usage report (v3.31).
+
+    Ticks every 6 h and ensures the previous calendar month's plain-text report
+    file exists for every pedestal. ``generate_due_reports`` is idempotent — it
+    only writes a file that is not already present — so a fresh file appears once
+    shortly after each month rolls over, then is skipped. Sleeps BEFORE the first
+    run (like the retention loop) so it never fires during process startup; a
+    download for any missing month is generated on demand anyway (lazy backfill),
+    so nothing is lost in the gap after a reboot.
+    """
+    while True:
+        await asyncio.sleep(6 * 3600)
+        try:
+            from .database import SessionLocal
+            from .services.usage_report_service import generate_due_reports
+            db = SessionLocal()
+            try:
+                generate_due_reports(db)
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"Monthly usage report generation failed: {e}")
 
 
 async def _status_snapshot_writer():
@@ -606,6 +632,7 @@ async def lifespan(app: FastAPI):
     from .services.storage_monitor import run_storage_monitor
     cleanup_task         = asyncio.create_task(_hourly_log_purge())
     retention_task       = asyncio.create_task(_data_retention_purge())
+    usage_report_task    = asyncio.create_task(_monthly_usage_report_writer())  # v3.31
     status_writer_task   = asyncio.create_task(_status_snapshot_writer())
     watchdog_task        = asyncio.create_task(_pending_session_watchdog())
     socket_pending_task  = asyncio.create_task(_socket_pending_watchdog())
@@ -626,6 +653,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down...")
     cleanup_task.cancel()
     retention_task.cancel()
+    usage_report_task.cancel()
     status_writer_task.cancel()
     watchdog_task.cancel()
     socket_pending_task.cancel()
@@ -719,6 +747,7 @@ app.include_router(settings_router.router)
 app.include_router(config_backup_router.router)  # v3.16 — config backup/restore
 app.include_router(breakers_router.router)       # v3.8 — internal breaker admin routes
 app.include_router(meter_load_router.router)    # v3.11 — internal load monitoring routes
+app.include_router(usage_history_router.router) # v3.31 — usage history + monthly reports
 app.include_router(ext_pedestal_router.router)   # must be before gateway catch-all
 app.include_router(ext_breaker_router.router)    # v3.8 — must be before gateway catch-all
 app.include_router(ext_meter_load_router.router) # v3.11 — must be before gateway catch-all

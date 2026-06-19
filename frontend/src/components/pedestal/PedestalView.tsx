@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
 import { useStore } from '../../store'
+import { useAuthStore } from '../../store/authStore'
 import pedestalImg from '../../assets/pedestal.jpg'
 import CameraModal from './CameraModal'
 import PedestalControlCenter from './PedestalControlCenter'
+import SocketUsageHistoryModal from './SocketUsageHistoryModal'
 
 // Zone definitions — positions as % of image dimensions
 // Each zone is positioned over the actual socket/pipe on the image
@@ -313,6 +315,8 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
   // reject) lives in the Control Center; clicking a socket only surfaces its
   // state, live readings, session counter, and the pedestal's Smart Mode.
   const { pendingSessions, activeSessions, socketLiveData, pendingSockets, optaWaterStates, socketComputedStates, socketBreakerStates, socketLoadStates, socketHardwareConfig, optaStatusInfo, pedestalHealth } = useStore()
+  const isAdmin = useAuthStore((s) => s.role) === 'admin'
+  const [histOpen, setHistOpen] = useState(false)
 
   const isWater = zoneId === 'water-left' || zoneId === 'water-right'
   const isCamera = zoneId === 'camera'
@@ -377,6 +381,14 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setHistOpen(true)}
+            className="text-[10px] px-1.5 py-0.5 rounded border border-gray-600 text-gray-300 hover:bg-gray-700/60"
+            title="Usage history + monthly report"
+          >
+            History
+          </button>
           {/* v3.30 — Smart Mode at a glance. OFF = standalone (Opta in control). */}
           <span
             className={`badge text-[10px] ${smartMode
@@ -493,6 +505,17 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
       <p className="text-[11px] text-gray-500 border-t border-gray-700/50 pt-2">
         Controls (activate, stop, approve/reject) are in the Control Center.
       </p>
+
+      {histOpen && (
+        <SocketUsageHistoryModal
+          pedestalId={pedestalId}
+          socketId={isWater ? (valveName ? Number(valveName.replace('V', '')) : 0) : (socketId ?? 0)}
+          resource={isWater ? 'water' : 'electricity'}
+          label={isWater ? (valveName ?? 'V?') : (socketId !== null ? `Q${socketId}` : '?')}
+          isAdmin={isAdmin}
+          onClose={() => setHistOpen(false)}
+        />
+      )}
     </div>
   )
 }

@@ -252,23 +252,25 @@ function SocketCard({
         </div>
       )}
 
-      {/* v3.8 — breaker status + Hardware Info + reset/history.
-          Visible to all roles; Reset button gates on isAdmin inside the panel. */}
+      {/* v3.32 — config mode: breaker Reset only (status/history live in the
+          Dashboard Overview). */}
       <SocketBreakerPanel
         pedestalId={pedestalId}
         socketId={socketId}
         isAdmin={isAdmin}
         onFeedback={onFeedback}
+        mode="config"
       />
 
-      {/* v3.11 — meter Hardware Info + phase-aware load bars + threshold editor.
-          Sibling component, untouches the breaker panel above. */}
+      {/* v3.32 — config mode: load thresholds + overload ack with a one-line
+          load summary (full readings live in the Dashboard Overview). */}
       <SocketLoadMeterPanel
         pedestalId={pedestalId}
         socketId={socketId}
         socketName={socketName}
         isAdmin={isAdmin}
         onFeedback={onFeedback}
+        mode="config"
       />
 
       {isAdmin && (

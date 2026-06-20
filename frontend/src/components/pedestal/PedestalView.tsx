@@ -7,6 +7,7 @@ import CameraModal from './CameraModal'
 import PedestalControlCenter from './PedestalControlCenter'
 import SocketUsageHistoryModal from './SocketUsageHistoryModal'
 import OperationalAlarmsModal from './OperationalAlarmsModal'
+import PedestalOverview from './PedestalOverview'
 
 // Zone definitions — positions as % of image dimensions
 // Each zone is positioned over the actual socket/pipe on the image
@@ -175,7 +176,7 @@ export default function PedestalView({ pedestalId }: PedestalViewProps) {
               </div>
 
               {activeTab === 'overview' ? (
-                <AllSessionsOverview pedestalId={pedestalId} />
+                <PedestalOverview pedestalId={pedestalId} />
               ) : (
                 <PedestalControlCenter pedestalId={pedestalId} />
               )}
@@ -574,41 +575,6 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
 }
 
 // ─── Overview (no zone selected) ─────────────────────────────────────────────
-
-function AllSessionsOverview({ pedestalId }: { pedestalId: number }) {
-  const { activeSessions } = useStore()
-  const active = activeSessions.filter((s) => s.pedestal_id === pedestalId)
-
-  return (
-    <div className="space-y-4">
-      <div className="card">
-        <h3 className="font-semibold text-gray-300 mb-3">Quick Status</h3>
-        {active.length === 0 ? (
-          <p className="text-gray-500 text-sm">All sockets idle. Click a socket on the pedestal to manage it.</p>
-        ) : (
-          <div className="space-y-2">
-            {active.map((s) => (
-              <div key={s.id} className="flex items-center gap-2 text-sm">
-                <span className="badge-active">Active</span>
-                <span className="text-gray-300">
-                  {s.type === 'water' ? 'Water' : `Socket ${s.socket_id}`}
-                </span>
-                {s.customer_name && (
-                  <span className="text-xs text-blue-300">· {s.customer_name}</span>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-      <div className="card text-sm text-gray-500 space-y-1">
-        <p className="font-medium text-gray-400 mb-2">Legend</p>
-        <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-green-400 inline-block" /> Active session</div>
-        <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-600 inline-block" /> Idle</div>
-      </div>
-    </div>
-  )
-}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

@@ -24,6 +24,9 @@ interface Props {
   socketName: string
   isAdmin: boolean
   onFeedback: (key: string, type: 'success' | 'error', text: string) => void
+  /** v3.32 — 'monitor' (Dashboard Overview): live readings + load bars only.
+   *  'config' (Control Panel): compact load line + threshold editor + ack. */
+  mode?: 'monitor' | 'config'
 }
 
 const STATUS_BAR_COLOR: Record<LoadStatus, string> = {
@@ -80,8 +83,9 @@ function PhaseBar({ amps, rated, label }: { amps: number | null | undefined; rat
 }
 
 export default function SocketLoadMeterPanel({
-  pedestalId, socketId, socketName, isAdmin, onFeedback,
+  pedestalId, socketId, socketName, isAdmin, onFeedback, mode = 'config',
 }: Props) {
+  const isMonitor = mode === 'monitor'
   const key = `${pedestalId}-${socketId}`
   const hwCfg = useStore((s) => s.socketHardwareConfig[key])
   const live = useStore((s) => s.socketLoadStates[key])
@@ -242,7 +246,7 @@ export default function SocketLoadMeterPanel({
           <p className="text-[12px] text-red-200/90">
             Investigate the load. This clears automatically when the load drops.
           </p>
-          {isAdmin && (
+          {isAdmin && !isMonitor && (
             <button
               type="button"
               onClick={handleAcknowledgeAutoStop}
@@ -255,7 +259,21 @@ export default function SocketLoadMeterPanel({
         </div>
       )}
 
-      {/* Hardware Info — read only. v3.11 D1. */}
+      {/* v3.32 — config mode: a one-line load summary so the threshold editor
+          has context without the full readings block (those live in Overview). */}
+      {!isMonitor && hwCfg?.hw_config_received_at && ratedAmps && (
+        <p className="text-[11px] text-gray-400">
+          load: <span className={`font-mono ${
+            status === 'critical' ? 'text-red-300' :
+            status === 'warning'  ? 'text-yellow-300' : 'text-gray-300'
+          }`}>{fmtNum(loadPct, 0, '%')}</span>
+          {' · '}<span className="text-gray-300 font-mono">{fmtNum(totalAmps, 1, 'A')} / {fmtNum(ratedAmps, 0, 'A')}</span>
+          {' · '}<span className="text-gray-300 font-mono">{fmtNum(live?.power_kw, 2, ' kW')}</span>
+        </p>
+      )}
+
+      {/* Hardware Info — read only. v3.11 D1. (Overview/monitor only) */}
+      {isMonitor && (<>
       <div className="text-[11px] space-y-0.5">
         {!hwCfg?.hw_config_received_at ? (
           <p className="text-amber-300">Awaiting hardware configuration from device</p>
@@ -348,9 +366,10 @@ export default function SocketLoadMeterPanel({
           )}
         </div>
       )}
+      </>)}
 
-      {/* Admin-only threshold editor */}
-      {isAdmin && (
+      {/* Admin-only threshold editor (config mode only) */}
+      {isAdmin && !isMonitor && (
         <div className="pt-1 border-t border-gray-700/50 space-y-1.5">
           <p className="text-[11px] text-gray-400">Thresholds (% of rated current)</p>
           <div className="flex gap-2 items-center">

@@ -14,6 +14,9 @@ interface Props {
   socketId: number
   isAdmin: boolean
   onFeedback: (key: string, type: 'success' | 'error', text: string) => void
+  /** v3.32 — 'monitor' (Overview): status + hardware info + history only.
+   *  'config' (Control Panel): adds the admin Reset action. */
+  mode?: 'monitor' | 'config'
 }
 
 const STATE_LABELS: Record<string, { label: string; dot: string; text: string }> = {
@@ -30,7 +33,8 @@ function fmt(v: string | number | boolean | null | undefined): string {
   return String(v)
 }
 
-export default function SocketBreakerPanel({ pedestalId, socketId, isAdmin, onFeedback }: Props) {
+export default function SocketBreakerPanel({ pedestalId, socketId, isAdmin, onFeedback, mode = 'config' }: Props) {
+  const isConfig = mode === 'config'
   const key = `${pedestalId}-${socketId}`
   const breaker = useStore((s) => s.socketBreakerStates[key])
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -135,8 +139,8 @@ export default function SocketBreakerPanel({ pedestalId, socketId, isAdmin, onFe
           )}
         </div>
 
-        {/* ── Admin-only Reset button ────────────────────────── */}
-        {isAdmin && isTripped && (
+        {/* ── Admin-only Reset button (config mode only) ─────── */}
+        {isConfig && isAdmin && isTripped && (
           <button
             type="button"
             onClick={() => setConfirmOpen(true)}
@@ -147,7 +151,7 @@ export default function SocketBreakerPanel({ pedestalId, socketId, isAdmin, onFe
             {resetBusy ? 'Sending…' : '⚡ Reset Breaker'}
           </button>
         )}
-        {isAdmin && isResetting && (
+        {isConfig && isAdmin && isResetting && (
           <div className="w-full text-xs font-medium px-2 py-1.5 rounded border border-yellow-700 bg-yellow-900/40 text-yellow-200 text-center">
             <span className="inline-block animate-spin">⟳</span> Resetting breaker…
           </div>

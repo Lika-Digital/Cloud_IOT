@@ -67,7 +67,7 @@ def build() -> None:
 
     ver = doc.add_paragraph()
     ver.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    vr = ver.add_run("Version 3.31 · Cloud_IOT Operator Dashboard")
+    vr = ver.add_run("Version 3.32 · Cloud_IOT Operator Dashboard")
     vr.font.size = Pt(11)
 
     doc.add_paragraph()
@@ -964,9 +964,10 @@ def build() -> None:
                        "and you can download a plain-text report for any month.", bold=True)
     add_paragraph(doc, "Opening the history:", bold=True)
     add_steps(doc, [
-        "Click the History button on a socket or valve — it is on each card in the "
-        "Control Center and on the socket-detail panel when you click a socket on "
-        "the pedestal image.",
+        "Click the Usage button on a socket or valve — it is on each tile in the "
+        "Dashboard Overview, on the cards in the Control Center, and on the socket-"
+        "detail panel when you click a socket on the pedestal image. (v3.32 — the "
+        "button was renamed from “History” to “Usage”.)",
         "Pick a month from the drop-down. The table lists each completed session for "
         "that outlet: start and end time, energy (kWh) or water (litres), and the "
         "customer / NFC user when one was attached.",
@@ -976,14 +977,34 @@ def build() -> None:
     add_paragraph(doc, "What is recorded:", bold=True)
     add_bullet(doc, "For each completed session: socket/valve, start & end time, "
                     "kWh used, litres used, and the customer or NFC user id when known.")
-    add_bullet(doc, "When Smart Mode was OFF (the Opta ran standalone), the NUC does "
-                    "not attach a customer, so those columns are blank — the report "
-                    "shows only what the cabinet actually reported.")
+    add_bullet(doc, "When Smart Mode is OFF (the Opta runs standalone), the NUC still "
+                    "logs consumption as a usage session — the customer columns are "
+                    "simply blank. So usage is recorded in both modes (v3.32).")
+    add_bullet(doc, "Energy (kWh) is measured by the dashboard as power × time, sampled "
+                    "every few seconds, because the meter's own energy total is not "
+                    "reported. Sessions from before v3.32 may show 0.000 (no history to "
+                    "back-fill); new sessions show real energy.")
     add_callout(doc, "Reports are protected", "A new report is created automatically "
                 "each month and older ones are kept on disk. They can be deleted ONLY "
                 "by an admin (using the Delete button in the history window) — the "
                 "system never deletes them. On the NUC, keep REPORTS_DIR pointed at "
                 "persistent storage so reports survive an upgrade.")
+
+    add_heading(doc, "10.10 Dashboard Overview vs Control Center (v3.32)", level=2)
+    add_paragraph(doc, "Each pedestal has two tabs with a clear division of labour:", bold=True)
+    add_bullet(doc, "Dashboard Overview — your at-a-glance MONITORING view. Shows the "
+                    "cabinet status (Smart Mode, connection, door, uptime) and, for "
+                    "every socket and valve, the live readings: state, load bar, "
+                    "voltage / current / power, breaker status, and water litres. Each "
+                    "tile has quick Usage and Alarms buttons. Nothing here changes the "
+                    "cabinet — it is read-only.")
+    add_bullet(doc, "Control Center — where you CONFIGURE and ACT: Smart Mode, "
+                    "auto-activate, load thresholds, breaker reset, Activate / Stop, the "
+                    "LED and its schedule, QR / NFC provisioning, and the event / ACK "
+                    "logs. Each setting keeps just the small status line it needs for "
+                    "context; the full live readings live in the Overview.")
+    add_paragraph(doc, "In Smart Mode OFF the Control Center controls are greyed out "
+                       "(the Opta is in charge), so the Overview is your main view.")
 
     add_heading(doc, "10.8 Per-socket Start / Stop (v3.28)", level=2)
     add_paragraph(doc, "With Smart Mode ON you control each electricity socket "

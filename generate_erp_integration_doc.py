@@ -206,7 +206,7 @@ def build_pdf():
     story.append(Spacer(1, 10))
     story.append(hr())
     story.append(Spacer(1, 10))
-    story.append(p(f"Version 3.1 (covers SW v3.31) &mdash; {datetime.now().strftime('%B %d, %Y')}", "DocSubtitle"))
+    story.append(p(f"Version 3.2 (covers SW v3.32) &mdash; {datetime.now().strftime('%B %d, %Y')}", "DocSubtitle"))
     story.append(p("Lika Digital d.o.o.", "DocSubtitle"))
     story.append(Spacer(1, 20))
     story.append(p(

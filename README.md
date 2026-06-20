@@ -108,6 +108,19 @@ reports, in **both** Smart Mode ON and OFF.
 - **History UI** — the per-outlet "History" button is now **Usage**; electricity
   sockets gain an **Alarms** button opening an **Operational Alarms History**
   (breaker trips + load alarms, merged newest-first).
+- **Real energy in Usage History** — sessions showed 0.000 kWh because energy came
+  from the Opta's cumulative `energyKwh`, which the firmware reports as 0. The live
+  meter handler now integrates `energy = avg(power) × Δt` (~5 s, Δt clamped ≤ 60 s)
+  onto **whatever** electricity session is active — operator / customer / NFC OR
+  standalone — and `complete()` keeps the larger of reading-based vs integrated.
+  Applies going forward (old 0.000 rows have no power history to backfill).
+- **UI: monitoring vs configuration split** — the Control Center had become a
+  kitchen sink. The **Dashboard Overview** is now the read-only monitoring home
+  (cabinet status + per-socket/valve live readings, breaker status, state badges,
+  Usage/Alarms drill-in), and the **Control Center** is configure + act (smart
+  mode, auto-activate, thresholds, breaker reset, activate/stop, LED + schedule,
+  QR/NFC, event/ack logs). The breaker/load panels gained a `mode` prop so each
+  view shows only what it needs.
 
 ### 2026-06-19 — Socket/valve usage history + monthly reports (v3.31)
 

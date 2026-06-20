@@ -1,8 +1,8 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useStore } from '../../store'
 import { useAuthStore } from '../../store/authStore'
 import logo from '../../assets/logo.png'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { getUnreadCount } from '../../api/billing'
 import ToastContainer from '../ui/ToastContainer'
 
@@ -10,8 +10,15 @@ export default function Layout() {
   const { wsConnected, pedestalOnline, unreadChatCount, setUnreadChatCount, newErrorCount, hwAlarmLevel } = useStore()
   const { email, role, logout } = useAuthStore()
   const navigate = useNavigate()
+  const location = useLocation()
 
   const isAdmin = role === 'admin'
+
+  // v3.33 — mobile: the sidebar collapses into a slide-in drawer behind a
+  // hamburger. Close it on every route change so a nav tap doesn't leave the
+  // overlay covering the page.
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  useEffect(() => { setSidebarOpen(false) }, [location.pathname])
 
   useEffect(() => {
     if (!isAdmin) return
@@ -45,8 +52,19 @@ export default function Layout() {
 
   return (
     <div className="flex h-screen bg-gray-950">
-      {/* Sidebar */}
-      <aside className="w-56 bg-gray-900 border-r border-gray-800 flex flex-col">
+      {/* Mobile backdrop — tap to close the drawer */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/60 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Sidebar — static on md+, slide-in drawer on mobile */}
+      <aside className={`fixed inset-y-0 left-0 z-40 w-56 bg-gray-900 border-r border-gray-800 flex flex-col transform transition-transform duration-200 md:static md:translate-x-0 ${
+        sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+      }`}>
         {/* Logo */}
         <div className="p-4 border-b border-gray-800">
           <img src={logo} alt="Company Logo" className="w-full h-12 object-contain rounded-lg" />
@@ -117,8 +135,25 @@ export default function Layout() {
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 overflow-auto">
-        <div className="p-6 max-w-7xl mx-auto">
+      <main className="flex-1 overflow-auto flex flex-col min-w-0">
+        {/* Mobile top bar — hamburger + brand (hidden on md+ where the sidebar is always visible) */}
+        <header className="md:hidden sticky top-0 z-20 flex items-center gap-3 px-4 h-14 bg-gray-900 border-b border-gray-800">
+          <button
+            onClick={() => setSidebarOpen(true)}
+            className="p-2 -ml-2 text-gray-300 hover:text-white"
+            aria-label="Open menu"
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <line x1="3" y1="6" x2="21" y2="6" />
+              <line x1="3" y1="12" x2="21" y2="12" />
+              <line x1="3" y1="18" x2="21" y2="18" />
+            </svg>
+          </button>
+          <span className="text-sm font-semibold text-white">IoT Dashboard</span>
+          <span className={`ml-auto w-2 h-2 rounded-full ${wsConnected ? 'bg-green-400 animate-pulse' : 'bg-gray-600'}`} title={wsConnected ? 'Online' : 'Offline'} />
+        </header>
+
+        <div className="p-4 sm:p-6 max-w-7xl mx-auto w-full">
           <Outlet />
         </div>
       </main>

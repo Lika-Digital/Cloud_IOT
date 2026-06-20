@@ -77,8 +77,8 @@ export default function ChatPanel({ customerId, customerName, customerEmail, onC
   const displayName = customerName?.trim() || customerEmail
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg shadow-2xl flex flex-col" style={{ height: 520 }}>
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-3 sm:p-4">
+      <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg shadow-2xl flex flex-col h-[80vh] max-h-[520px]">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-700">
           <div>

@@ -1,101 +1,69 @@
 # Two-Factor Authentication — Setup & Recovery Guide
 
 Cloud_IOT operator login uses **mandatory two-factor authentication (2FA)**. After
-your email + password you must complete a second factor. Two methods are
-available:
+your email + password you must complete a second factor.
 
-- **TOTP** — a 6-digit code from an authenticator app on your phone (primary, fully offline).
-- **OTP fallback** — a one-time code written to the backend log (and emailed if SMTP is configured). Always available, even if TOTP is not set up.
-
-> TOTP setup is **admin-only**. Monitor accounts always use the OTP fallback.
+As of **v3.33 the authenticator app (TOTP) is the only second factor** — email/log
+OTP has been removed. TOTP is a 6-digit code from an app on your phone, works fully
+offline (no internet, no SMTP), and is set up the **first time you log in**.
 
 ---
 
-## 1. Two-factor options at a glance
-
-| | TOTP (authenticator app) | OTP fallback |
-|---|---|---|
-| Where the code comes from | Your phone app | Backend log / email |
-| Internet needed | **No** (works fully offline) | No (log) / yes for email only |
-| Who can enable | Admin | Always on for everyone |
-| Code lifetime | ~30 s rolling | 10 minutes, single use |
-
-At the second-factor screen you can always click **"Use backup code instead"** to
-switch from TOTP to the OTP fallback (lost phone, dead battery, clock drift).
-
----
-
-## 2. Compatible authenticator apps
+## 1. Compatible authenticator apps
 
 - **Aegis Authenticator** (Android, open-source, **recommended**) — https://getaegis.app
 - **Google Authenticator** (Android / iOS) — App Store / Google Play
 - **Microsoft Authenticator** (Android / iOS) — App Store / Google Play
+- **1Password / Bitwarden** and any other RFC-6238 TOTP app
 
-Any RFC-6238 TOTP app works. No account or internet is required on the phone.
-
----
-
-## 3. Set up TOTP (admin)
-
-1. Sign in and open **Settings** → **Two-Factor Authentication**.
-2. Click **Setup Authenticator**. A QR code and a manual-entry key appear.
-3. In your authenticator app choose **Add / Scan QR code** and scan it.
-   (Can't scan? Choose "Enter a setup key" and type the manual key shown; issuer "Marina IoT".)
-4. The app now shows a 6-digit code that changes every ~30 s.
-5. Type the current code into **Verify and Enable** and submit.
-6. A green **"Two-factor authentication enabled"** confirmation appears. Done.
-
-> Re-running **Setup Authenticator** generates a **new** secret and invalidates the
-> previous QR code — only the most recently verified secret works.
-
-From the next login, after email + password you'll be asked for the authenticator code.
+No account or internet is required on the phone.
 
 ---
 
-## 4. Using the OTP fallback (lost phone, dead battery, clock drift)
+## 2. First login (new account)
 
-At the second-factor screen click **"Use backup code instead"** (TOTP users) — or,
-if you have no TOTP set up, a code is sent automatically after your password. Then:
+When an admin creates your account they set a **temporary password** and you have
+no authenticator yet. Your first login is a short wizard:
 
-### Read the code from the backend log
-SSH into the NUC and run:
-```bash
-sudo journalctl -u cloud-iot-backend -f
-```
-Submit your email + password in the browser, watch the log for a line like
-`OTP for you@example.com: 123456`, and enter that code. (Ctrl+C to stop the tail.)
+1. Enter your **email + temporary password** → **Continue**.
+2. **Choose a new password** (required on first login) and confirm it.
+3. **Set up your authenticator:** a QR code and a manual-entry key appear in the
+   browser. In your authenticator app choose **Add / Scan QR code** and scan it.
+   (Can't scan? Choose "Enter a setup key" and type the key shown; issuer "Marina IoT".)
+4. The app now shows a 6-digit code that changes every ~30 s. Type the current code
+   and submit — you're signed in, and TOTP is now enabled for your account.
 
-The OTP **expires after 10 minutes** and is **single-use**.
-
-### Email delivery (optional)
-If SMTP is configured, the OTP is emailed instead of (only) logged, and the screen
-says "sent to your email address."
+From every later login, after email + password you simply enter the current
+authenticator code.
 
 ---
 
-## 5. Configure SMTP for email OTP (optional)
+## 3. Normal login (authenticator already enrolled)
 
-Set these in `/opt/cloud-iot/backend/.env` (or via **Settings → Email / SMTP**):
-```
-SMTP_HOST=smtp.example.com
-SMTP_PORT=587
-SMTP_TLS=true
-SMTP_USER=you@example.com
-SMTP_PASSWORD=your-app-password
-SMTP_FROM=noreply@yourmarina.com
-```
-Then `sudo cloud-iot restart`. With SMTP set, OTP codes are emailed; without it, they
-are written to the backend log (above).
+1. Enter your **email + password** → **Continue**.
+2. Enter the **6-digit code** from your authenticator app. (It auto-submits once you
+   type the sixth digit.)
+
+The code lasts ~30 s; one window of clock drift (±30 s) is tolerated.
 
 ---
 
-## 6. Recovery — both TOTP and OTP inaccessible
+## 4. Lost authenticator — admin reset (recovery)
 
-If an admin loses their authenticator **and** cannot reach the backend log/email,
-another admin (or direct DB access on the NUC) can clear the locked/2FA state:
+Because the authenticator is the only second factor, a lost or wiped phone is
+recovered by an **admin**, not self-service:
+
+1. An admin opens **Settings → Operator Accounts**.
+2. On the affected user's row, click **Reset 2FA** and confirm.
+3. That user's TOTP is cleared. On their **next login** they re-enrol a new
+   authenticator (the QR wizard from section 2, step 3). Their password is unchanged.
+
+### Last-resort recovery (no other admin available)
+
+If **every** admin is locked out, clear the 2FA state directly on the NUC database:
 
 ```bash
-# On the NUC — clear TOTP + any lockout for one operator, forcing OTP-log fallback
+# On the NUC — clear TOTP + any lockout for one operator so they re-enrol on next login
 sudo /opt/cloud-iot/backend/.venv/bin/python - <<'PY'
 import sqlite3
 db = sqlite3.connect('/opt/cloud-iot/backend/data/users.db')
@@ -105,26 +73,32 @@ db.execute("UPDATE users SET totp_enabled=0, totp_secret=NULL, "
 db.commit(); print("reset:", db.total_changes); db.close()
 PY
 ```
-The account then logs in with the OTP-log fallback, and the admin can re-enroll TOTP.
+
+The account then re-enrols a fresh authenticator at the next login.
 
 ---
 
-## 7. Disable TOTP
+## 5. Admin TOTP management (Settings)
 
-**Settings → Two-Factor Authentication → Disable Two-Factor Authentication.** You must
-provide your **current password** and a **current authenticator code**. This clears the
-secret; the OTP fallback remains available as the second factor.
+Admins can also manage their own authenticator from **Settings → Two-Factor
+Authentication**:
+
+- **Setup Authenticator** — generate a new secret + QR and verify it. Re-running this
+  generates a **new** secret and invalidates the previous QR; only the most recently
+  verified secret works.
+- **Disable Two-Factor Authentication** — requires your **current password** and a
+  **current authenticator code**. Note: 2FA is mandatory, so disabling only clears the
+  current secret — you will be asked to enrol again on your next login.
 
 ---
 
-## 8. Troubleshooting
+## 6. Troubleshooting
 
-- **"Invalid code" on a fresh TOTP setup or login** — almost always **phone clock drift**.
+- **"Invalid code" on a fresh setup or login** — almost always **phone clock drift**.
   Set the phone time to **automatic / network time**, then try the next code.
-- **OTP says expired** — codes last **10 minutes** and are single-use. Request a new one
-  ("Use backup code instead") and read the latest line from the log.
-- **"Too many failed attempts — locked for 15 minutes"** — after **5** failed second-factor
-  attempts the account locks for **15 minutes** (applies to both TOTP and OTP). Wait it out,
-  or an admin can clear `totp_locked_until` via the recovery snippet above.
-- **No second-factor screen appears** — 2FA is mandatory; if you reach the dashboard straight
-  after the password, report it (that would be a bug).
+- **"Too many failed attempts — locked for 15 minutes"** — after **5** failed
+  second-factor attempts the account locks for **15 minutes**. Wait it out, or an admin
+  can **Reset 2FA** (which also clears the lockout), or use the recovery snippet above.
+- **Lost the phone and no other admin** — use the last-resort DB snippet in section 4.
+- **No second-factor screen appears** — 2FA is mandatory; if you reach the dashboard
+  straight after the password, report it (that would be a bug).

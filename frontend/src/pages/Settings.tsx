@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import ConfigPanel from '../components/config/ConfigPanel'
 import FieldHelp from '../components/config/FieldHelp'
 import DevicesPanel from '../components/config/DevicesPanel'
-import { authListUsers, authCreateUser, authDeleteUser, authPatchUser, type UserResponse } from '../api/auth'
+import { authListUsers, authCreateUser, authDeleteUser, authPatchUser, authResetUser2fa, type UserResponse } from '../api/auth'
 import {
   getSmtpConfig, updateSmtpConfig, testSmtp, type SmtpConfig,
   getNetworkInfo, type NetworkInfo,
@@ -232,7 +232,7 @@ function PilotModePanel() {
               placeholder="e.g. John Smith"
             />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs text-gray-400 mb-1">Pedestal ID</label>
               <input
@@ -716,6 +716,19 @@ function UserManagementPanel() {
     }
   }
 
+  // v3.33 — recovery for a lost authenticator: clear the user's TOTP so they
+  // re-enrol on their next login (the authenticator is the only second factor).
+  const handleReset2fa = async (id: number, email: string) => {
+    if (!confirm(`Reset two-factor for ${email}? They will set up a new authenticator on next login.`)) return
+    try {
+      const updated = await authResetUser2fa(id)
+      setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)))
+      setAddMsg({ type: 'success', text: `2FA reset for ${email}. They will re-enrol at next login.` })
+    } catch {
+      setAddMsg({ type: 'error', text: 'Failed to reset 2FA.' })
+    }
+  }
+
   return (
     <div className="card space-y-4">
       <div className="flex items-center justify-between">
@@ -822,6 +835,14 @@ function UserManagementPanel() {
                 }`}
               >
                 {u.is_active ? 'Active' : 'Inactive'}
+              </button>
+              {/* Reset 2FA */}
+              <button
+                onClick={() => handleReset2fa(u.id, u.email)}
+                className="text-xs px-2 py-0.5 rounded-full border bg-gray-700/50 text-gray-400 border-gray-600/40 hover:bg-amber-900/30 hover:text-amber-400 hover:border-amber-700/40 transition-colors"
+                title="Reset two-factor — user re-enrols authenticator on next login"
+              >
+                Reset 2FA
               </button>
               {/* Delete */}
               <button

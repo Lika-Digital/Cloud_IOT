@@ -99,17 +99,35 @@ def build() -> None:
 
     # ── Sign in ─────────────────────────────────────────────────────────────
     add_heading(doc, "2. Signing in", level=1)
+    add_paragraph(
+        doc,
+        "Every operator login uses two-factor authentication: your password plus "
+        "a 6-digit code from an authenticator app on your phone (Google "
+        "Authenticator, Microsoft Authenticator, 1Password, etc.). The "
+        "authenticator works fully offline – no email or internet is needed."
+    )
+    add_heading(doc, "2.1 First login (new account)", level=2)
     add_steps(doc, [
         "Open the dashboard URL in your browser (Chrome, Edge, or Firefox).",
-        "Enter your email and password and click Sign in.",
-        "Check your email for a 6-digit one-time code (OTP) that arrives "
-        "within a few seconds.",
-        "Type the code in the verification screen. You are now logged in.",
+        "Enter your email and the temporary password your administrator gave "
+        "you, then click Continue.",
+        "Choose a new password (required on first login) and confirm it.",
+        "A QR code appears. Open your authenticator app, choose Add / Scan QR "
+        "code, and scan it. (Can't scan? Enter the key shown manually.)",
+        "Your app now shows a 6-digit code that changes every ~30 seconds. Type "
+        "the current code to finish – you are now logged in.",
     ])
-    add_callout(doc, "If you do not receive the OTP",
-                "Check Spam, or ask the system administrator – the OTP is also "
-                "printed in the backend log on the NUC for emergency access. "
-                "OTP expires after a few minutes; request a new one if needed.")
+    add_heading(doc, "2.2 Normal login (afterwards)", level=2)
+    add_steps(doc, [
+        "Enter your email and password and click Continue.",
+        "Type the current 6-digit code from your authenticator app. It submits "
+        "automatically once you type the sixth digit.",
+    ])
+    add_callout(doc, "Lost your phone / authenticator",
+                "Ask an administrator to reset your two-factor in Settings -> "
+                "Operator Accounts -> Reset 2FA. On your next login you will set "
+                "up a new authenticator with a fresh QR code. Your password is "
+                "unchanged.")
     add_paragraph(
         doc,
         "Your session stays active for two hours, after which you will be "
@@ -276,8 +294,11 @@ def build() -> None:
     add_bullet(doc, "Marina name, address, default time zone.")
     add_bullet(doc, "MQTT broker host and port (used by the pedestals to talk "
                     "to the system – usually 127.0.0.1:1883 on the NUC).")
-    add_bullet(doc, "Email server settings for the OTP login codes and "
-                    "customer notifications.")
+    add_bullet(doc, "Operator Accounts – create operators, change roles, and "
+                    "Reset 2FA for anyone who loses their authenticator.")
+    add_bullet(doc, "Two-Factor Authentication – manage your own authenticator app.")
+    add_bullet(doc, "Email server settings (optional – used for customer "
+                    "notifications; login no longer needs email).")
     add_bullet(doc, "Pending session timeout – how long a pending session "
                     "waits for an operator decision before being auto-denied.")
     add_bullet(doc, "Diagnostic and discovery options.")
@@ -671,169 +692,108 @@ def build() -> None:
                     "support contact along with the time and the pedestal "
                     "name.")
 
-    # ── SMTP / OTP appendix ─────────────────────────────────────────────────
-    add_heading(doc, "9. Appendix A – Email (OTP) setup", level=1)
+    # ── Two-factor (authenticator) appendix ─────────────────────────────────
+    add_heading(doc, "9. Appendix A – Two-factor (authenticator) setup", level=1)
     add_paragraph(
         doc,
-        "Every operator login uses two-factor authentication: password plus a "
-        "6-digit one-time code (OTP) sent to the operator's email address. "
-        "Until the SMTP email server is configured, the OTP is NOT delivered "
-        "by email – it is printed to the backend log on the NUC. This is fine "
-        "for the very first login, but should be replaced with real email "
-        "delivery as soon as possible."
+        "Every operator login uses two-factor authentication: your password plus "
+        "a 6-digit code from an authenticator app on your phone. The authenticator "
+        "works fully offline – no email, SMTP, or internet is required (this is "
+        "ideal for a NUC on an isolated marina LAN). Email one-time codes were "
+        "removed in v3.33."
     )
 
-    add_heading(doc, "A.1 The chicken-and-egg first login", level=2)
+    add_heading(doc, "A.1 Compatible authenticator apps", level=2)
+    add_bullet(doc, "Aegis Authenticator (Android, open-source) – recommended.")
+    add_bullet(doc, "Google Authenticator (Android / iOS).")
+    add_bullet(doc, "Microsoft Authenticator (Android / iOS).")
+    add_bullet(doc, "1Password, Bitwarden, or any other RFC-6238 TOTP app.")
+
+    add_heading(doc, "A.2 First login – enrol your authenticator", level=2)
     add_paragraph(
         doc,
-        "On a freshly installed system you have not yet configured email, so "
-        "the OTP is only available in the backend console log. Use this "
-        "bootstrap procedure once:"
+        "A brand-new account has a temporary password and no authenticator yet, "
+        "so the first sign-in walks you through enrolment in the browser:"
     )
     add_steps(doc, [
-        "Open the dashboard URL in your browser and enter the admin email "
-        "(default: damir@lika.digital) and password.",
-        "On the NUC, in a separate terminal, run "
-        "'sudo journalctl -u cloud-iot-backend -f' to follow the backend "
-        "log live.",
-        "Look for a block in the log that looks like:\n"
-        "    ==================================================\n"
-        "      OTP for damir@lika.digital: 123456\n"
-        "    ==================================================",
-        "Type the 6-digit code into the dashboard and click Verify. You are "
-        "now signed in.",
-        "Stay signed in and proceed straight to A.2 to configure SMTP – then "
-        "subsequent logins receive the OTP by email like normal.",
+        "Open the dashboard URL and enter your email + temporary password, then "
+        "click Continue.",
+        "Choose a new password (required on first login) and confirm it.",
+        "A QR code appears. In your authenticator app choose Add / Scan QR code "
+        "and scan it. (Can't scan? Choose 'Enter a setup key' and type the key "
+        "shown manually; the issuer is 'Marina IoT'.)",
+        "Your app shows a 6-digit code that changes every ~30 seconds. Type the "
+        "current code to finish – you are now signed in and TOTP is enabled.",
     ])
-    add_callout(doc, "Two options to skip the chicken-and-egg",
-                "If you have shell access to the NUC and prefer not to read "
-                "the log every time, you can pre-configure SMTP through the "
-                "/opt/cloud-iot/backend/.env file BEFORE the first login. "
-                "Restart the backend (sudo systemctl restart "
-                "cloud-iot-backend), then your very first login already "
-                "delivers the OTP by email. See A.4 below for the .env keys.")
+    add_callout(doc, "No email needed",
+                "Because the QR code is shown directly in the browser, there is no "
+                "chicken-and-egg first login any more – even the very first admin "
+                "login works with no SMTP configured.")
 
-    add_heading(doc, "A.2 Configure SMTP through the dashboard", level=2)
+    add_heading(doc, "A.3 Resetting a lost authenticator (admin)", level=2)
+    add_paragraph(
+        doc,
+        "If an operator loses or wipes their phone, an admin restores access – "
+        "there is no self-service email recovery:"
+    )
     add_steps(doc, [
-        "Sign in as admin (use the bootstrap procedure above if needed).",
-        "Open Settings ⚙️ from the left menu.",
-        "Find the Email / SMTP card. A yellow banner saying 'SMTP is not "
-        "configured – OTP codes are printed to the server console' confirms "
-        "no email is being sent yet.",
-        "Fill in the six fields (see A.3 for what to put in each).",
-        "Click Save. The settings are stored immediately; no restart needed.",
-        "Click Test – the system sends a test email to the address you are "
-        "currently logged in as. Check the inbox (and the spam folder).",
-        "If the test arrives, you are done – the next OTP login will be "
-        "delivered by email. If the test fails, the error message at the "
-        "top of the page tells you what to fix; see A.5 for the most common "
-        "issues.",
+        "Sign in as an admin and open Settings ⚙️ → Operator Accounts.",
+        "On the affected user's row click Reset 2FA and confirm.",
+        "That user re-enrols a new authenticator the next time they log in "
+        "(the QR wizard from A.2). Their password is left unchanged.",
     ])
+    add_callout(doc, "If every admin is locked out",
+                "As a last resort, clear the 2FA columns directly in the database on "
+                "the NUC: in users.db set totp_enabled=0, totp_secret=NULL, "
+                "totp_failed_attempts=0, totp_locked_until=NULL for the account. See "
+                "docs/totp-setup-guide.md for the exact snippet. The account then "
+                "re-enrols on its next login.")
 
-    add_heading(doc, "A.3 Field-by-field", level=2)
-    add_bullet(doc, "SMTP Host – the server that sends mail. Examples: "
-                    "smtp.gmail.com, smtp.office365.com, smtp.sendgrid.net, "
-                    "or your own mail server.")
-    add_bullet(doc, "SMTP Port – almost always 587 (the modern STARTTLS "
-                    "port). Use 465 only if your provider explicitly says "
-                    "so AND keep STARTTLS unticked.")
-    add_bullet(doc, "Use STARTTLS – tick when port is 587. Untick when port "
-                    "is 25 (unencrypted, internal servers only) or 465.")
-    add_bullet(doc, "Username – the email address (or API key for SendGrid).")
-    add_bullet(doc, "Password – the email account password OR an "
-                    "App Password if you use Gmail or Microsoft 365 with "
-                    "two-factor authentication.")
-    add_bullet(doc, "From email – the address that appears in the From: "
-                    "header. Must match (or be an authorised alias of) the "
-                    "Username, otherwise most providers reject the message.")
+    add_heading(doc, "A.4 Managing your own authenticator", level=2)
+    add_paragraph(doc, "From Settings ⚙️ → Two-Factor Authentication you can:")
+    add_bullet(doc, "Setup Authenticator – generate a new secret + QR and verify it. "
+                    "Re-running this invalidates the previous QR; only the most "
+                    "recently verified secret works.")
+    add_bullet(doc, "Disable – requires your current password and a current code. "
+                    "Because 2FA is mandatory, you will be asked to enrol again on "
+                    "your next login.")
 
-    add_heading(doc, "A.4 Provider quick-reference", level=2)
-    add_paragraph(doc, "Common combinations that work out of the box:")
-    add_bullet(doc, "Gmail – Host smtp.gmail.com · Port 587 · STARTTLS on · "
-                    "Username = full Gmail address · Password = 16-character "
-                    "App Password generated at myaccount.google.com → "
-                    "Security → App passwords (requires 2-Step Verification "
-                    "to be on first).")
-    add_bullet(doc, "Microsoft 365 – Host smtp.office365.com · Port 587 · "
-                    "STARTTLS on · Username = full mailbox address · Password "
-                    "= mailbox password (or App Password if MFA is on).")
-    add_bullet(doc, "SendGrid – Host smtp.sendgrid.net · Port 587 · STARTTLS "
-                    "on · Username = the literal word 'apikey' · Password = "
-                    "the SendGrid API key.")
-    add_bullet(doc, "Mailgun – Host smtp.mailgun.org · Port 587 · STARTTLS "
-                    "on · Username = postmaster@your-domain · Password = "
-                    "Mailgun SMTP password.")
+    add_heading(doc, "A.5 Troubleshooting", level=2)
+    add_bullet(doc, "'Invalid code' on setup or login – almost always phone clock "
+                    "drift. Set the phone time to automatic / network time, then try "
+                    "the next code. One window of drift (±30 s) is already tolerated.")
+    add_bullet(doc, "'Too many failed attempts – locked for 15 minutes' – after 5 "
+                    "failed code attempts the account locks for 15 minutes. Wait it "
+                    "out, or an admin Reset 2FA also clears the lockout.")
+    add_bullet(doc, "No second-factor screen appears – 2FA is mandatory; if you reach "
+                    "the dashboard straight after the password, report it as a bug.")
 
-    add_paragraph(doc, "")
-    add_paragraph(doc, "If you prefer to put SMTP into the .env file on the "
-                       "NUC (instead of the dashboard), add these lines to "
-                       "/opt/cloud-iot/backend/.env and restart the backend:")
-    add_paragraph(doc, "    SMTP_HOST=smtp.gmail.com\n"
-                       "    SMTP_PORT=587\n"
-                       "    SMTP_TLS=true\n"
-                       "    SMTP_USER=you@example.com\n"
-                       "    SMTP_PASSWORD=your-app-password\n"
-                       "    SMTP_FROM=noreply@your-marina.example.com")
-    add_callout(doc, "Priority",
-                "If both the dashboard and the .env file have SMTP values, "
-                "the dashboard wins. The dashboard is intended as the "
-                "operator override.")
-
-    add_heading(doc, "A.5 If the Test button fails", level=2)
-    add_paragraph(doc, "Most common causes, in order of how often they "
-                       "happen:")
-    add_bullet(doc, "Authentication failed – you used your normal Google or "
-                    "Microsoft password instead of an App Password. Generate "
-                    "an App Password and paste that into the Password field.")
-    add_bullet(doc, "Connection timeout – the NUC cannot reach the SMTP host "
-                    "on that port. From the NUC shell run 'nc -vz "
-                    "smtp.gmail.com 587'. Anything other than 'succeeded' "
-                    "means a network or firewall issue.")
-    add_bullet(doc, "STARTTLS not supported – wrong port or wrong TLS toggle. "
-                    "Use 587 with STARTTLS ticked.")
-    add_bullet(doc, "Sender address rejected – the From email field is not "
-                    "owned by the SMTP account. Set From to the same address "
-                    "as Username, or to a verified alias.")
-    add_bullet(doc, "Test email delivered to spam – the message went out fine "
-                    "but ended up in the recipient's spam folder. Mark it as "
-                    "Not spam once and the next ones land in the inbox.")
-    add_bullet(doc, "Password lost after Save – if you reload the page, the "
-                    "Password field shows '**' (a placeholder); the real "
-                    "password is still stored. Only retype it if you actually "
-                    "want to change it.")
-
-    add_heading(doc, "A.6 Where to look when delivery silently fails", level=2)
-    add_paragraph(doc, "Even with SMTP configured, individual sends can fail "
-                       "(provider rate limits, mailbox full, recipient "
-                       "rejected, etc.). The system always:")
-    add_bullet(doc, "Logs a WARNING entry in the backend log – run 'sudo "
-                    "journalctl -u cloud-iot-backend' on the NUC and search "
-                    "for 'Failed to send OTP'.")
-    add_bullet(doc, "Adds a row in the dashboard under System Health 🔧 → "
-                    "Errors, category system, source email_service – with "
-                    "the full SMTP error message.")
-    add_bullet(doc, "Prints the OTP to the console as a last-resort fallback "
-                    "so the admin is never locked out, regardless of email "
-                    "issues.")
+    add_callout(doc, "Email / SMTP is now optional",
+                "SMTP settings remain in Settings only for optional customer "
+                "notifications – operator login no longer uses email at all. You can "
+                "leave SMTP unconfigured.")
 
     # ── What's new ──────────────────────────────────────────────────────────
-    add_heading(doc, "10. What's new (v3.19 – v3.28)", level=1)
+    add_heading(doc, "10. What's new (v3.19 – v3.33)", level=1)
     add_paragraph(doc, "Recent operator-facing additions. Earlier features are "
                        "documented in their sections above.")
+    add_paragraph(doc, "v3.33 also makes the dashboard mobile-friendly: on a phone "
+                       "the left menu collapses behind a ☰ button (tap to open, tap "
+                       "the dimmed area to close), and the pedestal picture and its "
+                       "detail panel stack vertically so everything fits a narrow screen.")
 
-    add_heading(doc, "10.1 Two-factor sign-in (v3.19)", level=2)
-    add_paragraph(doc, "Operator sign-in now always requires a second factor after "
-                       "your email and password. Two methods are available:")
-    add_bullet(doc, "Authenticator app (TOTP) — a 6-digit code from Aegis / Google / "
-                    "Microsoft Authenticator. Works fully offline. Enable it in "
-                    "Settings → Two-Factor Authentication (scan the QR, enter a code, "
-                    "Verify and Enable).")
-    add_bullet(doc, "One-time code (OTP) fallback — always available. Sent to the "
-                    "backend log (or your email if SMTP is configured). On the second "
-                    "screen choose “Use backup code instead”.")
-    add_callout(doc, "First login", "A brand-new account has no authenticator yet, so "
-                "the first sign-in always uses the OTP fallback. Enable TOTP afterwards "
-                "from Settings.")
+    add_heading(doc, "10.1 Two-factor sign-in — authenticator only (v3.33)", level=2)
+    add_paragraph(doc, "Operator sign-in always requires a second factor after your "
+                       "email and password. As of v3.33 the authenticator app (TOTP) "
+                       "is the only second factor — email one-time codes were removed.")
+    add_bullet(doc, "First login enrols an authenticator in the browser: set a new "
+                    "password, scan the QR code with Aegis / Google / Microsoft "
+                    "Authenticator (or 1Password / Bitwarden), enter a code, done. "
+                    "No email or SMTP needed.")
+    add_bullet(doc, "Later logins just ask for the current 6-digit code (it submits "
+                    "automatically on the sixth digit).")
+    add_bullet(doc, "Lost your phone? An admin clicks Reset 2FA in Settings → Operator "
+                    "Accounts and you re-enrol on your next login. See Appendix A.")
 
     add_heading(doc, "10.2 Temperature sensor configuration (v3.22)", level=2)
     add_paragraph(doc, "A networked Papouch TME temperature sensor can now be added "

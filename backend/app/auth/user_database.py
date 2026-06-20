@@ -58,6 +58,8 @@ def _migrate_user_schema():
         ("users", "totp_verified_at",     "DATETIME"),
         ("users", "totp_failed_attempts", "INTEGER NOT NULL DEFAULT 0"),
         ("users", "totp_locked_until",    "DATETIME"),
+        # v3.33 — first-login forced password change.
+        ("users", "must_change_password", "INTEGER NOT NULL DEFAULT 0"),
         ("berths",    "reference_image",       "TEXT"),
         ("berths",    "detect_conf_threshold", "REAL NOT NULL DEFAULT 0.30"),
         ("berths",    "match_threshold",       "REAL NOT NULL DEFAULT 0.50"),

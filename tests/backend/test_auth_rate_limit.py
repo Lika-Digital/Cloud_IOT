@@ -20,15 +20,15 @@ def enable_limiter():
     limiter.reset()
 
 
-def test_verify_otp_is_rate_limited(client, enable_limiter):
-    """Six POSTs to /verify-otp within 1 minute — the sixth must be 429."""
-    payload = {"email": "nobody@test.local", "code": "000000"}
+def test_totp_login_is_rate_limited(client, enable_limiter):
+    """v3.33 — email OTP was removed; the second-factor completion endpoint is
+    /totp/login (limit 10/minute). The 11th POST within a minute must be 429."""
+    payload = {"partial_token": "not-a-real-token", "code": "000000"}
     statuses = []
-    for _ in range(6):
-        r = client.post("/api/auth/verify-otp", json=payload)
+    for _ in range(12):
+        r = client.post("/api/auth/totp/login", json=payload)
         statuses.append(r.status_code)
-    # Limit is "5/minute". 429 must appear by the 6th attempt.
-    assert 429 in statuses, f"Expected rate-limit trip on /verify-otp, got statuses: {statuses}"
+    assert 429 in statuses, f"Expected rate-limit trip on /totp/login, got statuses: {statuses}"
 
 
 def test_login_rate_limited_after_burst(client, enable_limiter):

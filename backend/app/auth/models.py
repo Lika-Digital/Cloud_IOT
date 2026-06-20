@@ -34,6 +34,10 @@ class User(UserBase):
     totp_verified_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     totp_failed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     totp_locked_until: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    # v3.33 — set True when an admin creates the account; the user must choose a
+    # new password on first login (cleared once they do). Default False so the
+    # seeded admin and existing accounts are unaffected.
+    must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class OtpStore(UserBase):

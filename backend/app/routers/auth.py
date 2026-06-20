@@ -7,13 +7,12 @@ from sqlalchemy.orm import Session
 from ..auth.user_database import get_user_db
 from ..auth.models import User
 from ..auth.password import hash_password, verify_password
-from ..auth.tokens import create_access_token
-from ..auth.otp_service import generate_otp, verify_otp
-from ..auth.email_service import send_otp_email
+from ..auth.tokens import create_access_token, create_partial_token, decode_partial_token
 from ..auth.dependencies import require_admin, require_any_role, _get_current_user
 from ..auth.schemas import (
     LoginRequest,
-    VerifyOtpRequest,
+    LoginResponse,
+    FirstPasswordRequest,
     TokenResponse,
     UserCreate,
     UserResponse,
@@ -33,7 +32,7 @@ def service_token(body: LoginRequest, db: Session = Depends(get_user_db)):
     Direct JWT login for api_client service accounts — skips OTP.
 
     Only accounts with role='api_client' are accepted here. Human operator
-    accounts (admin / monitor) must use the two-step /login + /verify-otp flow.
+    accounts (admin / monitor) must use the two-step /login + TOTP flow.
     """
     user = db.query(User).filter(User.email == body.email).first()
     if not user or not verify_password(body.password, user.password_hash):
@@ -52,10 +51,15 @@ def service_token(body: LoginRequest, db: Session = Depends(get_user_db)):
     return TokenResponse(access_token=token, role=user.role, email=user.email)
 
 
-@router.post("/login")
+@router.post("/login", response_model=LoginResponse)
 @limiter.limit("10/minute")
 def login(request: Request, body: LoginRequest, db: Session = Depends(get_user_db)):
-    """Step 1: validate credentials and send OTP to email."""
+    """Step 1: validate credentials, return a partial token + next-step flags.
+
+    v3.33 — TOTP is the ONLY second factor (email OTP removed). 2FA is mandatory:
+    this never returns a JWT. The caller then completes, in order: a forced
+    password change if required, then TOTP (enroll on first login, else enter the
+    authenticator code) — see /first-password, /totp/enroll, /totp/login."""
     from ..services.security_monitor import record_login_failure, record_login_success, check_brute_force
     from ..services.error_log_service import log_warning, log_error
     from ..services.alarm_service import trigger_alarm
@@ -95,47 +99,48 @@ def login(request: Request, body: LoginRequest, db: Session = Depends(get_user_d
 
     record_login_success(client_ip)
 
-    # v3.19 — 2FA is MANDATORY (D1): never return a JWT here. Issue a 5-min
-    # partial token; the caller completes a second factor via /totp/login or
-    # /otp/request → /otp/login (or the legacy /verify-otp).
-    from ..auth.tokens import create_partial_token
-    from ..auth.email_service import smtp_is_configured
+    # 2FA is MANDATORY: never return a JWT here. Issue a 5-min partial token and
+    # tell the caller what the first-login still needs.
     partial = create_partial_token(user.id, user.email)
-
-    if user.totp_enabled:
-        # TOTP user: show the chooser; OTP is available on demand (not auto-sent).
-        return {
-            "totp_required": True, "otp_available": True,
-            "partial_token": partial, "otp_sent": False, "method": None,
-        }
-
-    # No TOTP configured (D2): auto-send the OTP now (preserves today's UX) and
-    # also return the partial token so the new /otp/login flow can be used.
-    code = generate_otp(db, user.id)
-    send_otp_email(user.email, code)
-    return {
-        "totp_required": False, "otp_available": True,
-        "partial_token": partial, "otp_sent": True,
-        "method": "email" if smtp_is_configured() else "log",
-    }
+    return LoginResponse(
+        partial_token=partial,
+        must_change_password=bool(user.must_change_password),
+        totp_enabled=bool(user.totp_enabled),
+    )
 
 
-@router.post("/verify-otp", response_model=TokenResponse)
-@limiter.limit("5/minute")
-def verify_otp_endpoint(request: Request, body: VerifyOtpRequest, db: Session = Depends(get_user_db)):
-    """Step 2: verify OTP code and return JWT token."""
-    user = db.query(User).filter(User.email == body.email).first()
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid request")
-
-    if not verify_otp(db, user.id, body.code):
+def _user_from_partial(token: str, db: Session) -> User:
+    """Resolve the user behind a 5-min partial token (the only authorization a
+    half-logged-in caller has before completing 2FA)."""
+    payload = decode_partial_token(token)
+    if not payload:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired OTP code",
+            detail="Invalid or expired session — please log in again",
         )
+    user = db.get(User, int(payload["sub"]))
+    if not user or not user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
+    return user
 
-    token = create_access_token(user.id, user.email, user.role)
-    return TokenResponse(access_token=token, role=user.role, email=user.email)
+
+@router.post("/first-password")
+@limiter.limit("10/minute")
+def first_password(request: Request, body: FirstPasswordRequest, db: Session = Depends(get_user_db)):
+    """v3.33 — first-login forced password change (authorized by the partial
+    token from /login). Sets the new password, clears the flag, and returns the
+    next-step flag so the caller proceeds to TOTP. Still no JWT — 2FA follows."""
+    user = _user_from_partial(body.partial_token, db)
+    if not user.must_change_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Password change is not required for this account")
+    if verify_password(body.new_password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="New password must be different from the temporary one")
+    user.password_hash = hash_password(body.new_password)
+    user.must_change_password = False
+    db.commit()
+    return {"ok": True, "totp_enabled": bool(user.totp_enabled)}
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
@@ -205,8 +210,33 @@ def create_user(
         email=body.email,
         password_hash=hash_password(body.password),
         role=body.role,
+        # v3.33 — the admin sets a temporary password; the user must replace it
+        # and enrol an authenticator on first login.
+        must_change_password=True,
     )
     db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.post("/users/{user_id}/reset-2fa", response_model=UserResponse)
+def reset_2fa(
+    user_id: int,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_user_db),
+):
+    """v3.33 — admin recovery: clear a user's TOTP so they re-enrol on next
+    login (the only second factor is the authenticator, so this is how a
+    lost-device lockout is recovered). The password is left unchanged."""
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.totp_secret = None
+    user.totp_enabled = False
+    user.totp_verified_at = None
+    user.totp_failed_attempts = 0
+    user.totp_locked_until = None
     db.commit()
     db.refresh(user)
     return user

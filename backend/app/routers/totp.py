@@ -1,12 +1,12 @@
-"""TOTP 2FA setup + partial-token second-factor login completion (v3.19).
+"""TOTP 2FA: admin setup + partial-token login completion + first-login enrol.
 
-TOTP setup/verify/disable are ADMIN ONLY (D3). 2FA is MANDATORY (D1): /login
-(in auth.py) never returns a JWT — it returns a 5-min partial token and the
-caller completes a second factor here, via either:
-  - /totp/login  (authenticator code), or
-  - /otp/request → /otp/login  (email/log OTP fallback, always available).
-The legacy /verify-otp (email+code) stays in auth.py for back-compat (D4).
-Lockout (5 fails → 15 min) is shared by both paths and always-on (D6).
+v3.33 — the authenticator (TOTP) is the ONLY second factor; email OTP was
+removed. 2FA is MANDATORY: /login (auth.py) never returns a JWT — it returns a
+5-min partial token, and the caller completes the second factor here:
+  - existing TOTP user:  /totp/login        (authenticator code → JWT)
+  - first login (no TOTP): /totp/enroll → /totp/enroll-verify (QR → confirm → JWT)
+TOTP setup/verify/disable from Settings stay ADMIN ONLY. Lockout (5 fails →
+15 min) is shared by all code paths and always-on.
 """
 import logging
 from datetime import datetime
@@ -18,13 +18,11 @@ from ..auth.user_database import get_user_db
 from ..auth.models import User
 from ..auth.password import verify_password
 from ..auth.tokens import create_access_token, decode_partial_token
-from ..auth.otp_service import generate_otp, verify_otp
-from ..auth.email_service import send_otp_email, smtp_is_configured
 from ..auth import totp_service
 from ..auth.dependencies import require_admin, require_any_role
 from ..auth.schemas import (
     TotpSetupResponse, TotpCodeRequest, TotpDisableRequest, TotpStatusResponse,
-    PartialTokenCodeRequest, OtpRequestRequest, OtpRequestResponse, TokenResponse,
+    PartialTokenCodeRequest, PartialTokenRequest, TokenResponse,
 )
 from ..ratelimit import limiter
 
@@ -43,13 +41,6 @@ def _user_from_partial(token: str, db: Session) -> User:
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
     return user
-
-
-def _send_otp(db: Session, user: User) -> str:
-    """Generate + deliver an OTP. Returns the delivery method ('email'|'log')."""
-    code = generate_otp(db, user.id)
-    send_otp_email(user.email, code)   # emails if SMTP configured, else logs/prints
-    return "email" if smtp_is_configured() else "log"
 
 
 # ── TOTP setup (admin only) ───────────────────────────────────────────────────
@@ -124,28 +115,44 @@ def totp_login(request: Request, body: PartialTokenCodeRequest, db: Session = De
                          role=user.role, email=user.email)
 
 
-@router.post("/otp/request", response_model=OtpRequestResponse)
-@limiter.limit("5/minute")
-def otp_request(request: Request, body: OtpRequestRequest, db: Session = Depends(get_user_db)):
-    """Send an OTP fallback code (requires a valid partial token — prevents abuse)."""
+# ── First-login TOTP enrolment (partial token) ───────────────────────────────
+# v3.33 — a user without TOTP enrols it during login (no full JWT yet): /login
+# (password) → /totp/enroll (get QR) → /totp/enroll-verify (confirm → JWT). This
+# replaces the removed email-OTP fallback; the authenticator is the only factor.
+
+@router.post("/totp/enroll", response_model=TotpSetupResponse)
+@limiter.limit("10/minute")
+def totp_enroll(request: Request, body: PartialTokenRequest, db: Session = Depends(get_user_db)):
+    """Generate a fresh secret + QR for a half-logged-in user (partial token).
+    Does NOT enable TOTP until /totp/enroll-verify confirms a live code."""
+    user = _user_from_partial(body.partial_token, db)
+    secret = totp_service.generate_secret()
+    user.totp_secret = secret
+    user.totp_enabled = False
+    db.commit()
+    uri = totp_service.provisioning_uri(secret, user.email)
+    return TotpSetupResponse(
+        qr_code=totp_service.qr_png_base64(uri), secret=secret, provisioning_uri=uri,
+    )
+
+
+@router.post("/totp/enroll-verify", response_model=TokenResponse)
+@limiter.limit("10/minute")
+def totp_enroll_verify(request: Request, body: PartialTokenCodeRequest, db: Session = Depends(get_user_db)):
+    """Confirm the scanned secret with a live code; enable TOTP and issue the JWT
+    (the second factor is now established, so the login is complete)."""
     user = _user_from_partial(body.partial_token, db)
     if totp_service.is_locked(user):
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=_LOCKED_MSG)
-    method = _send_otp(db, user)
-    return OtpRequestResponse(otp_sent=True, method=method)
-
-
-@router.post("/otp/login", response_model=TokenResponse)
-@limiter.limit("5/minute")
-def otp_login(request: Request, body: PartialTokenCodeRequest, db: Session = Depends(get_user_db)):
-    user = _user_from_partial(body.partial_token, db)
-    if totp_service.is_locked(user):
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=_LOCKED_MSG)
-    if not verify_otp(db, user.id, body.code):
+    if not user.totp_secret or not totp_service.verify_code(user.totp_secret, body.code):
         totp_service.record_failure(db, user)
         if totp_service.is_locked(user):
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=_LOCKED_MSG)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired backup code")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Invalid code — check that your phone clock is set to automatic")
+    user.totp_enabled = True
+    user.totp_verified_at = datetime.utcnow()
     totp_service.reset_failures(db, user)
+    db.commit()
     return TokenResponse(access_token=create_access_token(user.id, user.email, user.role),
                          role=user.role, email=user.email)

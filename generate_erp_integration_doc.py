@@ -1812,8 +1812,9 @@ def build_pdf():
     story.append(note(
         "Service accounts use role <font face='Courier'>api_client</font> and can only authenticate "
         "via <font face='Courier'>/api/auth/service-token</font>. They cannot use the admin UI "
-        "login (which requires OTP verification). The service-token endpoint returns a JWT directly, "
-        "with no 2FA step, making it suitable for automated system-to-system integration."
+        "login (which requires authenticator-app TOTP two-factor). The service-token endpoint "
+        "returns a JWT directly, with no 2FA step, making it suitable for automated "
+        "system-to-system integration."
     ))
 
     story.append(p("13.5 Multiple ERP Systems on One Pedestal", "H2"))

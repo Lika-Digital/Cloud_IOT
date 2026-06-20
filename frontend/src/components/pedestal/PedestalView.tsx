@@ -89,10 +89,11 @@ export default function PedestalView({ pedestalId }: PedestalViewProps) {
         />
       )}
 
-      <div className="flex gap-6 items-start">
+      <div className="flex flex-col lg:flex-row gap-6 items-center lg:items-start">
         {/* Pedestal image with clickable zones */}
         <div className="flex-shrink-0">
-          <div className="relative inline-block select-none" style={{ height: 520 }}>
+          {/* Image height adapts to the viewport on phones, fixed on large screens. */}
+          <div className="relative inline-block select-none h-[360px] sm:h-[440px] lg:h-[520px]">
             <img
               src={pedestalImg}
               alt="Pedestal"
@@ -146,7 +147,7 @@ export default function PedestalView({ pedestalId }: PedestalViewProps) {
         </div>
 
         {/* Detail panel */}
-        <div className="flex-1 min-w-0">
+        <div className="w-full lg:flex-1 min-w-0">
           {selectedZone !== null ? (
             <SocketDetailPanel zoneId={selectedZone} pedestalId={pedestalId} onClose={() => setSelectedZone(null)} />
           ) : (

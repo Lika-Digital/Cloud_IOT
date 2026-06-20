@@ -83,6 +83,35 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-06-20 — TOTP-only 2FA + first-login wizard + mobile-responsive UI (v3.33)
+
+Two clean-ups requested after the v3.32 field review: drop email OTP (the NUC is
+on an isolated LAN where SMTP is awkward, and the authenticator is a stronger
+second factor anyway), and make the dashboard usable on a phone.
+
+- **Email OTP removed — TOTP is the only second factor.** `/login` no longer
+  sends a code; it returns a 5-min partial token plus two flags
+  (`must_change_password`, `totp_enabled`). The old `/verify-otp`, `/otp/request`,
+  and `/otp/login` endpoints are gone. 2FA stays **mandatory** — `/login` never
+  returns a JWT.
+- **First-login wizard.** A user the admin just created lands in a short flow:
+  set a new password (forced — `must_change_password`, new `POST /first-password`)
+  → enrol an authenticator (new `POST /totp/enroll` → `/totp/enroll-verify`, QR
+  shown in the browser) → signed in. An existing TOTP user just enters their code
+  (`/totp/login`, unchanged). The shared 5-fails → 15-min lockout covers every path.
+- **Admin "Reset 2FA" recovery.** With OTP gone there is no self-service path for
+  a lost authenticator, so admins get `POST /users/{id}/reset-2fa` (Settings →
+  Operator Accounts → **Reset 2FA**) which clears the user's TOTP so they re-enrol
+  on next login. Password is left untouched.
+- **Admin-created accounts start with `must_change_password=True`** (new migrated
+  `users.must_change_password` column; the seeded admin and existing accounts are
+  unaffected — default False).
+- **Mobile-responsive UI.** The sidebar collapses into a hamburger drawer below
+  `md` (slide-in + backdrop, auto-closes on navigation); the pedestal image +
+  detail panel stack vertically below `lg` with a viewport-adaptive image height;
+  the chat modal and cramped two-column forms reflow on small screens. Data tables
+  already scroll horizontally.
+
 ### 2026-06-19 — Socket state correctness in both modes (v3.32)
 
 Driven by field MQTT/UI review: the dashboard now reflects what the Opta actually
@@ -1119,10 +1148,14 @@ and fixes the `opta/breakers` ingestion contract. Three independent changes:
 
 ### Authentication
 - Admin and Monitor roles (Monitor = read-only, no controls)
-- Two-factor login: POST /login → OTP email → POST /verify-otp → JWT (2h)
+- Mandatory two-factor login (v3.33): POST /login → partial token → TOTP (enrol on
+  first login, else enter the authenticator code) → JWT (2h). **Email OTP removed** —
+  the authenticator app is the only second factor. First login also forces a
+  password change for admin-created accounts. Admins recover a lost authenticator
+  via Settings → Operator Accounts → Reset 2FA (`POST /users/{id}/reset-2fa`).
 - Customer registration / login (JWT role=customer, 30-day expiry)
 - PBKDF2-HMAC-SHA256 password hashing (stdlib, no bcrypt dependency)
-- Per-IP rate limiting (slowapi): login 10/min, verify-otp 5/min, register 3/hour. Enabled automatically when `APP_ENV=production` or `RATE_LIMIT_ENABLED=true`.
+- Per-IP rate limiting (slowapi): login 10/min, totp/login 10/min, register 3/hour. Enabled automatically when `APP_ENV=production` or `RATE_LIMIT_ENABLED=true`.
 - Operator self-registration via `/api/auth/register` is gated by `ALLOW_SELF_REGISTRATION` (default off → returns 404 in production). Customer signup via `/api/customer/auth/register` is always open.
 - Startup refuses to boot in production without a JWT_SECRET ≥ 32 chars.
 - Brute-force protection: 5 failures in 5 min → security alarm (complementary to the rate limit).
@@ -1306,7 +1339,8 @@ npm run dev
 Open http://localhost:5173
 
 Default admin: set `DEFAULT_ADMIN_EMAIL` / `DEFAULT_ADMIN_PASSWORD` in `backend/.env`.
-OTP prints to the backend console (SMTP not configured by default).
+On first login you enrol an authenticator app (TOTP) — the QR code is shown in the
+browser, no email/SMTP needed (v3.33).
 
 ---
 
@@ -1572,12 +1606,13 @@ re-indents them, which breaks heredocs and multi-line commands. Keep pasted
 commands short (`cd` first to shorten paths); restore any clobbered file by
 copying the real one from `~/Cloud_IOT/...`.
 
-**TOTP first-login note (v3.19).** A freshly-deployed admin has no authenticator
-enrolled (`totp_enabled=False`), so the **first** login uses the OTP fallback
-(auto-sent, read from `sudo journalctl -u cloud-iot-backend -f`). Enable
-authenticator-app TOTP at **Settings → Two-Factor Authentication**; subsequent
-logins then show the TOTP screen with OTP behind "Use backup code instead". See
-`docs/totp-setup-guide.md`.
+**TOTP first-login note (v3.33).** A freshly-deployed admin has no authenticator
+enrolled (`totp_enabled=False`), so the **first** login walks through enrolment in
+the browser: it shows a QR code, you scan it with any authenticator app (Google
+Authenticator, 1Password, …), then enter the 6-digit code to finish signing in.
+No email/SMTP is involved — email OTP was removed. If an operator loses their
+authenticator, an admin clears it from **Settings → Operator Accounts → Reset 2FA**
+and the operator re-enrols on their next login. See `docs/totp-setup-guide.md`.
 
 ---
 
@@ -1722,7 +1757,7 @@ sudo journalctl -u cloud-iot-backend -n 50 --no-pager  # last 50 lines
 | `HW_TEMP_MAX` | `90.0` | Maximum safe CPU temperature (°C) |
 | `HW_TEMP_WARNING_PCT` | `60.0` | 60% of max → Alarm 1 (54°C) |
 | `HW_TEMP_CRITICAL_PCT` | `80.0` | 80% of max → Alarm 2 (72°C) + RTSP suspend |
-| `SMTP_HOST` | — | Leave empty to print OTP to console |
+| `SMTP_HOST` | — | Optional outbound email (no longer used for login — TOTP only since v3.33) |
 | `PENDING_TIMEOUT_SECONDS` | `15` | Auto-deny stale pending sessions |
 
 ---
@@ -1734,7 +1769,7 @@ sudo journalctl -u cloud-iot-backend -n 50 --no-pager  # last 50 lines
 | Backend | Python 3.12, FastAPI, Uvicorn, SQLAlchemy 2.0 |
 | Database | SQLite (pedestal.db + data/users.db) |
 | MQTT | paho-mqtt 2.x, Eclipse Mosquitto 2.0 (Docker) |
-| Auth | PyJWT, PBKDF2-HMAC-SHA256, smtplib OTP, slowapi (rate limiting) |
+| Auth | PyJWT, PBKDF2-HMAC-SHA256, pyotp (TOTP 2FA), slowapi (rate limiting) |
 | Computer Vision | OpenVINO 2026, YOLOv8n, MobileNetV2, Pillow, psutil |
 | PDF | ReportLab |
 | Frontend | React 18, TypeScript, Vite, Zustand, Recharts, Tailwind CSS |

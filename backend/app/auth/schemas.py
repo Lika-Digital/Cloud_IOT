@@ -9,11 +9,6 @@ class LoginRequest(BaseModel):
     password: str = Field(..., min_length=1, max_length=128)
 
 
-class VerifyOtpRequest(BaseModel):
-    email: str = Field(..., max_length=254)
-    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
-
-
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -64,14 +59,25 @@ class SmtpConfigUpdate(BaseModel):
 
 # ── v3.19 — TOTP 2FA ──────────────────────────────────────────────────────────
 
-class PartialLoginResponse(BaseModel):
-    """Returned by /login when credentials are valid. 2FA is mandatory, so a
-    full JWT is never returned here — the caller completes a second factor."""
-    totp_required: bool
-    otp_available: bool = True
+class LoginResponse(BaseModel):
+    """v3.33 — returned by /login when credentials are valid. 2FA is mandatory
+    (no JWT here). The caller then, in order: changes the password if required,
+    then either enrolls TOTP (first time) or enters the authenticator code.
+    Email OTP was removed — TOTP is the only second factor."""
     partial_token: str
-    otp_sent: bool = False          # True when /login auto-sent an OTP (no-TOTP path)
-    method: Optional[str] = None    # "log" | "email" when otp_sent
+    must_change_password: bool = False
+    totp_enabled: bool = False
+
+
+class FirstPasswordRequest(BaseModel):
+    """Set a new password during first-login, authorized by the partial token."""
+    partial_token: str = Field(..., max_length=4096)
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
+class PartialTokenRequest(BaseModel):
+    """Body for /totp/enroll — partial token only (returns a fresh QR/secret)."""
+    partial_token: str = Field(..., max_length=4096)
 
 
 class TotpSetupResponse(BaseModel):
@@ -96,15 +102,6 @@ class TotpStatusResponse(BaseModel):
 
 
 class PartialTokenCodeRequest(BaseModel):
-    """Body for /totp/login and /otp/login — partial token + 6-digit code."""
+    """Body for /totp/login and /totp/enroll-verify — partial token + 6-digit code."""
     partial_token: str = Field(..., max_length=4096)
     code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
-
-
-class OtpRequestRequest(BaseModel):
-    partial_token: str = Field(..., max_length=4096)
-
-
-class OtpRequestResponse(BaseModel):
-    otp_sent: bool
-    method: str                     # "log" | "email"

@@ -31,13 +31,14 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-// v3.19 — two-step partial-token login (2FA mandatory)
-export interface PartialLoginResponse {
-  totp_required: boolean
-  otp_available: boolean
+// v3.33 — two-step login, TOTP is the ONLY second factor (email OTP removed).
+// /login returns a partial token + next-step flags; the caller then (in order)
+// changes the password if required, then enrolls TOTP (first login) or enters
+// the authenticator code.
+export interface LoginResponse {
   partial_token: string
-  otp_sent: boolean
-  method: 'log' | 'email' | null
+  must_change_password: boolean
+  totp_enabled: boolean
 }
 
 export interface TotpSetupResponse {
@@ -52,27 +53,23 @@ export interface TotpStatusResponse {
   totp_verified_at: string | null
 }
 
-export interface OtpRequestResponse {
-  otp_sent: boolean
-  method: 'log' | 'email'
-}
-
 export const authLogin = (email: string, password: string) =>
-  api.post<PartialLoginResponse>('/login', { email, password }).then((r) => r.data)
+  api.post<LoginResponse>('/login', { email, password }).then((r) => r.data)
 
-// Legacy email+code path — kept for back-compat (deprecated by /otp/login)
-export const authVerifyOtp = (email: string, code: string) =>
-  api.post<TokenResponse>('/verify-otp', { email, code }).then((r) => r.data)
+// First-login forced password change (authorized by the partial token).
+export const authFirstPassword = (partial_token: string, new_password: string) =>
+  api.post<{ ok: boolean; totp_enabled: boolean }>('/first-password', { partial_token, new_password }).then((r) => r.data)
 
-// Second-factor completion (partial token)
+// Second-factor completion for an existing TOTP user (partial token + code).
 export const authTotpLogin = (partial_token: string, code: string) =>
   api.post<TokenResponse>('/totp/login', { partial_token, code }).then((r) => r.data)
 
-export const authOtpRequest = (partial_token: string) =>
-  api.post<OtpRequestResponse>('/otp/request', { partial_token }).then((r) => r.data)
+// First-login TOTP enrolment: get a QR for a half-logged-in user, then confirm.
+export const authTotpEnroll = (partial_token: string) =>
+  api.post<TotpSetupResponse>('/totp/enroll', { partial_token }).then((r) => r.data)
 
-export const authOtpLogin = (partial_token: string, code: string) =>
-  api.post<TokenResponse>('/otp/login', { partial_token, code }).then((r) => r.data)
+export const authTotpEnrollVerify = (partial_token: string, code: string) =>
+  api.post<TokenResponse>('/totp/enroll-verify', { partial_token, code }).then((r) => r.data)
 
 // TOTP setup / management (uses the logged-in bearer token via the interceptor)
 export const totpSetup = () =>
@@ -107,3 +104,7 @@ export const authPatchUser = (id: number, data: { role?: 'admin' | 'monitor'; is
 
 export const authDeleteUser = (id: number) =>
   api.delete(`/users/${id}`).then((r) => r.data)
+
+// v3.33 — admin recovery: clear a user's TOTP so they re-enrol on next login.
+export const authResetUser2fa = (id: number) =>
+  api.post<UserResponse>(`/users/${id}/reset-2fa`).then((r) => r.data)

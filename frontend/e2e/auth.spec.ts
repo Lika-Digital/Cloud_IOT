@@ -25,16 +25,16 @@ test.describe('Auth — login page UI', () => {
     await expect(page.getByRole('button', { name: 'Continue' })).toBeVisible()
   })
 
-  test('shows OTP step after successful credentials', async ({ page }) => {
+  test('shows TOTP step after successful credentials for an enrolled user', async ({ page }) => {
     await page.route('**/api/auth/login', route =>
-      route.fulfill({ json: { message: 'OTP sent' } })
+      route.fulfill({ json: { partial_token: 'p.a.b', must_change_password: false, totp_enabled: true } })
     )
 
     await page.fill('input[type="email"]', 'admin@test.local')
     await page.fill('input[type="password"]', 'admin1234')
     await page.click('button[type="submit"]')
 
-    await expect(page.getByText('Enter verification code')).toBeVisible()
+    await expect(page.getByText('Two-factor authentication')).toBeVisible()
   })
 
   test('shows error message on bad credentials', async ({ page }) => {
@@ -49,21 +49,21 @@ test.describe('Auth — login page UI', () => {
     await expect(page.getByText('Invalid email or password')).toBeVisible()
   })
 
-  test('shows error message on bad OTP', async ({ page }) => {
+  test('shows error message on bad TOTP code', async ({ page }) => {
     await page.route('**/api/auth/login', route =>
-      route.fulfill({ json: { message: 'OTP sent' } })
+      route.fulfill({ json: { partial_token: 'p.a.b', must_change_password: false, totp_enabled: true } })
     )
-    await page.route('**/api/auth/verify-otp', route =>
+    await page.route('**/api/auth/totp/login', route =>
       route.fulfill({ status: 401, json: { detail: 'Invalid or expired code' } })
     )
 
     await page.fill('input[type="email"]', 'admin@test.local')
     await page.fill('input[type="password"]', 'admin1234')
     await page.click('button[type="submit"]')
-    await expect(page.getByText('Enter verification code')).toBeVisible()
+    await expect(page.getByText('Two-factor authentication')).toBeVisible()
 
+    // 6 digits auto-submits the second factor.
     await page.fill('input[inputmode="numeric"]', '000000')
-    await page.click('button[type="submit"]')
 
     await expect(page.getByText('Invalid or expired code')).toBeVisible()
   })

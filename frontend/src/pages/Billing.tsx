@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react'
 import {
-  getBillingConfig, setBillingConfig, getSpendingOverview, getSpendingDetail,
-  type BillingConfig, type SpendingRow, type SessionDetailRow,
+  getBillingConfig, setBillingConfig, getSpendingOverview, getSpendingDetail, getDailyBilling,
+  type BillingConfig, type SpendingRow, type SessionDetailRow, type DailyBillingRow,
 } from '../api/billing'
 import { useAuthStore, canControl } from '../store/authStore'
 
 export default function Billing() {
   // Monitor sees billing read-only; Admin + Monitor & Control may change prices.
   const readOnly = !canControl(useAuthStore((s) => s.role))
+  const [daily, setDaily] = useState<DailyBillingRow[]>([])
   const [config, setConfig] = useState<BillingConfig | null>(null)
   const [kwh, setKwh] = useState('')
   const [liter, setLiter] = useState('')
@@ -28,6 +29,7 @@ export default function Billing() {
       }),
       getSpendingOverview().then(setSpending),
       getSpendingDetail().then(setDetail),
+      getDailyBilling().then(setDaily).catch(() => {}),
     ]).catch(() => setLoadError('Failed to load billing data. Check your connection and refresh.'))
   }, [])
 
@@ -103,6 +105,53 @@ export default function Billing() {
         )}
         {config && (
           <p className="text-xs text-gray-500">Last updated: {new Date(config.updated_at).toLocaleString()}</p>
+        )}
+      </div>
+
+      {/* Daily energy billing (v3.35 — from the 15-min interval ledger) */}
+      <div className="card">
+        <h2 className="font-semibold text-gray-200 mb-1">Daily Energy Billing</h2>
+        <p className="text-xs text-gray-500 mb-4">
+          Per-day kWh from the interval ledger. <span className="text-amber-400">berth-marina</span> rows are
+          standalone (Smart Mode off) draws per socket; customer / NFC rows are attributed sessions.
+        </p>
+        {daily.length === 0 ? (
+          <p className="text-gray-500 text-sm">No energy recorded yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-700 text-gray-400 text-left">
+                  <th className="py-2 pr-4">Date</th>
+                  <th className="py-2 pr-4">Socket</th>
+                  <th className="py-2 pr-4">Billed to</th>
+                  <th className="py-2 pr-4">kWh</th>
+                  <th className="py-2">Cost (€)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {daily.map((r, i) => (
+                  <tr key={i} className="border-b border-gray-800 hover:bg-gray-800/50">
+                    <td className="py-2 pr-4 text-gray-300 font-mono">{r.date}</td>
+                    <td className="py-2 pr-4 text-gray-300">P{r.pedestal_id}·Q{r.socket_id}</td>
+                    <td className="py-2 pr-4">
+                      {r.origin === 'berth-marina' ? (
+                        <span className="text-amber-400">berth-marina{r.berth_ref ? ` (${r.berth_ref})` : ''}</span>
+                      ) : r.customer_name ? (
+                        <span className="text-blue-300">{r.customer_name}</span>
+                      ) : r.nfc_user_id ? (
+                        <span className="text-blue-300">nfc:{r.nfc_user_id}</span>
+                      ) : (
+                        <span className="text-gray-400">{r.origin}</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-4 text-gray-300 font-mono">{r.kwh.toFixed(3)}</td>
+                    <td className="py-2 text-green-400 font-mono font-bold">€{r.cost_eur.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 

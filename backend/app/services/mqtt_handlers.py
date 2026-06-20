@@ -1013,6 +1013,9 @@ _STANDALONE_USAGE_STOP_GRACE_S = 120     # complete after this long below thresh
 _STANDALONE_TICK_S = 30
 _standalone_usage_last: dict = {}        # (pid, sid) -> (datetime, power_kw)
 _standalone_usage_low_since: dict = {}   # (pid, sid) -> datetime first below threshold
+# v3.35 — (pid, sid) -> datetime an attributed (customer/NFC) session first went
+# idle; used to auto-finalize when the app never sends stop.
+_customer_idle_since: dict = {}
 
 # v3.32 — per-socket power×time energy integration state for the LIVE meter
 # handler: (pid, sid) -> (last_sample_time, last_power_kw, session_id).
@@ -1052,7 +1055,11 @@ async def _standalone_usage_tick(now: datetime) -> None:
     from ..models.session import Session as _Session
     from .session_service import session_service as _ss
 
+    from ..config import settings
+    _idle_finalize_s = max(1, int(settings.session_idle_finalize_min)) * 60
+
     broadcasts: list[tuple] = []
+    idle_finalized: list[tuple] = []   # (session_id, pid, sid) for post-loop invoicing
     db = SessionLocal()
     try:
         smart_off = {
@@ -1065,6 +1072,26 @@ async def _standalone_usage_tick(now: datetime) -> None:
             standalone_open = open_sess if (
                 open_sess is not None and getattr(open_sess, "origin", None) == "standalone"
             ) else None
+
+            # v3.35 — idle auto-finalize for ATTRIBUTED (customer / NFC) sessions:
+            # if the socket draws no power for session_idle_finalize_min, close the
+            # session (the app never sent stop). Runs in BOTH smart modes; never
+            # touches standalone sessions (handled by the grace logic below).
+            attributed = open_sess if (
+                open_sess is not None and (open_sess.customer_id or open_sess.nfc_user_id)
+            ) else None
+            if attributed is not None:
+                if _socket_delivering_power(sc):
+                    _customer_idle_since.pop(key, None)
+                else:
+                    first_idle = _customer_idle_since.setdefault(key, now)
+                    if (now - first_idle).total_seconds() >= _idle_finalize_s:
+                        _ss.complete(db, attributed, end_reason="idle_timeout")
+                        _customer_idle_since.pop(key, None)
+                        idle_finalized.append((attributed.id, pid, sid))
+                        continue
+            else:
+                _customer_idle_since.pop(key, None)
 
             if pid not in smart_off:
                 # Smart Mode ON — hand control back: complete any standalone session.
@@ -1117,6 +1144,34 @@ async def _standalone_usage_tick(now: datetime) -> None:
                 "timestamp": datetime.utcnow().isoformat(),
             },
         })
+
+    # v3.35 — notify + invoice for idle-finalized customer/NFC sessions.
+    for sess_id, pid, sid in idle_finalized:
+        db2 = SessionLocal()
+        try:
+            s = db2.get(_Session, sess_id)
+            if s is None:
+                continue
+            await ws_manager.broadcast({
+                "event": "session_completed",
+                "data": {
+                    "session_id": s.id, "pedestal_id": pid, "socket_id": sid,
+                    "energy_kwh": s.energy_kwh, "customer_id": s.customer_id,
+                    "end_reason": "idle_timeout",
+                },
+            })
+            if s.customer_id:
+                from ..auth.user_database import UserSessionLocal
+                from ..services.invoice_service import create_invoice_for_session
+                udb = UserSessionLocal()
+                try:
+                    await create_invoice_for_session(db2, udb, s)
+                finally:
+                    udb.close()
+        except Exception as e:
+            logger.warning("[IdleFinalize] post-processing failed for session %s: %s", sess_id, e)
+        finally:
+            db2.close()
 
 
 async def run_standalone_usage_watchdog() -> None:

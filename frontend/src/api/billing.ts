@@ -53,6 +53,22 @@ export interface ChatMessage {
   read_at: string | null
 }
 
+export interface DailyBillingRow {
+  date: string
+  pedestal_id: number
+  socket_id: number
+  origin: 'customer' | 'nfc' | 'operator' | 'berth-marina'
+  customer_id: number | null
+  customer_name: string | null
+  nfc_user_id: string | null
+  berth_ref: string | null
+  kwh: number
+  cost_eur: number
+}
+
+export const getDailyBilling = (start?: string, end?: string) =>
+  api.get<DailyBillingRow[]>('/billing/daily', { params: { start, end } }).then((r) => r.data)
+
 export const getBillingConfig = () =>
   api.get<BillingConfig>('/billing/config').then((r) => r.data)
 

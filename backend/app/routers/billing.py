@@ -1,6 +1,7 @@
 """Billing configuration and spending overview (admin only)."""
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session as DBSession
 from ..auth.user_database import get_user_db
 from ..database import get_db
@@ -8,6 +9,7 @@ from ..auth.customer_models import BillingConfig, Invoice, Customer
 from ..auth.dependencies import require_any_role, require_control
 from ..auth.models import User
 from ..models.session import Session
+from ..models.energy_interval import EnergyInterval
 from ..schemas.customer import (
     BillingConfigResponse, BillingConfigUpdate,
     CustomerSpendingRow, CustomerListRow, SessionDetailRow,
@@ -44,6 +46,70 @@ def update_billing_config(
     user_db.commit()
     user_db.refresh(config)
     return config
+
+
+@router.get("/daily")
+def get_daily_billing(
+    start: str | None = Query(None, description="Inclusive 'YYYY-MM-DD'"),
+    end: str | None = Query(None, description="Inclusive 'YYYY-MM-DD'"),
+    db: DBSession = Depends(get_db),
+    user_db: DBSession = Depends(get_user_db),
+    _: User = Depends(require_any_role),
+):
+    """v3.35 — daily energy-billing rollup from the 15-min interval ledger.
+
+    One row per (day, socket, attribution): ``origin`` is "berth-marina" for
+    Smart-Mode-OFF standalone draws (keyed by socket + ``berth_ref``), else
+    "customer" / "nfc" / "operator". ``cost_eur`` = summed kWh x current price.
+    Readable by every operator; computed on read so it never drifts.
+    """
+    day = func.date(EnergyInterval.interval_start)
+    q = db.query(
+        day.label("date"),
+        EnergyInterval.pedestal_id,
+        EnergyInterval.socket_id,
+        EnergyInterval.origin,
+        EnergyInterval.customer_id,
+        EnergyInterval.nfc_user_id,
+        EnergyInterval.berth_ref,
+        func.sum(EnergyInterval.kwh).label("kwh"),
+    )
+    if start:
+        q = q.filter(day >= start)
+    if end:
+        q = q.filter(day <= end)
+    q = q.group_by(
+        day, EnergyInterval.pedestal_id, EnergyInterval.socket_id,
+        EnergyInterval.origin, EnergyInterval.customer_id,
+        EnergyInterval.nfc_user_id, EnergyInterval.berth_ref,
+    ).order_by(day.desc(), EnergyInterval.pedestal_id, EnergyInterval.socket_id)
+    rows = q.all()
+
+    cfg = user_db.get(BillingConfig, 1)
+    price = cfg.kwh_price_eur if cfg else 0.30
+
+    cust_ids = {r.customer_id for r in rows if r.customer_id}
+    names: dict[int, str] = {}
+    if cust_ids:
+        for c in user_db.query(Customer).filter(Customer.id.in_(cust_ids)).all():
+            names[c.id] = c.name or c.email or f"#{c.id}"
+
+    out = []
+    for r in rows:
+        kwh = round(r.kwh or 0.0, 4)
+        out.append({
+            "date": r.date,
+            "pedestal_id": r.pedestal_id,
+            "socket_id": r.socket_id,
+            "origin": r.origin,
+            "customer_id": r.customer_id,
+            "customer_name": names.get(r.customer_id),
+            "nfc_user_id": r.nfc_user_id,
+            "berth_ref": r.berth_ref,
+            "kwh": kwh,
+            "cost_eur": round(kwh * price, 4),
+        })
+    return out
 
 
 @router.get("/spending", response_model=list[CustomerSpendingRow])

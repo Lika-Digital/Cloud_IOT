@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     # Pending session / socket approval timeout (seconds)
     pending_timeout_seconds: int = 15
 
+    # v3.35 — Energy interval billing ledger. System-wide (NOT per socket), set
+    # once on the NUC via env. energy_log_interval_min: how often the running
+    # session energy is checkpointed into the energy_intervals table (the billing
+    # source). session_idle_finalize_min: a customer/NFC session drawing ~0 power
+    # for this long is auto-completed (covers "customer forgot to send stop").
+    energy_log_interval_min: int = 15
+    session_idle_finalize_min: int = 15
+
     # v3.31 — Usage-history monthly reports. Plain-text reports are written here,
     # one file per pedestal per month. MUST be on PERSISTENT storage that
     # survives a `cloud-iot upgrade` (the app's static/ dir may be replaced),

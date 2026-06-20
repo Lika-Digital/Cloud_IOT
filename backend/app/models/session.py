@@ -44,6 +44,12 @@ class Session(Base):
     # to Usage History). customer_id / nfc_user_id stay NULL for these.
     origin: Mapped[str] = mapped_column(String(32), nullable=True)
 
+    # v3.35 — high-water mark of energy already written to energy_intervals (the
+    # 15-min billing ledger). delta-since-last-checkpoint = energy_kwh -
+    # energy_logged_kwh. Persisted so a backend restart mid-session does not
+    # re-log energy already billed. Always <= energy_kwh.
+    energy_logged_kwh: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
     pedestal: Mapped["Pedestal"] = relationship("Pedestal", back_populates="sessions")  # noqa: F821
     sensor_readings: Mapped[list["SensorReading"]] = relationship(  # noqa: F821
         "SensorReading", back_populates="session"

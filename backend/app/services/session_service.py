@@ -134,6 +134,17 @@ class SessionService:
             if liter_readings:
                 session.water_liters = max(liter_readings)
 
+        # v3.35 — flush the final energy interval before closing so an unplug/stop
+        # is billed immediately (energy now finalized above). Best-effort: never
+        # let interval bookkeeping block a session from completing.
+        if session.type == "electricity":
+            try:
+                from .energy_interval_service import flush_session_interval
+                flush_session_interval(db, session, now=session.ended_at, final=True)
+            except Exception as e:
+                _log("system", "session_service",
+                     f"interval flush on complete failed for session {session.id}: {e}", e)
+
         try:
             db.commit()
             db.refresh(session)

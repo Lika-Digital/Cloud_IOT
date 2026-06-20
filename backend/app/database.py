@@ -60,6 +60,7 @@ def init_db():
     from .models import meter_load_alarm  # noqa: F401 — v3.11
     from .models import nfc_tag  # noqa: F401 — v3.26
     from .models import nfc_pending_session  # noqa: F401 — v3.26
+    from .models import energy_interval  # noqa: F401 — v3.35
     Base.metadata.create_all(bind=engine)
     _migrate_schema()
 
@@ -83,6 +84,8 @@ def _migrate_schema():
         ("socket_configs", "auto_activate_default_migrated", "INTEGER NOT NULL DEFAULT 0"),
         ("sessions",  "customer_id", "INTEGER"),
         ("sessions",  "deny_reason", "TEXT"),
+        # v3.35 — high-water mark of energy already written to energy_intervals.
+        ("sessions",  "energy_logged_kwh", "FLOAT NOT NULL DEFAULT 0"),
         # v3.6 — QR claim timestamp (nullable). NULL for unclaimed sessions
         # AND for sessions started directly from the mobile app; populated
         # only when a customer claims a previously-unowned auto-activated

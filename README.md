@@ -83,6 +83,35 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-06-20 — Energy interval ledger + daily billing (v3.35)
+
+Makes kWh durable and billable even for sessions that never "end" (a yearly berth
+drawing power 24/7 previously produced one open session that was never invoiced).
+
+- **15-min interval ledger** (`energy_intervals`, pedestal.db) — the billing source
+  of truth. A background task checkpoints each active electricity session's
+  running energy (the `power×time` integral on `sessions.energy_kwh`) into one row
+  per interval, storing the **delta** since the last checkpoint. `sessions.
+  energy_logged_kwh` is a persisted high-water mark, so a backend restart
+  mid-session never re-logs or double-bills. Empty (idle) intervals are skipped.
+- **Immediate flush on unplug/stop** — `session_service.complete()` writes the
+  final partial interval before closing, so consumption is billed without waiting
+  for the next 15-min boundary. Covers every end path (operator/customer stop,
+  unplug, breaker trip, standalone close).
+- **Works in both Smart Modes, all origins** — interval rows are attributed off the
+  active session: `customer` / `nfc` / `operator`, or **`berth-marina`** for Smart-
+  Mode-OFF standalone draws (keyed by socket + the pedestal's `berth_ref`).
+- **Idle auto-finalize** — an attributed customer/NFC session drawing ~0 power for
+  `SESSION_IDLE_FINALIZE_MIN` (default 15) is auto-completed (and invoiced for
+  customer sessions) — covers a MyMarina app that never sent *stop*.
+- **Daily billing** — `GET /api/billing/daily` aggregates the ledger per day per
+  socket (berth-marina + customer), computed on read so it never drifts. New
+  "Daily Energy Billing" table on the Billing page.
+- **System-wide config** (env, set once on the NUC — not per socket):
+  `ENERGY_LOG_INTERVAL_MIN` (default 15), `SESSION_IDLE_FINALIZE_MIN` (default 15).
+- 10 tests (`test_energy_intervals.py`): delta/restart-safety, empty-skip, origin
+  labels, flush-on-complete, logger tick, daily aggregation. Full suite 595 pass.
+
 ### 2026-06-20 — Third operator role: Monitor & Control (v3.34)
 
 Adds a middle operator tier between Admin and Monitor.
@@ -1787,6 +1816,8 @@ sudo journalctl -u cloud-iot-backend -n 50 --no-pager  # last 50 lines
 | `HW_TEMP_CRITICAL_PCT` | `80.0` | 80% of max → Alarm 2 (72°C) + RTSP suspend |
 | `SMTP_HOST` | — | Optional outbound email (no longer used for login — TOTP only since v3.33) |
 | `PENDING_TIMEOUT_SECONDS` | `15` | Auto-deny stale pending sessions |
+| `ENERGY_LOG_INTERVAL_MIN` | `15` | How often session energy is checkpointed into the billing ledger (system-wide) |
+| `SESSION_IDLE_FINALIZE_MIN` | `15` | Auto-complete a customer/NFC session idle (no power) this long |
 
 ---
 

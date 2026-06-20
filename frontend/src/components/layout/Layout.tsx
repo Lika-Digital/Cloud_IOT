@@ -73,8 +73,10 @@ export default function Layout() {
           <p className="text-xs text-gray-500 mt-2 text-center">IoT Dashboard</p>
         </div>
 
-        {/* Nav */}
-        <nav className="flex-1 p-3 space-y-1">
+        {/* Nav — scrolls when the list is taller than the viewport (small
+            screens) so the pinned user/sign-out block below stays reachable.
+            min-h-0 lets this flex child shrink below its content height. */}
+        <nav className="flex-1 min-h-0 overflow-y-auto p-3 space-y-1">
           {NAV_ITEMS.map((item) => (
             <NavLink
               key={item.to}
@@ -110,8 +112,9 @@ export default function Layout() {
           ))}
         </nav>
 
-        {/* Status + user info */}
-        <div className="p-4 border-t border-gray-800 space-y-3">
+        {/* Status + user info — pinned to the bottom, never collapses so the
+            Sign out button is always visible. */}
+        <div className="flex-shrink-0 p-4 border-t border-gray-800 space-y-3">
           <StatusDot label="WebSocket" active={wsConnected} />
           <StatusDot label="Pedestal" active={pedestalOnline} />
 

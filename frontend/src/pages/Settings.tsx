@@ -658,7 +658,7 @@ function UserManagementPanel() {
   const [showAdd, setShowAdd] = useState(false)
   const [newEmail, setNewEmail] = useState('')
   const [newPassword, setNewPassword] = useState('')
-  const [newRole, setNewRole] = useState<'admin' | 'monitor'>('monitor')
+  const [newRole, setNewRole] = useState<'admin' | 'monitor_control' | 'monitor'>('monitor')
   const [addMsg, setAddMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [adding, setAdding] = useState(false)
 
@@ -686,8 +686,8 @@ function UserManagementPanel() {
     }
   }
 
-  const handleToggleRole = async (user: UserResponse) => {
-    const newRole = user.role === 'admin' ? 'monitor' : 'admin'
+  const handleSetRole = async (user: UserResponse, newRole: 'admin' | 'monitor_control' | 'monitor') => {
+    if (newRole === user.role) return
     try {
       const updated = await authPatchUser(user.id, { role: newRole })
       setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)))
@@ -783,10 +783,11 @@ function UserManagementPanel() {
             <label className="block text-xs text-gray-400 mb-1">Role</label>
             <select
               value={newRole}
-              onChange={(e) => setNewRole(e.target.value as 'admin' | 'monitor')}
+              onChange={(e) => setNewRole(e.target.value as 'admin' | 'monitor_control' | 'monitor')}
               className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm"
             >
               <option value="monitor">Monitor — read only</option>
+              <option value="monitor_control">Monitor &amp; Control — all but System Health / Settings / API Gateway</option>
               <option value="admin">Admin — full access</option>
             </select>
           </div>
@@ -812,18 +813,23 @@ function UserManagementPanel() {
               </p>
             </div>
             <div className="flex items-center gap-1 ml-2 flex-shrink-0">
-              {/* Role badge / toggle */}
-              <button
-                onClick={() => handleToggleRole(u)}
-                title={`Click to make ${u.role === 'admin' ? 'Monitor' : 'Admin'}`}
-                className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+              {/* Role selector (admin / monitor_control / monitor) */}
+              <select
+                value={u.role}
+                onChange={(e) => handleSetRole(u, e.target.value as 'admin' | 'monitor_control' | 'monitor')}
+                title="Change this operator's role"
+                className={`text-xs px-2 py-0.5 rounded-full border bg-gray-800 transition-colors ${
                   u.role === 'admin'
-                    ? 'bg-blue-900/30 text-blue-400 border-blue-700/40 hover:bg-red-900/30 hover:text-red-400 hover:border-red-700/40'
-                    : 'bg-green-900/30 text-green-400 border-green-700/40 hover:bg-blue-900/30 hover:text-blue-400 hover:border-blue-700/40'
+                    ? 'text-blue-400 border-blue-700/40'
+                    : u.role === 'monitor_control'
+                      ? 'text-amber-400 border-amber-700/40'
+                      : 'text-green-400 border-green-700/40'
                 }`}
               >
-                {u.role}
-              </button>
+                <option value="admin">admin</option>
+                <option value="monitor_control">monitor &amp; control</option>
+                <option value="monitor">monitor</option>
+              </select>
               {/* Active toggle */}
               <button
                 onClick={() => handleToggleActive(u)}

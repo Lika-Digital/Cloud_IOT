@@ -182,8 +182,16 @@ def test_history_endpoint_returns_rows(client, auth_headers):
     assert rows[0]["customer_name"] is None
 
 
-def test_history_endpoint_requires_admin(client):
+def test_history_endpoint_readable_by_monitor(client):
+    # v3.34 — usage history is a read; every operator (incl. read-only monitor)
+    # may view it. The role gate must NOT 403 a monitor here.
     r = client.get(f"/api/pedestals/{PID}/usage/history", headers=_monitor_headers())
+    assert r.status_code != 403
+
+
+def test_report_delete_blocks_monitor(client):
+    # ...but deleting a monthly report is a control action — monitor is rejected.
+    r = client.delete(f"/api/pedestals/{PID}/usage/reports/2026-05", headers=_monitor_headers())
     assert r.status_code == 403
 
 

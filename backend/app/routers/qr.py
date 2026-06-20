@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from ..database import get_db
 from ..models.pedestal_config import PedestalConfig
-from ..auth.dependencies import require_admin
+from ..auth.dependencies import require_any_role, require_control
 from ..services.qr_service import (
     generate_socket_qr,
     regenerate_socket_qr,
@@ -53,7 +53,7 @@ def _resolve_cabinet(db: DBSession, cabinet_id: str) -> PedestalConfig:
 def download_all_qr_codes(
     cabinet_id: str,
     db: DBSession = Depends(get_db),
-    _: object = Depends(require_admin),
+    _: object = Depends(require_any_role),
 ):
     """Stream a ZIP of `{cabinet_id}_Q{1..4}.png` for this pedestal.
 
@@ -91,7 +91,7 @@ def download_all_qr_codes(
 def regenerate_all_qr_codes(
     cabinet_id: str,
     db: DBSession = Depends(get_db),
-    _: object = Depends(require_admin),
+    _: object = Depends(require_control),
 ):
     """Delete every `{cabinet_id}_*.png` on disk and render a fresh set.
 

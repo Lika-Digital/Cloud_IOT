@@ -17,7 +17,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session as DBSession
 
 from ..database import get_db
-from ..auth.dependencies import require_admin
+from ..auth.dependencies import require_any_role, require_control
 from ..auth.models import User
 from ..services import usage_report_service as svc
 
@@ -45,7 +45,7 @@ def get_usage_history(
     socket_id: int | None = Query(None, ge=1, le=4),
     month: str | None = Query(None, description="Optional 'YYYY-MM' filter"),
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_any_role),
 ):
     """Completed-session usage records for a socket/valve (newest first).
 
@@ -65,7 +65,7 @@ def get_usage_history(
 @router.get("/{pedestal_id}/usage/reports")
 def list_usage_reports(
     pedestal_id: int,
-    _: User = Depends(require_admin),
+    _: User = Depends(require_any_role),
 ):
     """List available monthly report files for this pedestal (newest first)."""
     return svc.list_reports(pedestal_id)
@@ -76,7 +76,7 @@ def download_usage_report(
     pedestal_id: int,
     month: str,
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_any_role),
 ):
     """Download the plain-text monthly report. Lazily generated if missing."""
     year, mon = _parse_month(month)
@@ -100,7 +100,7 @@ def download_usage_report(
 def delete_usage_report(
     pedestal_id: int,
     month: str,
-    user: User = Depends(require_admin),
+    user: User = Depends(require_control),
 ):
     """Delete a monthly report file. ADMIN ONLY — the system never deletes
     these; this is the sole removal path, so it is audited."""

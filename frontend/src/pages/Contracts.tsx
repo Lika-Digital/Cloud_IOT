@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react'
-import { useAuthStore } from '../store/authStore'
+import { useAuthStore, canControl } from '../store/authStore'
 import {
   getTemplates, createTemplate, updateTemplate, getAdminContracts,
   type ContractTemplate, type CustomerContract,
 } from '../api/contracts'
 
 export default function Contracts() {
+  // Monitor views templates/contracts read-only; control roles can create/toggle.
+  const readOnly = !canControl(useAuthStore((s) => s.role))
   const [templates, setTemplates] = useState<ContractTemplate[]>([])
   const [contracts, setContracts] = useState<CustomerContract[]>([])
   const [showForm, setShowForm] = useState(false)
@@ -109,12 +111,14 @@ export default function Contracts() {
       <div className="card space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="font-semibold text-gray-200">Contract Templates</h2>
-          <button
-            className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors"
-            onClick={() => setShowForm((v) => !v)}
-          >
-            {showForm ? 'Cancel' : '+ New Template'}
-          </button>
+          {!readOnly && (
+            <button
+              className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors"
+              onClick={() => setShowForm((v) => !v)}
+            >
+              {showForm ? 'Cancel' : '+ New Template'}
+            </button>
+          )}
         </div>
 
         {showForm && (
@@ -186,16 +190,24 @@ export default function Contracts() {
                     Created {new Date(tpl.created_at).toLocaleDateString()}
                   </div>
                 </div>
-                <button
-                  className={`px-3 py-1 text-xs rounded-full font-medium transition-colors ${
-                    tpl.active
-                      ? 'bg-green-900/50 text-green-400 hover:bg-red-900/50 hover:text-red-400'
-                      : 'bg-red-900/50 text-red-400 hover:bg-green-900/50 hover:text-green-400'
-                  }`}
-                  onClick={() => toggleActive(tpl)}
-                >
-                  {tpl.active ? 'Active' : 'Inactive'}
-                </button>
+                {readOnly ? (
+                  <span className={`px-3 py-1 text-xs rounded-full font-medium ${
+                    tpl.active ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'
+                  }`}>
+                    {tpl.active ? 'Active' : 'Inactive'}
+                  </span>
+                ) : (
+                  <button
+                    className={`px-3 py-1 text-xs rounded-full font-medium transition-colors ${
+                      tpl.active
+                        ? 'bg-green-900/50 text-green-400 hover:bg-red-900/50 hover:text-red-400'
+                        : 'bg-red-900/50 text-red-400 hover:bg-green-900/50 hover:text-green-400'
+                    }`}
+                    onClick={() => toggleActive(tpl)}
+                  >
+                    {tpl.active ? 'Active' : 'Inactive'}
+                  </button>
+                )}
               </div>
             ))}
           </div>

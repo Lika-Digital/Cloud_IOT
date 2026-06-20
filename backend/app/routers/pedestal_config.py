@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db, SessionLocal
-from ..auth.dependencies import require_admin
+from ..auth.dependencies import require_admin, require_any_role, require_control
 from ..auth.user_database import UserSessionLocal
 from ..models.pedestal_config import PedestalConfig, PedestalSensor
 from ..models.pedestal import Pedestal
@@ -336,7 +336,7 @@ def set_smart_mode(
     cabinet_id: str,
     body: SmartModeBody,
     db: Session = Depends(get_db),
-    _user = Depends(require_admin),
+    _user = Depends(require_control),
 ):
     """v3.28 — enable/disable firmware SmartMode for a cabinet.
 
@@ -388,7 +388,7 @@ def set_smart_mode(
 @router.get("/api/pedestals/health")
 def get_health(
     db: Session = Depends(get_db),
-    _user = Depends(require_admin),
+    _user = Depends(require_any_role),
 ):
     """Returns hardware health status for all pedestals (admin only).
 
@@ -502,7 +502,7 @@ def update_socket_config(
     socket_id: int,
     body: SocketConfigUpdate,
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin),
+    _: None = Depends(require_control),
 ):
     """Update the auto-activate flag for a single socket. Admin only.
 
@@ -569,7 +569,7 @@ def update_valve_config(
     valve_id: int,
     body: ValveConfigUpdate,
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin),
+    _: None = Depends(require_control),
 ):
     """Update the auto-activate flag for a single valve. Admin only.
 
@@ -714,7 +714,7 @@ def upsert_led_schedule(
     pedestal_id: int,
     body: LedScheduleBody,
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin),
+    _: None = Depends(require_control),
 ):
     """Create or update the LED schedule for the pedestal. Admin only."""
     if not db.get(Pedestal, pedestal_id):
@@ -760,7 +760,7 @@ def upsert_led_schedule(
 def delete_led_schedule(
     pedestal_id: int,
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin),
+    _: None = Depends(require_control),
 ):
     """Remove the LED schedule for the pedestal. Admin only.
     The pedestal's LED is no longer automatically controlled."""
@@ -787,7 +787,7 @@ def delete_led_schedule(
 async def test_led_schedule(
     pedestal_id: int,
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin),
+    _: None = Depends(require_control),
 ):
     """Immediately fire an LED on command using the configured color so the
     operator can verify the wiring. Admin only. Returns 404 when no schedule

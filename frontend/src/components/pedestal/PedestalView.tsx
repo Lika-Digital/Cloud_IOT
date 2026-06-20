@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useStore } from '../../store'
-import { useAuthStore } from '../../store/authStore'
+import { useAuthStore, canControl } from '../../store/authStore'
 import { getSocketBreakerStatus } from '../../api/breakers'
 import pedestalImg from '../../assets/pedestal.jpg'
 import CameraModal from './CameraModal'
@@ -350,7 +350,8 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
   // reject) lives in the Control Center; clicking a socket only surfaces its
   // state, live readings, session counter, and the pedestal's Smart Mode.
   const { pendingSessions, activeSessions, socketLiveData, pendingSockets, optaWaterStates, socketComputedStates, socketBreakerStates, socketLoadStates, socketHardwareConfig, optaStatusInfo, pedestalHealth } = useStore()
-  const isAdmin = useAuthStore((s) => s.role) === 'admin'
+  // Controls the usage-report delete action — a control action, not admin-only.
+  const isAdmin = canControl(useAuthStore((s) => s.role))
   const [histOpen, setHistOpen] = useState(false)
   const [alarmsOpen, setAlarmsOpen] = useState(false)
 

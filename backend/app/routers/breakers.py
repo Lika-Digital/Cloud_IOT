@@ -17,7 +17,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session as DBSession
 
-from ..auth.dependencies import require_admin, require_any_role
+from ..auth.dependencies import require_control, require_any_role
 from ..auth.models import User
 from ..database import get_db
 from ..models.breaker_event import BreakerEvent
@@ -165,7 +165,7 @@ async def reset_breaker(
     pedestal_id: int,
     socket_id: int,
     db: DBSession = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_control),
 ):
     """Operator-triggered remote reset. Returns 409 when state != tripped."""
     result = perform_breaker_reset(db, pedestal_id, socket_id, initiated_by=user.email)

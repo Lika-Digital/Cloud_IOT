@@ -204,8 +204,8 @@ def create_user(
 ):
     if db.query(User).filter(User.email == body.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
-    if body.role not in ("admin", "monitor"):
-        raise HTTPException(status_code=400, detail="Role must be 'admin' or 'monitor'")
+    if body.role not in ("admin", "monitor_control", "monitor"):
+        raise HTTPException(status_code=400, detail="Role must be 'admin', 'monitor_control' or 'monitor'")
     user = User(
         email=body.email,
         password_hash=hash_password(body.password),

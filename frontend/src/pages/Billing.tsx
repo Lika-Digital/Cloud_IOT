@@ -3,8 +3,11 @@ import {
   getBillingConfig, setBillingConfig, getSpendingOverview, getSpendingDetail,
   type BillingConfig, type SpendingRow, type SessionDetailRow,
 } from '../api/billing'
+import { useAuthStore, canControl } from '../store/authStore'
 
 export default function Billing() {
+  // Monitor sees billing read-only; Admin + Monitor & Control may change prices.
+  const readOnly = !canControl(useAuthStore((s) => s.role))
   const [config, setConfig] = useState<BillingConfig | null>(null)
   const [kwh, setKwh] = useState('')
   const [liter, setLiter] = useState('')
@@ -67,9 +70,10 @@ export default function Billing() {
           <input
             type="number"
             step="0.01"
-            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-sm focus:outline-none focus:border-blue-500"
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-sm focus:outline-none focus:border-blue-500 disabled:opacity-60"
             value={kwh}
             onChange={(e) => setKwh(e.target.value)}
+            disabled={readOnly}
           />
         </div>
         <div>
@@ -77,18 +81,23 @@ export default function Billing() {
           <input
             type="number"
             step="0.001"
-            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-sm focus:outline-none focus:border-blue-500"
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-sm focus:outline-none focus:border-blue-500 disabled:opacity-60"
             value={liter}
             onChange={(e) => setLiter(e.target.value)}
+            disabled={readOnly}
           />
         </div>
-        <button
-          className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
-          onClick={handleSave}
-          disabled={saving}
-        >
-          {saved ? 'Saved!' : saving ? 'Saving…' : 'Save Prices'}
-        </button>
+        {readOnly ? (
+          <p className="text-xs text-gray-500">Read-only — prices are managed by Admin or Monitor &amp; Control.</p>
+        ) : (
+          <button
+            className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            onClick={handleSave}
+            disabled={saving}
+          >
+            {saved ? 'Saved!' : saving ? 'Saving…' : 'Save Prices'}
+          </button>
+        )}
         {saveError && (
           <p className="text-sm text-red-400 bg-red-900/20 border border-red-700/30 rounded-lg px-3 py-2">{saveError}</p>
         )}

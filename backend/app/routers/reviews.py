@@ -8,7 +8,7 @@ from ..auth.user_database import get_user_db
 from ..auth.customer_models import Customer
 from ..auth.contract_models import ServiceReview
 from ..auth.customer_dependencies import require_customer
-from ..auth.dependencies import require_admin
+from ..auth.dependencies import require_any_role
 from ..auth.models import User
 
 router = APIRouter(tags=["reviews"])
@@ -73,7 +73,7 @@ def get_my_reviews(
 @router.get("/api/admin/reviews/", response_model=list[AdminReviewResponse])
 def get_all_reviews(
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_any_role),
 ):
     rows = (
         user_db.query(ServiceReview, Customer)

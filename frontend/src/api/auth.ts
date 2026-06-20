@@ -5,14 +5,14 @@ const api = axios.create({ baseURL: '/api/auth' })
 export interface TokenResponse {
   access_token: string
   token_type: string
-  role: 'admin' | 'monitor'
+  role: 'admin' | 'monitor_control' | 'monitor'
   email: string
 }
 
 export interface UserResponse {
   id: number
   email: string
-  role: 'admin' | 'monitor'
+  role: 'admin' | 'monitor_control' | 'monitor'
   is_active: boolean
   created_at: string
 }
@@ -20,7 +20,7 @@ export interface UserResponse {
 export interface UserCreate {
   email: string
   password: string
-  role: 'admin' | 'monitor'
+  role: 'admin' | 'monitor_control' | 'monitor'
 }
 
 import { useAuthStore } from '../store/authStore'
@@ -99,7 +99,7 @@ export const authListUsers = () =>
 export const authCreateUser = (data: UserCreate) =>
   api.post<UserResponse>('/users', data).then((r) => r.data)
 
-export const authPatchUser = (id: number, data: { role?: 'admin' | 'monitor'; is_active?: boolean }) =>
+export const authPatchUser = (id: number, data: { role?: 'admin' | 'monitor_control' | 'monitor'; is_active?: boolean }) =>
   api.patch<UserResponse>(`/users/${id}`, data).then((r) => r.data)
 
 export const authDeleteUser = (id: number) =>

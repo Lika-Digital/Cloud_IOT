@@ -83,6 +83,30 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-06-20 — Third operator role: Monitor & Control (v3.34)
+
+Adds a middle operator tier between Admin and Monitor.
+
+- **`monitor_control` ("Monitor & Control")** — may monitor AND control/configure
+  every section **except** the three admin-only ones (System Health, Settings, API
+  Gateway), which stay Admin-only and hidden for everyone else.
+- **`monitor`** is now a true read-only role across **all** non-admin sections
+  (previously it only saw Dashboard/Analytics/History). It can view Billing,
+  Customers, Contracts and Berths but cannot change anything.
+- **Backend**: new `require_control` dependency (admin OR monitor_control) gates the
+  write/control endpoints in the non-admin sections (session controls, breaker reset,
+  smart-mode/auto-activate/threshold config, LED, NFC/QR, billing config, contracts,
+  berth config, usage-report delete). Their GET endpoints were relaxed to
+  `require_any_role` so Monitor can read. The three admin sections (plus user
+  management and device setup, which lives under Settings) keep `require_admin`.
+- **Frontend**: role type gains `monitor_control`; the sidebar shows Billing/
+  Customers/Contracts/Berths to all operators and keeps the three admin items
+  Admin-only; the Control Center and section write-affordances key off a
+  `canControl` flag so Monitor sees everything read-only; Settings → Operator
+  Accounts gets a three-way role selector.
+- 16 role-gating tests (`test_roles.py`) — admin/monitor_control allowed on writes,
+  monitor 403 on writes, all three readable, all-but-admin 403 on the three sections.
+
 ### 2026-06-20 — TOTP-only 2FA + first-login wizard + mobile-responsive UI (v3.33)
 
 Two clean-ups requested after the v3.32 field review: drop email OTP (the NUC is
@@ -1147,7 +1171,11 @@ and fixes the `opta/breakers` ingestion contract. Three independent changes:
 - Session history with energy (kWh) and water (litres) totals
 
 ### Authentication
-- Admin and Monitor roles (Monitor = read-only, no controls)
+- Three operator roles (v3.34):
+  - **Admin** — full access, including System Health, Settings and API Gateway.
+  - **Monitor & Control** (`monitor_control`) — monitor + control/configure every
+    section except those three admin-only sections.
+  - **Monitor** — read-only across all non-admin sections; no controls.
 - Mandatory two-factor login (v3.33): POST /login → partial token → TOTP (enrol on
   first login, else enter the authenticator code) → JWT (2h). **Email OTP removed** —
   the authenticator app is the only second factor. First login also forces a

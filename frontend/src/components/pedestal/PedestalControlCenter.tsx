@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../../store'
-import { useAuthStore } from '../../store/authStore'
+import { useAuthStore, canControl } from '../../store/authStore'
 import {
   directSocketCmd,
   directWaterCmd,
@@ -919,7 +919,10 @@ function CmdButton({
 
 export default function PedestalControlCenter({ pedestalId }: { pedestalId: number }) {
   const { role } = useAuthStore()
-  const isAdmin = role === 'admin'
+  // v3.34 — the Control Center is fully available to Monitor & Control as well as
+  // Admin. Every control gate below keys off this flag (it means "may control",
+  // not "is admin"); plain Monitor sees the panel read-only.
+  const isAdmin = canControl(role)
 
   const {
     optaSocketStates,

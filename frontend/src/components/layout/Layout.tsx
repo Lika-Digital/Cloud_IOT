@@ -20,25 +20,27 @@ export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   useEffect(() => { setSidebarOpen(false) }, [location.pathname])
 
+  // Customers is visible to every operator now, so poll the unread badge for all.
   useEffect(() => {
-    if (!isAdmin) return
     getUnreadCount().then((r) => setUnreadChatCount(r.unread_customers)).catch(() => {})
     const interval = setInterval(() => {
       getUnreadCount().then((r) => setUnreadChatCount(r.unread_customers)).catch(() => {})
     }, 30_000)
     return () => clearInterval(interval)
-  }, [isAdmin])
+  }, [])
 
   type NavItem = { to: string; label: string; icon: string; badge: number; hwAlarm?: 'none' | 'warning' | 'critical' | 'auto_stop' }
+  // v3.34 — Dashboard/Analytics/History + Billing/Customers/Contracts/Berths are
+  // shared by all operators; only the three admin sections are gated by isAdmin.
   const NAV_ITEMS: NavItem[] = [
     { to: '/dashboard', label: 'Dashboard', icon: '⚡', badge: 0 },
     { to: '/analytics', label: 'Analytics', icon: '📊', badge: 0 },
     { to: '/history', label: 'History', icon: '📋', badge: 0 },
+    { to: '/billing', label: 'Billing', icon: '💰', badge: 0 },
+    { to: '/users', label: 'Customers', icon: '👥', badge: unreadChatCount },
+    { to: '/contracts', label: 'Contracts', icon: '📝', badge: 0 },
+    { to: '/berths', label: 'Berth Occupancy', icon: '⚓', badge: 0 },
     ...(isAdmin ? [
-      { to: '/billing', label: 'Billing', icon: '💰', badge: 0 },
-      { to: '/users', label: 'Customers', icon: '👥', badge: unreadChatCount },
-      { to: '/contracts', label: 'Contracts', icon: '📝', badge: 0 },
-      { to: '/berths', label: 'Berth Occupancy', icon: '⚓', badge: 0 },
       { to: '/system-health', label: 'System Health', icon: '🔧', badge: newErrorCount, hwAlarm: hwAlarmLevel },
       { to: '/api-gateway', label: 'API Gateway', icon: '🔌', badge: 0 },
       { to: '/settings', label: 'Settings', icon: '⚙️', badge: 0 },

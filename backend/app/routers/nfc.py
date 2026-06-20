@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from ..database import get_db
 from ..auth.user_database import get_user_db
-from ..auth.dependencies import require_admin
+from ..auth.dependencies import require_any_role, require_control
 from ..auth.erp_api_key import require_erp_api_key
 from ..auth.models import User
 from ..models.session import Session
@@ -86,7 +86,7 @@ class NfcModeBody(BaseModel):
 
 @router.get("/mode/{cabinet_id}")
 def get_provisioning_mode(cabinet_id: str, db: DBSession = Depends(get_db),
-                          _: User = Depends(require_admin)):
+                          _: User = Depends(require_any_role)):
     cfg = _resolve_pedestal(db, cabinet_id)
     if cfg is None:
         raise HTTPException(status_code=404, detail="Pedestal not found")
@@ -96,7 +96,7 @@ def get_provisioning_mode(cabinet_id: str, db: DBSession = Depends(get_db),
 @router.patch("/mode/{cabinet_id}")
 def set_provisioning_mode(cabinet_id: str, body: NfcModeBody,
                           db: DBSession = Depends(get_db),
-                          _: User = Depends(require_admin)):
+                          _: User = Depends(require_control)):
     """Switch the cabinet's provisioning mode. Switching to NFC disables
     auto_activate on ALL the cabinet's sockets (explicit activation required);
     switching back to QR restores auto_activate=True on all of them."""
@@ -140,7 +140,7 @@ def _tag_out(tag) -> dict:
 
 @router.get("/tags/{cabinet_id}")
 def list_nfc_tags(cabinet_id: str, db: DBSession = Depends(get_db),
-                  _: User = Depends(require_admin)):
+                  _: User = Depends(require_any_role)):
     """Active NFC tag mappings for a cabinet (summary of the configuration)."""
     return [_tag_out(t) for t in nfc_service.list_tags(db, cabinet_id)]
 
@@ -161,7 +161,7 @@ def _provision_one(db, cabinet_id: str, socket_id: str, nfc_tag_id: str, by: str
 
 @router.post("/tags")
 def provision_nfc_tag(body: NfcProvisionBody, db: DBSession = Depends(get_db),
-                      admin: User = Depends(require_admin)):
+                      admin: User = Depends(require_control)):
     """Provision (or replace) the NFC tag for one socket."""
     tag = _provision_one(db, body.cabinet_id, body.socket_id, body.nfc_tag_id, admin.email)
     return _tag_out(tag)
@@ -169,7 +169,7 @@ def provision_nfc_tag(body: NfcProvisionBody, db: DBSession = Depends(get_db),
 
 @router.post("/tags/bulk")
 def provision_nfc_tags_bulk(body: NfcBulkBody, db: DBSession = Depends(get_db),
-                            admin: User = Depends(require_admin)):
+                            admin: User = Depends(require_control)):
     """Save All — provision multiple sockets at once. Validated per item; a
     duplicate/invalid item aborts the whole batch (nothing committed past the
     failing item is left half-applied because each provision commits, so we
@@ -193,7 +193,7 @@ def provision_nfc_tags_bulk(body: NfcBulkBody, db: DBSession = Depends(get_db),
 
 @router.delete("/tags/{cabinet_id}/{socket_id}")
 def remove_nfc_tag(cabinet_id: str, socket_id: str, db: DBSession = Depends(get_db),
-                   _: User = Depends(require_admin)):
+                   _: User = Depends(require_control)):
     """Clear the NFC tag mapping for a socket (is_active=False)."""
     if socket_id not in _VALID_SOCKETS:
         raise HTTPException(status_code=400, detail="socket_id must be one of Q1..Q4")

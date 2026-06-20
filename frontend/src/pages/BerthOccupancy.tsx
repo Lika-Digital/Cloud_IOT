@@ -7,7 +7,7 @@ import {
   type BerthOut, type CalendarEntry, type StorageStatus,
 } from '../api/berths'
 import { getPedestals } from '../api'
-import { useAuthStore } from '../store/authStore'
+import { useAuthStore, canControl } from '../store/authStore'
 import type { Pedestal } from '../store'
 import SectorConfigModal from '../components/berths/SectorConfigModal'
 
@@ -25,6 +25,8 @@ const STATUS_LABEL: Record<string, string> = {
 
 export default function BerthOccupancy() {
   const { berthOccupancy, setBerthOccupancy, activeSessions } = useStore()
+  // Monitor sees occupancy read-only; control roles get the write actions.
+  const readOnly = !canControl(useAuthStore((s) => s.role))
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
 
@@ -302,12 +304,14 @@ export default function BerthOccupancy() {
                     🚨 {berthOccupancy.filter((b) => b.alarm).length} alarm(s) active
                   </span>
                 )}
-                <button
-                  onClick={() => setShowAddSector(true)}
-                  className="text-xs px-3 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-600 text-white font-medium"
-                >
-                  + Add Sector
-                </button>
+                {!readOnly && (
+                  <button
+                    onClick={() => setShowAddSector(true)}
+                    className="text-xs px-3 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-600 text-white font-medium"
+                  >
+                    + Add Sector
+                  </button>
+                )}
                 <button
                   onClick={() => refresh()}
                   className="text-xs px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-white font-medium"
@@ -400,6 +404,8 @@ export default function BerthOccupancy() {
                             </button>
                           )}
 
+                          {/* Write actions — hidden for read-only Monitor */}
+                          {!readOnly && (<>
                           {/* On-demand analyze */}
                           <button
                             onClick={() => handleAnalyze(b as BerthOut)}
@@ -459,6 +465,7 @@ export default function BerthOccupancy() {
                           >
                             {matchingId === b.id ? '⏳' : '🔍 Match'}
                           </button>
+                          </>)}
                         </div>
 
                         {/* Match result display */}

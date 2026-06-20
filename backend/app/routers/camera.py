@@ -4,7 +4,7 @@ from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session as DBSession
 
 from ..database import get_db
-from ..auth.dependencies import require_admin
+from ..auth.dependencies import require_any_role
 
 router = APIRouter(prefix="/api/camera", tags=["camera"])
 
@@ -21,7 +21,7 @@ def _get_pedestal_cfg(db: DBSession, pedestal_id: int):
 async def camera_snapshot(
     pedestal_id: int,
     db: DBSession = Depends(get_db),
-    _admin=Depends(require_admin),
+    _=Depends(require_any_role),   # camera view is read-only; all operators may see it
 ):
     """
     Grab a single JPEG frame from the pedestal's configured RTSP stream.

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session as DBSession
 from ..auth.user_database import get_user_db
 from ..auth.customer_models import Customer, ChatMessage
 from ..auth.customer_dependencies import require_customer
-from ..auth.dependencies import require_admin
+from ..auth.dependencies import require_any_role, require_control
 from ..auth.models import User
 from ..services.websocket_manager import ws_manager
 from ..schemas.customer import ChatMessageResponse, SendMessageRequest, OperatorReplyRequest
@@ -67,7 +67,7 @@ async def operator_reply(
     customer_id: int,
     body: OperatorReplyRequest,
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_control),
 ):
     customer = user_db.get(Customer, customer_id)
     if not customer:
@@ -101,7 +101,7 @@ def get_messages(
     limit: int = Query(200, ge=1, le=500),
     offset: int = Query(0, ge=0),
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_any_role),
 ):
     return (
         user_db.query(ChatMessage)
@@ -117,7 +117,7 @@ def get_messages(
 def mark_read(
     customer_id: int,
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_control),
 ):
     now = datetime.utcnow()
     msgs = (
@@ -138,7 +138,7 @@ def mark_read(
 @router.get("/unread-count")
 def unread_count(
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_any_role),
 ):
     from sqlalchemy import func, distinct
     count = (

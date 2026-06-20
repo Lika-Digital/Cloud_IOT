@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DBSession
 
-from ..auth.dependencies import require_admin, require_any_role
+from ..auth.dependencies import require_control, require_any_role
 from ..auth.models import User
 from ..database import get_db
 from ..models.meter_load_alarm import MeterLoadAlarm
@@ -164,7 +164,7 @@ def patch_thresholds(
     socket_id: int,
     body: ThresholdsBody,
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_control),
 ):
     """Operator-set warning/critical thresholds. Admin only.
 
@@ -238,7 +238,7 @@ def acknowledge_alarm(
     pedestal_id: int,
     alarm_id: int,
     db: DBSession = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_control),
 ):
     """Flip `acknowledged=True`. Alarm stays open and visible (dimmed); badge
     no longer counts it. Admin only."""
@@ -261,7 +261,7 @@ def resolve_alarm(
     pedestal_id: int,
     alarm_id: int,
     db: DBSession = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_control),
 ):
     """Manual close. Sets `resolved_at = utcnow()`, `resolved_by = admin email`.
     Distinct from auto-resolve (which uses `resolved_by="auto-resolve"`). Admin only."""
@@ -350,7 +350,7 @@ async def acknowledge_auto_stop(
     pedestal_id: int,
     socket_id: int,
     db: DBSession = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_control),
 ):
     """v3.12 — operator acknowledges a 90% auto-stop alarm.
 

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { getChatMessages, sendOperatorReply, markChatRead, type ChatMessage } from '../../api/billing'
 import { useStore } from '../../store'
+import { useAuthStore, canControl } from '../../store/authStore'
 
 interface ChatPanelProps {
   customerId: number
@@ -16,6 +17,8 @@ export default function ChatPanel({ customerId, customerName, customerEmail, onC
   const [loadError, setLoadError] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const { lastChatMessage } = useStore()
+  // Monitor can read the conversation but not reply.
+  const readOnly = !canControl(useAuthStore((s) => s.role))
 
   const loadMessages = () => {
     setLoadError(false)
@@ -122,22 +125,28 @@ export default function ChatPanel({ customerId, customerName, customerEmail, onC
         </div>
 
         {/* Input */}
-        <div className="p-4 border-t border-gray-700 flex gap-2">
-          <input
-            className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-sm focus:outline-none focus:border-blue-500"
-            placeholder="Type a reply…"
-            value={reply}
-            onChange={(e) => setReply(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
-          />
-          <button
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
-            onClick={handleSend}
-            disabled={sending || !reply.trim()}
-          >
-            Send
-          </button>
-        </div>
+        {readOnly ? (
+          <div className="p-4 border-t border-gray-700 text-center text-xs text-gray-500">
+            Read-only — replying requires Admin or Monitor &amp; Control.
+          </div>
+        ) : (
+          <div className="p-4 border-t border-gray-700 flex gap-2">
+            <input
+              className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 text-sm focus:outline-none focus:border-blue-500"
+              placeholder="Type a reply…"
+              value={reply}
+              onChange={(e) => setReply(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
+            />
+            <button
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
+              onClick={handleSend}
+              disabled={sending || !reply.trim()}
+            >
+              Send
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )

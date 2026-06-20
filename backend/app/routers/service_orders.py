@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session as DBSession
 from ..auth.user_database import get_user_db
 from ..auth.contract_models import ServiceOrder
 from ..auth.customer_models import Customer
-from ..auth.dependencies import require_admin
+from ..auth.dependencies import require_any_role
 from ..auth.customer_dependencies import require_customer
 from ..auth.models import User
 
@@ -88,7 +88,7 @@ def my_service_orders(
 @router.get("/api/admin/service-orders/", response_model=list[AdminServiceOrderResponse])
 def admin_list_service_orders(
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_any_role),
 ):
     orders = (
         user_db.query(ServiceOrder)

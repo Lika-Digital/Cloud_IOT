@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session as DBSession
 from ..auth.user_database import get_user_db
 from ..auth.berth_models import Berth, BerthReservation
 from ..auth.customer_models import Customer
-from ..auth.dependencies import require_admin
+from ..auth.dependencies import require_admin, require_any_role, require_control
 from ..auth.customer_dependencies import require_customer
 from ..database import get_db
 
@@ -361,7 +361,7 @@ def cancel_reservation(
 def get_berth_calendar(
     berth_id: int,
     user_db: DBSession = Depends(get_user_db),
-    _admin=Depends(require_admin),
+    _admin=Depends(require_any_role),
 ):
     rows = (
         user_db.query(BerthReservation)
@@ -386,7 +386,7 @@ async def trigger_analysis(
     berth_id: int,
     user_db: DBSession = Depends(get_user_db),
     db: DBSession = Depends(get_db),
-    _admin=Depends(require_admin),
+    _admin=Depends(require_control),
 ):
     """
     On-demand berth analysis:
@@ -568,7 +568,7 @@ async def match_ship(
     berth_id: int,
     user_db: DBSession = Depends(get_user_db),
     db: DBSession = Depends(get_db),
-    _admin=Depends(require_admin),
+    _admin=Depends(require_control),
 ):
     """
     Compare the current camera frame against the stored Re-ID embedding for this berth.
@@ -677,7 +677,7 @@ async def upload_sample_embedding(
     berth_id: int,
     file: UploadFile = File(...),
     user_db: DBSession = Depends(get_user_db),
-    _admin=Depends(require_admin),
+    _admin=Depends(require_control),
 ):
     """
     Upload a sample image and extract + save its Re-ID embedding for this berth.
@@ -729,7 +729,7 @@ def update_berth_config(
     berth_id: int,
     body: BerthConfigUpdate,
     user_db: DBSession = Depends(get_user_db),
-    _admin=Depends(require_admin),
+    _admin=Depends(require_control),
 ):
     """Update berth name, pedestal assignment, and berth type (transit/yearly)."""
     berth = user_db.get(Berth, berth_id)
@@ -763,7 +763,7 @@ def update_berth_config(
 def create_berth(
     body: BerthConfigUpdate,
     user_db: DBSession = Depends(get_user_db),
-    _admin=Depends(require_admin),
+    _admin=Depends(require_control),
 ):
     """Create a new berth."""
     berth = Berth(
@@ -784,7 +784,7 @@ def create_berth(
 def delete_berth(
     berth_id: int,
     user_db: DBSession = Depends(get_user_db),
-    _admin=Depends(require_admin),
+    _admin=Depends(require_control),
 ):
     """Delete a berth and its reservations."""
     berth = user_db.get(Berth, berth_id)
@@ -801,7 +801,7 @@ def set_berth_status(
     berth_id: int,
     body: BerthStatusUpdate,
     user_db: DBSession = Depends(get_user_db),
-    _admin=Depends(require_admin),
+    _admin=Depends(require_control),
 ):
     valid = {"free", "occupied", "reserved"}
     if body.status not in valid:
@@ -820,7 +820,7 @@ def set_berth_status(
 def get_reference_images(
     berth_id: int,
     user_db: DBSession = Depends(get_user_db),
-    _admin=Depends(require_admin),
+    _admin=Depends(require_any_role),
 ):
     from ..services.berth_analyzer import list_reference_images
     berth = user_db.get(Berth, berth_id)
@@ -834,7 +834,7 @@ async def upload_reference_images(
     berth_id: int,
     files: List[UploadFile] = File(...),
     user_db: DBSession = Depends(get_user_db),
-    _admin=Depends(require_admin),
+    _admin=Depends(require_control),
 ):
     from ..services.berth_analyzer import save_reference_image
     berth = user_db.get(Berth, berth_id)
@@ -859,7 +859,7 @@ def delete_reference_image_endpoint(
     berth_id: int,
     filename: str,
     user_db: DBSession = Depends(get_user_db),
-    _admin=Depends(require_admin),
+    _admin=Depends(require_control),
 ):
     from ..services.berth_analyzer import delete_reference_image
     berth = user_db.get(Berth, berth_id)
@@ -876,7 +876,7 @@ def delete_reference_image_endpoint(
 @router.get("/api/admin/pedestals/{pedestal_id}/latest-frame")
 async def get_latest_frame_endpoint(
     pedestal_id: int,
-    _admin=Depends(require_admin),
+    _admin=Depends(require_any_role),
 ):
     """Return the most recent buffered camera frame for a pedestal as base64 JPEG."""
     import base64
@@ -894,7 +894,7 @@ def confirm_crop_endpoint(
     berth_id: int,
     body: ConfirmCropIn,
     user_db: DBSession = Depends(get_user_db),
-    _admin=Depends(require_admin),
+    _admin=Depends(require_control),
 ):
     """
     Move a saved crop to confirmed/ or rejected/ subfolder for training data quality.

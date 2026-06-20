@@ -19,7 +19,7 @@ class TokenResponse(BaseModel):
 class UserCreate(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
-    role: str = Field("monitor", pattern=r"^(admin|monitor)$")
+    role: str = Field("monitor", pattern=r"^(admin|monitor_control|monitor)$")
 
 
 class UserResponse(BaseModel):
@@ -44,7 +44,7 @@ class RegisterRequest(BaseModel):
 
 
 class UserPatch(BaseModel):
-    role: Optional[str] = Field(None, pattern=r"^(admin|monitor)$")
+    role: Optional[str] = Field(None, pattern=r"^(admin|monitor_control|monitor)$")
     is_active: Optional[bool] = None
 
 

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session as DBSession
 from ..auth.user_database import get_user_db
 from ..database import get_db
 from ..auth.customer_models import BillingConfig, Invoice, Customer
-from ..auth.dependencies import require_admin
+from ..auth.dependencies import require_any_role, require_control
 from ..auth.models import User
 from ..models.session import Session
 from ..schemas.customer import (
@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api/billing", tags=["billing"])
 @router.get("/config", response_model=BillingConfigResponse)
 def get_billing_config(
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_any_role),
 ):
     config = user_db.get(BillingConfig, 1)
     if not config:
@@ -31,7 +31,7 @@ def get_billing_config(
 def update_billing_config(
     body: BillingConfigUpdate,
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_control),
 ):
     config = user_db.get(BillingConfig, 1)
     if not config:
@@ -49,7 +49,7 @@ def update_billing_config(
 @router.get("/spending", response_model=list[CustomerSpendingRow])
 def get_spending_overview(
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_any_role),
 ):
     invoices = user_db.query(Invoice).filter(Invoice.customer_id.isnot(None)).all()
     # Aggregate per customer
@@ -83,7 +83,7 @@ def get_spending_overview(
 def get_spending_detail(
     user_db: DBSession = Depends(get_user_db),
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_any_role),
 ):
     invoices = user_db.query(Invoice).filter(Invoice.customer_id.isnot(None)).all()
     rows = []
@@ -110,7 +110,7 @@ def get_spending_detail(
 def get_customers(
     user_db: DBSession = Depends(get_user_db),
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_any_role),
 ):
     customers = user_db.query(Customer).order_by(Customer.created_at.desc()).all()
     rows = []

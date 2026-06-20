@@ -17,7 +17,7 @@ from ..services.mqtt_client import mqtt_service
 from ..services.websocket_manager import ws_manager
 from ..services.invoice_service import create_invoice_for_session
 from ..services.audit_service import log_transition
-from ..auth.dependencies import require_admin, require_any_role
+from ..auth.dependencies import require_control, require_any_role
 from ..auth.models import User
 
 logger = logging.getLogger(__name__)
@@ -195,7 +195,7 @@ async def allow_session(
     session_id: int,
     db: DBSession = Depends(get_db),
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_control),
 ):
     session = _get_session_or_404(session_id, db)
     if session.status != "pending":
@@ -237,7 +237,7 @@ async def deny_session(
     body: DenyBody = DenyBody(),
     db: DBSession = Depends(get_db),
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_control),
 ):
     session = _get_session_or_404(session_id, db)
     if session.status != "pending":
@@ -279,7 +279,7 @@ async def stop_session(
     session_id: int,
     db: DBSession = Depends(get_db),
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_control),
 ):
     session = _get_session_or_404(session_id, db)
     if session.status != "active":
@@ -372,7 +372,7 @@ async def approve_socket(
     socket_id: int,
     db: DBSession = Depends(get_db),
     user_db: DBSession = Depends(get_user_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_control),
 ):
     """
     Operator approves a socket that is in pending state (MQTT connected event fired).
@@ -429,7 +429,7 @@ async def reject_socket(
     body: RejectSocketBody = RejectSocketBody(),
     db: DBSession = Depends(get_db),
     user_db: DBSession = Depends(get_user_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_control),
 ):
     """
     Operator rejects a socket in pending state.
@@ -461,7 +461,7 @@ async def reject_socket(
 async def reset_pedestal(
     pedestal_id: int,
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_control),
 ):
     """
     Send a reset command to the pedestal.
@@ -498,7 +498,7 @@ async def set_pedestal_led(
     pedestal_id: int,
     body: LedBody = LedBody(),
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_control),
 ):
     """
     Set the pedestal LED state via opta/cmd/led.
@@ -583,7 +583,7 @@ async def direct_socket_cmd(
     socket_name: str,
     body: DirectCmdBody,
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_control),
 ):
     """
     Send a direct action to a socket outlet (Q1–Q4) via opta/cmd/socket.
@@ -669,7 +669,7 @@ async def direct_water_cmd(
     valve_name: str,
     body: DirectCmdBody,
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_control),
 ):
     """
     Send a direct action to a water valve (V1–V2) via opta/cmd/water.

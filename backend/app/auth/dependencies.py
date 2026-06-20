@@ -9,7 +9,12 @@ from .tokens import decode_token
 bearer_scheme = HTTPBearer()
 
 # Operator roles (admin User records in users.db) — never "customer" or "external_api"
-_OPERATOR_ROLES = {"admin", "monitor"}
+# v3.34 — monitor_control is a middle tier: it can control/configure every section
+# EXCEPT the three admin-only sections (System Health, Settings, API Gateway).
+_OPERATOR_ROLES = {"admin", "monitor", "monitor_control"}
+
+# Roles allowed to act (control/configure) in the non-admin sections.
+_CONTROL_ROLES = {"admin", "monitor_control"}
 
 
 def _get_current_user(
@@ -42,12 +47,31 @@ def _get_current_user(
 
 
 def require_any_role(user: User = Depends(_get_current_user)) -> User:
-    """Any authenticated operator (admin or monitor)."""
+    """Any authenticated operator (admin, monitor_control, or monitor).
+
+    Use for READ endpoints in the non-admin sections — every operator may view
+    them. Monitor is read-only; writes must use require_control / require_admin.
+    """
+    return user
+
+
+def require_control(user: User = Depends(_get_current_user)) -> User:
+    """Admin or monitor_control — may control/configure the non-admin sections.
+
+    v3.34 — gates the write/control endpoints outside System Health, Settings and
+    API Gateway (e.g. session controls, breaker reset, smart-mode, thresholds,
+    LED, NFC/QR, billing config, contracts, berths). Monitor is rejected here.
+    """
+    if user.role not in _CONTROL_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Control access required (admin or monitor_control)",
+        )
     return user
 
 
 def require_admin(user: User = Depends(_get_current_user)) -> User:
-    """Admin role only."""
+    """Admin role only — System Health, Settings, API Gateway, user management."""
     if user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

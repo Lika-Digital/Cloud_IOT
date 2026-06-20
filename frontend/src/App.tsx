@@ -68,22 +68,11 @@ function AppInner() {
             </ProtectedRoute>
           }
         />
-        <Route
-          path="billing"
-          element={
-            <ProtectedRoute adminOnly>
-              <Billing />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="users"
-          element={
-            <ProtectedRoute adminOnly>
-              <Users />
-            </ProtectedRoute>
-          }
-        />
+        {/* v3.34 — Billing/Customers/Contracts/Berths are visible to all operators
+            (read-only for Monitor; control for Admin + Monitor & Control). Only the
+            three admin sections below keep adminOnly. */}
+        <Route path="billing" element={<Billing />} />
+        <Route path="users" element={<Users />} />
         <Route
           path="system-health"
           element={
@@ -92,22 +81,8 @@ function AppInner() {
             </ProtectedRoute>
           }
         />
-        <Route
-          path="contracts"
-          element={
-            <ProtectedRoute adminOnly>
-              <Contracts />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="berths"
-          element={
-            <ProtectedRoute adminOnly>
-              <BerthOccupancy />
-            </ProtectedRoute>
-          }
-        />
+        <Route path="contracts" element={<Contracts />} />
+        <Route path="berths" element={<BerthOccupancy />} />
         <Route
           path="api-gateway"
           element={

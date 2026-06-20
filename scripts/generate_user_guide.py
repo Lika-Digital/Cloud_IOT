@@ -92,10 +92,16 @@ def build() -> None:
     )
 
     add_heading(doc, "Roles", level=2)
-    add_bullet(doc, "Admin – full access to every menu, can change settings, "
-                    "approve/stop sessions, manage customers, set prices.")
-    add_bullet(doc, "Monitor – read-only view of Dashboard, Analytics and "
-                    "History. Cannot change anything. Cannot see admin-only menus.")
+    add_bullet(doc, "Admin – full access to every menu, including System Health, "
+                    "Settings and API Gateway. Can manage operator accounts.")
+    add_bullet(doc, "Monitor & Control – can monitor AND operate every section "
+                    "(approve/stop sessions, breaker reset, smart mode, prices, "
+                    "contracts, berths, etc.) EXCEPT the three admin-only sections "
+                    "(System Health, Settings, API Gateway), which are hidden.")
+    add_bullet(doc, "Monitor – read-only view of every section except those three "
+                    "admin-only ones. Sees Dashboard, Analytics, History, Billing, "
+                    "Customers, Contracts and Berths but cannot change anything; "
+                    "control buttons are hidden.")
 
     # ── Sign in ─────────────────────────────────────────────────────────────
     add_heading(doc, "2. Signing in", level=1)

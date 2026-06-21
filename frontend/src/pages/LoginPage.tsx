@@ -113,14 +113,14 @@ export default function LoginPage() {
   }
 
   const inputCls =
-    'w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500'
+    'w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-100 text-sm focus:outline-none focus:border-blue-500'
 
   return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <div className="text-4xl mb-3">⚡</div>
-          <h1 className="text-2xl font-bold text-white">IoT Dashboard</h1>
+          <h1 className="text-2xl font-bold text-gray-100">IoT Dashboard</h1>
           <p className="text-gray-500 text-sm mt-1">Smart Pedestal Management</p>
         </div>
 
@@ -128,7 +128,7 @@ export default function LoginPage() {
           {/* ── Step 1: credentials ── */}
           {step === 'credentials' && (
             <>
-              <h2 className="text-lg font-semibold text-white mb-4">Sign In</h2>
+              <h2 className="text-lg font-semibold text-gray-100 mb-4">Sign In</h2>
               <form onSubmit={handleCredentials} className="space-y-4">
                 <div>
                   <label className="block text-sm text-gray-400 mb-1">Email</label>
@@ -159,7 +159,7 @@ export default function LoginPage() {
           {/* ── Step 2 (optional): forced password change ── */}
           {step === 'password' && (
             <>
-              <h2 className="text-lg font-semibold text-white mb-1">Choose a new password</h2>
+              <h2 className="text-lg font-semibold text-gray-100 mb-1">Choose a new password</h2>
               <p className="text-sm text-gray-500 mb-4">
                 This account uses a temporary password. Set your own to continue.
               </p>
@@ -195,7 +195,7 @@ export default function LoginPage() {
           {/* ── Step 3a: TOTP enrolment (first login, no authenticator yet) ── */}
           {step === 'enroll' && (
             <>
-              <h2 className="text-lg font-semibold text-white mb-1">Set up your authenticator</h2>
+              <h2 className="text-lg font-semibold text-gray-100 mb-1">Set up your authenticator</h2>
               <p className="text-sm text-gray-500 mb-4">
                 Scan this QR code with Google Authenticator, 1Password, or any TOTP app,
                 then enter the 6-digit code to finish signing in.
@@ -212,7 +212,7 @@ export default function LoginPage() {
                 <input
                   type="text" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} required autoFocus
                   value={code} onChange={(e) => onCodeChange(e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-center tracking-[0.5em] text-xl font-mono focus:outline-none focus:border-blue-500"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-100 text-center tracking-[0.5em] text-xl font-mono focus:outline-none focus:border-blue-500"
                   placeholder="000000"
                 />
                 {error && (
@@ -231,7 +231,7 @@ export default function LoginPage() {
           {/* ── Step 3b: TOTP code (existing authenticator) ── */}
           {step === 'totp' && (
             <>
-              <h2 className="text-lg font-semibold text-white mb-1">Two-factor authentication</h2>
+              <h2 className="text-lg font-semibold text-gray-100 mb-1">Two-factor authentication</h2>
               <p className="text-sm text-gray-500 mb-4">
                 Enter the 6-digit code from your authenticator app.
               </p>
@@ -239,7 +239,7 @@ export default function LoginPage() {
                 <input
                   type="text" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} required autoFocus
                   value={code} onChange={(e) => onCodeChange(e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-center tracking-[0.5em] text-xl font-mono focus:outline-none focus:border-blue-500"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-100 text-center tracking-[0.5em] text-xl font-mono focus:outline-none focus:border-blue-500"
                   placeholder="000000"
                 />
                 {error && (

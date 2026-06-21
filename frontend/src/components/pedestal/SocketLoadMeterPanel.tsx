@@ -205,7 +205,7 @@ export default function SocketLoadMeterPanel({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-base">⚡</span>
-          <span className="text-sm font-medium text-white">Load — {socketName}</span>
+          <span className="text-sm font-medium text-gray-100">Load — {socketName}</span>
         </div>
         <span
           className={`text-[10px] font-medium px-2 py-0.5 rounded border ${STATUS_BADGE_CLASS[status]}`}
@@ -381,7 +381,7 @@ export default function SocketLoadMeterPanel({
                 max={99}
                 value={warnInput}
                 onChange={(e) => setWarnInput(Number(e.target.value))}
-                className="ml-1 w-14 bg-gray-900/60 border border-gray-700 rounded px-1.5 py-0.5 text-xs text-white font-mono"
+                className="ml-1 w-14 bg-gray-900/60 border border-gray-700 rounded px-1.5 py-0.5 text-xs text-gray-100 font-mono"
                 aria-label={`Warning threshold for ${socketName}`}
               />
               <span className="ml-1 text-gray-500">%</span>
@@ -394,7 +394,7 @@ export default function SocketLoadMeterPanel({
                 max={99}
                 value={critInput}
                 onChange={(e) => setCritInput(Number(e.target.value))}
-                className="ml-1 w-14 bg-gray-900/60 border border-gray-700 rounded px-1.5 py-0.5 text-xs text-white font-mono"
+                className="ml-1 w-14 bg-gray-900/60 border border-gray-700 rounded px-1.5 py-0.5 text-xs text-gray-100 font-mono"
                 aria-label={`Critical threshold for ${socketName}`}
               />
               <span className="ml-1 text-gray-500">%</span>

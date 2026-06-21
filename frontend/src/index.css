@@ -2,6 +2,24 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Theme ramps ──────────────────────────────────────────────────────────────
+   The gray palette resolves to these CSS variables (see tailwind.config.js).
+   :root = dark (standard Tailwind gray, so dark mode is unchanged). .light
+   MIRRORS the ramp (50<->950, 100<->900, ...) so every bg/text/border that used
+   the gray scale flips to a high-contrast light theme with zero class edits. */
+:root {
+  --g-50: 249 250 251;  --g-100: 243 244 246; --g-200: 229 231 235;
+  --g-300: 209 213 219; --g-400: 156 163 175; --g-500: 107 114 128;
+  --g-600: 75 85 99;    --g-700: 55 65 81;    --g-800: 31 41 55;
+  --g-900: 17 24 39;    --g-950: 3 7 18;
+}
+:root.light {
+  --g-50: 3 7 18;       --g-100: 17 24 39;    --g-200: 31 41 55;
+  --g-300: 55 65 81;    --g-400: 75 85 99;    --g-500: 107 114 128;
+  --g-600: 156 163 175; --g-700: 209 213 219; --g-800: 229 231 235;
+  --g-900: 243 244 246; --g-950: 249 250 251;
+}
+
 @layer base {
   body {
     @apply bg-gray-950 text-gray-100 font-sans antialiased;
@@ -41,4 +59,11 @@
   .badge-active { @apply badge bg-green-900/50 text-green-300 border border-green-700; }
   .badge-completed { @apply badge bg-blue-900/50 text-blue-300 border border-blue-700; }
   .badge-denied { @apply badge bg-red-900/50 text-red-300 border border-red-700; }
+
+  /* Light-mode tuning — these chips use coloured (non-gray) shades, so the
+     ramp mirror doesn't help; give them readable light equivalents. */
+  :root.light .badge-pending   { @apply bg-amber-100 text-amber-800 border-amber-300; }
+  :root.light .badge-active    { @apply bg-green-100 text-green-800 border-green-300; }
+  :root.light .badge-completed { @apply bg-blue-100 text-blue-800 border-blue-300; }
+  :root.light .badge-denied    { @apply bg-red-100 text-red-800 border-red-300; }
 }

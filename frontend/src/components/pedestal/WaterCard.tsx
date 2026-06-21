@@ -26,7 +26,7 @@ export default function WaterCard({ pedestalId }: WaterCardProps) {
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <div className={`w-3 h-3 rounded-full ${activeSession ? 'bg-cyan-400' : pendingSession ? 'bg-amber-400 animate-pulse' : 'bg-gray-600'}`} />
-          <span className="font-semibold text-white">Water Meter</span>
+          <span className="font-semibold text-gray-100">Water Meter</span>
         </div>
         <span
           className={
@@ -41,7 +41,7 @@ export default function WaterCard({ pedestalId }: WaterCardProps) {
         <div className="mb-3 space-y-1">
           <div className="flex justify-between text-sm">
             <span className="text-gray-400">Flow rate</span>
-            <span className="text-white font-mono font-bold">{waterLiveData.lpm.toFixed(1)} L/min</span>
+            <span className="text-gray-100 font-mono font-bold">{waterLiveData.lpm.toFixed(1)} L/min</span>
           </div>
           <div className="flex justify-between text-sm">
             <span className="text-gray-400">Total</span>

@@ -35,7 +35,7 @@ export default function PedestalCard({ pedestal, health, onClick }: PedestalCard
       <div className="flex items-start justify-between mb-4">
         <div className="flex items-center gap-2 min-w-0">
           <div className="min-w-0">
-            <h3 className="font-bold text-white text-lg truncate">{pedestal.name}</h3>
+            <h3 className="font-bold text-gray-100 text-lg truncate">{pedestal.name}</h3>
             <p className="text-gray-500 text-sm">{pedestal.location ?? '—'}</p>
           </div>
           {/* v3.7 — QR icon: opens the printable-QR grid without navigating
@@ -46,7 +46,7 @@ export default function PedestalCard({ pedestal, health, onClick }: PedestalCard
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); setQrOpen(true) }}
-              className="text-sm px-1.5 py-0.5 rounded border border-gray-700 text-gray-400 hover:text-white hover:border-blue-500/50"
+              className="text-sm px-1.5 py-0.5 rounded border border-gray-700 text-gray-400 hover:text-gray-100 hover:border-blue-500/50"
               title="Show printable QR codes"
               aria-label="Show QR codes"
             >
@@ -211,13 +211,13 @@ function PedestalQrGridModal({
       >
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-semibold text-white">QR Codes</h3>
+            <h3 className="text-sm font-semibold text-gray-100">QR Codes</h3>
             <p className="text-xs text-gray-500 font-mono">{pedestalName} — {cabinetId}</p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="text-gray-400 hover:text-white text-lg leading-none"
+            className="text-gray-400 hover:text-gray-100 text-lg leading-none"
             aria-label="Close"
           >
             ×

@@ -56,7 +56,7 @@ function PendingCard({
   return (
     <div className="card border-amber-700/50 flex items-center gap-4">
       <div className="flex-1">
-        <p className="font-medium text-white">
+        <p className="font-medium text-gray-100">
           {session.type === 'electricity' ? `Socket ${session.socket_id}` : 'Water Meter'}
           {session.customer_name && (
             <span className="ml-2 text-sm text-amber-300 font-normal">· {session.customer_name}</span>

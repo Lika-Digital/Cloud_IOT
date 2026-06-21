@@ -54,7 +54,7 @@ export default function Billing() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-bold text-white">Billing</h1>
+        <h1 className="text-2xl font-bold text-gray-100">Billing</h1>
         <p className="text-gray-400 text-sm mt-1">Configure prices and view customer spending</p>
       </div>
 

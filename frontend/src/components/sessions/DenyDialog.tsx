@@ -22,7 +22,7 @@ export default function DenyDialog({ onConfirm, onCancel }: DenyDialogProps) {
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
       <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 w-full max-w-md shadow-2xl">
-        <h3 className="text-lg font-bold text-white mb-2">Deny Session</h3>
+        <h3 className="text-lg font-bold text-gray-100 mb-2">Deny Session</h3>
         <p className="text-sm text-gray-400 mb-4">Optionally provide a reason for the customer.</p>
         <textarea
           className="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 text-gray-200 text-sm resize-none focus:outline-none focus:border-red-500 mb-4"

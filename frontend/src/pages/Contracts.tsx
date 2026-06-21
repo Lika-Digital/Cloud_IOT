@@ -87,7 +87,7 @@ export default function Contracts() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-bold text-white">Contracts</h1>
+        <h1 className="text-2xl font-bold text-gray-100">Contracts</h1>
         <p className="text-gray-400 text-sm mt-1">Manage marina service agreement templates and customer signatures</p>
       </div>
 

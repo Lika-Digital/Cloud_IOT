@@ -121,7 +121,7 @@ export default function NfcProvisioningTable({ cabinetId, pedestalId, isAdmin, o
             const st = liveStatus(s)
             return (
               <tr key={s} className="border-b border-gray-800">
-                <td className="py-2 pr-2 font-medium text-white">{s}</td>
+                <td className="py-2 pr-2 font-medium text-gray-100">{s}</td>
                 <td className="py-2 pr-2">
                   <span className={`text-[11px] px-1.5 py-0.5 rounded border ${STATUS_STYLE[st] ?? STATUS_STYLE.idle}`}>
                     {st}

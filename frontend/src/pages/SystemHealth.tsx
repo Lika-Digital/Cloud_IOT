@@ -182,7 +182,7 @@ export default function SystemHealth() {
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-white">System Health</h1>
+          <h1 className="text-2xl font-bold text-gray-100">System Health</h1>
           <p className="text-gray-400 text-sm mt-1">Hardware stats refresh every 10s · Error logs every 15s</p>
         </div>
         <button
@@ -372,7 +372,7 @@ export default function SystemHealth() {
       ) : hw?.available ? (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-base font-semibold text-white">Hardware Performance</h2>
+            <h2 className="text-base font-semibold text-gray-100">Hardware Performance</h2>
             <span className="text-xs text-gray-600">
               collected in {hw.elapsed_ms}ms
               {hw.rtsp_suspended && (
@@ -439,7 +439,7 @@ export default function SystemHealth() {
                     className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2 rounded-lg bg-gray-900/50 border border-gray-700/50">
                     <div className="flex items-center gap-2 min-w-[120px]">
                       <span className={`w-2 h-2 rounded-full flex-shrink-0 ${iface.up ? 'bg-green-400 animate-pulse' : 'bg-red-500'}`} />
-                      <span className="font-mono text-sm text-white">{iface.name}</span>
+                      <span className="font-mono text-sm text-gray-100">{iface.name}</span>
                       <span className={`text-xs ${iface.up ? 'text-green-400' : 'text-red-400'}`}>
                         {iface.up ? 'UP' : 'DOWN'}
                       </span>
@@ -693,7 +693,7 @@ function InfoCard({ label, value, icon }: { label: string; value: string; icon: 
       <p className="text-gray-400 text-xs font-medium flex items-center gap-1.5">
         <span>{icon}</span>{label}
       </p>
-      <p className="text-white font-bold text-lg mt-1">{value}</p>
+      <p className="text-gray-100 font-bold text-lg mt-1">{value}</p>
     </div>
   )
 }
@@ -740,7 +740,7 @@ function StatCard({
   return (
     <div className="rounded-xl border border-gray-700 bg-gray-800/60 p-4">
       <p className="text-gray-400 text-xs font-medium">{label}</p>
-      <p className={`text-3xl font-bold mt-1 ${colors[color] ?? 'text-white'}`}>{value}</p>
+      <p className={`text-3xl font-bold mt-1 ${colors[color] ?? 'text-gray-100'}`}>{value}</p>
       {sub && <p className="text-gray-600 text-xs mt-1">{sub}</p>}
     </div>
   )

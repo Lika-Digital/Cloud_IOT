@@ -85,7 +85,7 @@ export default function ChatPanel({ customerId, customerName, customerEmail, onC
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-700">
           <div>
-            <h3 className="text-white font-bold">{displayName}</h3>
+            <h3 className="text-gray-100 font-bold">{displayName}</h3>
             {customerName?.trim() && (
               <p className="text-gray-500 text-xs">{customerEmail}</p>
             )}

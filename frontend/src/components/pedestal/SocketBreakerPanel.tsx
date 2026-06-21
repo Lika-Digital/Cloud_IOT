@@ -162,7 +162,7 @@ export default function SocketBreakerPanel({ pedestalId, socketId, isAdmin, onFe
       {confirmOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" role="dialog" aria-modal="true">
           <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 max-w-md mx-4 space-y-3">
-            <h3 className="text-sm font-semibold text-white">Confirm breaker reset</h3>
+            <h3 className="text-sm font-semibold text-gray-100">Confirm breaker reset</h3>
             <p className="text-xs text-gray-300">
               Are you sure you want to remotely reset the circuit breaker on socket Q{socketId}?
             </p>

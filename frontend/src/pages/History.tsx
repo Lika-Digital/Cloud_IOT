@@ -22,9 +22,9 @@ export default function History() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-white">Session History</h1>
+        <h1 className="text-2xl font-bold text-gray-100">Session History</h1>
         <select
-          className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white"
+          className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-100"
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
         >
@@ -74,7 +74,7 @@ export default function History() {
                 return (
                   <tr key={s.id} className="hover:bg-gray-800/50 transition-colors">
                     <td className="py-3 px-2 text-gray-400">#{s.id}</td>
-                    <td className="py-3 px-2 text-white capitalize">{s.type}</td>
+                    <td className="py-3 px-2 text-gray-100 capitalize">{s.type}</td>
                     <td className="py-3 px-2 text-gray-300">
                       {s.socket_id != null ? `Socket ${s.socket_id}` : 'Water'}
                     </td>

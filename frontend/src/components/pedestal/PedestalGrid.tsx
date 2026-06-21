@@ -24,7 +24,7 @@ export default function PedestalGrid() {
       <div className="flex items-center gap-4 mb-6 p-4 bg-gray-900 rounded-xl border border-gray-800">
         <div className="flex-1">
           <p className="text-sm text-gray-400">Fleet Overview</p>
-          <p className="text-white font-semibold">{pedestals.length} Pedestal{pedestals.length !== 1 ? 's' : ''} monitored</p>
+          <p className="text-gray-100 font-semibold">{pedestals.length} Pedestal{pedestals.length !== 1 ? 's' : ''} monitored</p>
         </div>
         <div className="flex gap-4">
           <Stat label="Pending" value={totalPending} color="amber" pulse={totalPending > 0} />

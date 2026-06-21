@@ -25,7 +25,7 @@ export default function HelpBubble({ text }: { text: string }) {
         onMouseEnter={() => setOpen(true)}
         onMouseLeave={() => setOpen(false)}
         onClick={() => setOpen((v) => !v)}
-        className="w-4 h-4 rounded-full bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0 transition-colors"
+        className="w-4 h-4 rounded-full bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-gray-100 text-[10px] font-bold flex items-center justify-center flex-shrink-0 transition-colors"
         aria-label="Help"
       >
         ?

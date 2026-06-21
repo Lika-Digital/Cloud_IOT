@@ -189,7 +189,7 @@ export default function LedScheduleSection({ pedestalId, isAdmin, onFeedback }: 
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-base">⏰</span>
-          <span className="text-sm font-medium text-white">LED Schedule</span>
+          <span className="text-sm font-medium text-gray-100">LED Schedule</span>
         </div>
         <label className="flex items-center gap-2 text-xs text-gray-300 select-none cursor-pointer">
           <span>Auto LED Schedule</span>
@@ -211,7 +211,7 @@ export default function LedScheduleSection({ pedestalId, isAdmin, onFeedback }: 
             type="time"
             value={onTime}
             onChange={(e) => setOnTime(e.target.value)}
-            className="w-full bg-gray-900/60 border border-gray-700 rounded px-2 py-1 text-sm text-white font-mono"
+            className="w-full bg-gray-900/60 border border-gray-700 rounded px-2 py-1 text-sm text-gray-100 font-mono"
           />
         </label>
         <label className="text-xs text-gray-400 space-y-1">
@@ -220,7 +220,7 @@ export default function LedScheduleSection({ pedestalId, isAdmin, onFeedback }: 
             type="time"
             value={offTime}
             onChange={(e) => setOffTime(e.target.value)}
-            className="w-full bg-gray-900/60 border border-gray-700 rounded px-2 py-1 text-sm text-white font-mono"
+            className="w-full bg-gray-900/60 border border-gray-700 rounded px-2 py-1 text-sm text-gray-100 font-mono"
           />
         </label>
       </div>
@@ -236,7 +236,7 @@ export default function LedScheduleSection({ pedestalId, isAdmin, onFeedback }: 
               onClick={() => setColor(c.value)}
               className={`flex items-center gap-1.5 px-2 py-1 rounded border text-xs ${
                 color === c.value
-                  ? 'border-white text-white bg-gray-900/80'
+                  ? 'border-white text-gray-100 bg-gray-900/80'
                   : 'border-gray-700 text-gray-400 hover:border-gray-500'
               }`}
               aria-pressed={color === c.value}

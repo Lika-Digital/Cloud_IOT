@@ -35,7 +35,7 @@ export default function RealPedestalModal({
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
           <div>
-            <h2 className="text-lg font-bold text-white">Configure Real Pedestal</h2>
+            <h2 className="text-lg font-bold text-gray-100">Configure Real Pedestal</h2>
             <p className="text-sm text-gray-400 mt-0.5">{pedestalName}</p>
           </div>
           <button onClick={onCancel} className="text-gray-500 hover:text-gray-300 text-xl leading-none">✕</button>
@@ -50,7 +50,7 @@ export default function RealPedestalModal({
             <ul className="text-blue-400 text-xs space-y-0.5 list-disc list-inside ml-1">
               <li>Arduino Opta must be powered on and connected to your LAN</li>
               <li>Opta firmware must point to this machine's MQTT broker address</li>
-              <li>Broker: <span className="font-mono text-white">{mqttBroker}</span></li>
+              <li>Broker: <span className="font-mono text-gray-100">{mqttBroker}</span></li>
             </ul>
           </div>
 
@@ -67,7 +67,7 @@ export default function RealPedestalModal({
               value={pedestalIp}
               onChange={(e) => setPedestalIp(e.target.value)}
               placeholder="192.168.1.10"
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
             />
           </FieldGroup>
 
@@ -83,7 +83,7 @@ export default function RealPedestalModal({
               value={cameraIp}
               onChange={(e) => setCameraIp(e.target.value)}
               placeholder="192.168.1.20  (optional)"
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
             />
           </FieldGroup>
 

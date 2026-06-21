@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useStore } from '../../store'
 import { useAuthStore } from '../../store/authStore'
+import { useThemeStore } from '../../store/themeStore'
 import logo from '../../assets/logo.png'
 import { useEffect, useState } from 'react'
 import { getUnreadCount } from '../../api/billing'
@@ -9,6 +10,7 @@ import ToastContainer from '../ui/ToastContainer'
 export default function Layout() {
   const { wsConnected, pedestalOnline, unreadChatCount, setUnreadChatCount, newErrorCount, hwAlarmLevel } = useStore()
   const { email, role, logout } = useAuthStore()
+  const { theme, toggle: toggleTheme } = useThemeStore()
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -130,6 +132,14 @@ export default function Layout() {
               </div>
             </div>
             <button
+              onClick={toggleTheme}
+              className="w-full flex items-center gap-2 text-xs text-gray-400 hover:text-gray-200 transition-colors py-1 rounded text-left"
+              title="Toggle light/dark theme"
+            >
+              <span>{theme === 'dark' ? '☀️' : '🌙'}</span>
+              <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
+            </button>
+            <button
               onClick={handleLogout}
               className="w-full text-xs text-gray-500 hover:text-red-400 transition-colors py-1 rounded text-left"
             >
@@ -145,7 +155,7 @@ export default function Layout() {
         <header className="md:hidden sticky top-0 z-20 flex items-center gap-3 px-4 h-14 bg-gray-900 border-b border-gray-800">
           <button
             onClick={() => setSidebarOpen(true)}
-            className="p-2 -ml-2 text-gray-300 hover:text-white"
+            className="p-2 -ml-2 text-gray-300 hover:text-gray-100"
             aria-label="Open menu"
           >
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -154,8 +164,16 @@ export default function Layout() {
               <line x1="3" y1="18" x2="21" y2="18" />
             </svg>
           </button>
-          <span className="text-sm font-semibold text-white">IoT Dashboard</span>
-          <span className={`ml-auto w-2 h-2 rounded-full ${wsConnected ? 'bg-green-400 animate-pulse' : 'bg-gray-600'}`} title={wsConnected ? 'Online' : 'Offline'} />
+          <span className="text-sm font-semibold text-gray-100">IoT Dashboard</span>
+          <button
+            onClick={toggleTheme}
+            className="ml-auto p-2 text-gray-300 hover:text-gray-100"
+            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            title={theme === 'dark' ? 'Light mode (high sun)' : 'Dark mode'}
+          >
+            {theme === 'dark' ? '☀️' : '🌙'}
+          </button>
+          <span className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-green-400 animate-pulse' : 'bg-gray-600'}`} title={wsConnected ? 'Online' : 'Offline'} />
         </header>
 
         <div className="p-4 sm:p-6 max-w-7xl mx-auto w-full">

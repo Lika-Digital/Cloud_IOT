@@ -72,7 +72,7 @@ export default function ActiveAlarmsPanel() {
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-lg font-semibold text-white">Active Alarms</h3>
+        <h3 className="text-lg font-semibold text-gray-100">Active Alarms</h3>
         <span className="text-xs text-gray-500">{alarms.length} active</span>
       </div>
 
@@ -98,7 +98,7 @@ export default function ActiveAlarmsPanel() {
               <button
                 onClick={() => handleAck(a.id)}
                 disabled={busyId === a.id}
-                className="flex-shrink-0 text-xs px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-white transition-colors disabled:opacity-50"
+                className="flex-shrink-0 text-xs px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-100 transition-colors disabled:opacity-50"
               >
                 {busyId === a.id ? '…' : 'Acknowledge'}
               </button>

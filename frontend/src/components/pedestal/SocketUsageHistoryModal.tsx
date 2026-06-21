@@ -87,13 +87,13 @@ export default function SocketUsageHistoryModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" role="dialog" aria-modal="true">
       <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 w-full max-w-2xl mx-4 max-h-[85vh] flex flex-col">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-white">
+          <h3 className="text-sm font-semibold text-gray-100">
             Usage history — {label} ({isWater ? 'water' : 'electricity'})
           </h3>
           <button
             type="button"
             onClick={onClose}
-            className="text-xs text-gray-400 hover:text-white px-2 py-1 rounded hover:bg-gray-800"
+            className="text-xs text-gray-400 hover:text-gray-100 px-2 py-1 rounded hover:bg-gray-800"
             aria-label="Close"
           >
             ✕

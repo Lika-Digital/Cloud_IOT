@@ -79,7 +79,7 @@ export default function DiagnosticsModal({ pedestalId, pedestalName, onClose }: 
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
           <div>
-            <h2 className="text-lg font-bold text-white">Sensor Diagnostics</h2>
+            <h2 className="text-lg font-bold text-gray-100">Sensor Diagnostics</h2>
             <p className="text-sm text-gray-400 mt-0.5">{pedestalName}</p>
           </div>
           {!running && (
@@ -161,7 +161,7 @@ export default function DiagnosticsModal({ pedestalId, pedestalName, onClose }: 
             </button>
             <button
               onClick={() => onClose(result?.initialized ?? false)}
-              className={`flex-1 px-4 py-2 rounded-lg text-white text-sm font-medium transition-colors ${
+              className={`flex-1 px-4 py-2 rounded-lg text-gray-100 text-sm font-medium transition-colors ${
                 result?.all_ok
                   ? 'bg-green-700 hover:bg-green-600'
                   : 'bg-gray-700 hover:bg-gray-600'

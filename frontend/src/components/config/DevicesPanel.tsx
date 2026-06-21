@@ -38,7 +38,7 @@ function DeviceCard({ icon, title, status, children }: {
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700/60 bg-gray-800/60">
         <div className="flex items-center gap-2">
           <span className="text-lg">{icon}</span>
-          <span className="font-medium text-white text-sm">{title}</span>
+          <span className="font-medium text-gray-100 text-sm">{title}</span>
         </div>
         {status}
       </div>
@@ -259,14 +259,14 @@ export default function DevicesPanel() {
 
   return (
     <div className="card space-y-5">
-      <h3 className="text-lg font-semibold text-white">Device Configuration</h3>
+      <h3 className="text-lg font-semibold text-gray-100">Device Configuration</h3>
 
       {/* Pedestal selector */}
       {pedestals.length > 1 && (
         <div>
           <label className="block text-sm text-gray-400 mb-1">Pedestal</label>
           <select
-            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white"
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100"
             value={selectedId ?? ''}
             onChange={(e) => setSelectedId(Number(e.target.value))}
           >
@@ -308,7 +308,7 @@ export default function DevicesPanel() {
         <div className="flex items-center justify-between">
           <div className="flex items-start gap-2">
             <div>
-              <p className="text-sm font-medium text-white">Auto-Discovery</p>
+              <p className="text-sm font-medium text-gray-100">Auto-Discovery</p>
               <p className="text-xs text-gray-500 mt-0.5">
                 Scans LAN for ONVIF cameras + Papouch TME temperature sensors
               </p>

@@ -41,7 +41,7 @@ export default function Register() {
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <div className="text-4xl mb-3">⚡</div>
-          <h1 className="text-2xl font-bold text-white">IoT Dashboard</h1>
+          <h1 className="text-2xl font-bold text-gray-100">IoT Dashboard</h1>
           <p className="text-gray-500 text-sm mt-1">Smart Pedestal Management</p>
         </div>
 
@@ -49,7 +49,7 @@ export default function Register() {
           {success ? (
             <div className="text-center space-y-4">
               <div className="text-4xl">✓</div>
-              <h2 className="text-lg font-semibold text-white">Account Created</h2>
+              <h2 className="text-lg font-semibold text-gray-100">Account Created</h2>
               <p className="text-sm text-gray-400">
                 Your account has been created with <span className="text-gray-200">Monitor</span> access.
                 An admin can promote your role after you sign in.
@@ -63,7 +63,7 @@ export default function Register() {
             </div>
           ) : (
             <>
-              <h2 className="text-lg font-semibold text-white mb-1">Request Access</h2>
+              <h2 className="text-lg font-semibold text-gray-100 mb-1">Request Access</h2>
               <p className="text-sm text-gray-500 mb-4">
                 Create an operator account. You'll start with read-only access.
               </p>
@@ -76,7 +76,7 @@ export default function Register() {
                     autoFocus
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-100 text-sm focus:outline-none focus:border-blue-500"
                     placeholder="you@example.com"
                   />
                 </div>
@@ -88,7 +88,7 @@ export default function Register() {
                     minLength={8}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-100 text-sm focus:outline-none focus:border-blue-500"
                     placeholder="Min 8 characters"
                   />
                 </div>
@@ -100,7 +100,7 @@ export default function Register() {
                     minLength={8}
                     value={confirm}
                     onChange={(e) => setConfirm(e.target.value)}
-                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-100 text-sm focus:outline-none focus:border-blue-500"
                     placeholder="Repeat password"
                   />
                 </div>

@@ -51,11 +51,11 @@ export default function Analytics() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-white">Analytics</h1>
+        <h1 className="text-2xl font-bold text-gray-100">Analytics</h1>
 
         {/* Pedestal filter */}
         <select
-          className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white"
+          className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-100"
           value={selectedId ?? ''}
           onChange={(e) => setSelectedId(e.target.value ? Number(e.target.value) : undefined)}
         >
@@ -79,7 +79,7 @@ export default function Analytics() {
       {/* Cross-pedestal comparison (only when showing all) */}
       {!selectedId && comparisonData.length > 1 && (
         <div className="card mb-6">
-          <h3 className="text-lg font-semibold text-white mb-4">Pedestal Comparison</h3>
+          <h3 className="text-lg font-semibold text-gray-100 mb-4">Pedestal Comparison</h3>
           <ResponsiveContainer width="100%" height={240}>
             <BarChart data={comparisonData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
@@ -110,7 +110,7 @@ export default function Analytics() {
               <tbody className="divide-y divide-gray-800">
                 {comparisonData.map((row, i) => (
                   <tr key={i} className="hover:bg-gray-800/50">
-                    <td className="py-2 px-3 text-white font-medium">{row.name}</td>
+                    <td className="py-2 px-3 text-gray-100 font-medium">{row.name}</td>
                     <td className="py-2 px-3 text-gray-300">{row.sessions}</td>
                     <td className="py-2 px-3 font-mono text-gray-200">{row.energy_kwh.toFixed(3)}</td>
                     <td className="py-2 px-3 font-mono text-gray-200">{row.water_liters.toFixed(1)}</td>
@@ -125,9 +125,9 @@ export default function Analytics() {
       {/* Daily consumption chart */}
       <div className="card mb-6">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-white">Daily Consumption</h3>
+          <h3 className="text-lg font-semibold text-gray-100">Daily Consumption</h3>
           <select
-            className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white"
+            className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-100"
             value={days}
             onChange={(e) => setDays(Number(e.target.value))}
           >
@@ -142,7 +142,7 @@ export default function Analytics() {
       {/* Socket breakdown — electricity sockets + water meters */}
       {(socketData as SocketBreakdownRow[]).length > 0 && (
         <div className="card mb-6">
-          <h3 className="text-lg font-semibold text-white mb-4">Consumption by Socket</h3>
+          <h3 className="text-lg font-semibold text-gray-100 mb-4">Consumption by Socket</h3>
           <div className="space-y-2">
             {(socketData as SocketBreakdownRow[])
               .slice()
@@ -168,7 +168,7 @@ export default function Analytics() {
                     </span>
                     <div className="flex gap-6 text-sm">
                       <span className="text-gray-400">{row.session_count} sessions</span>
-                      <span className="text-white font-mono">{value}</span>
+                      <span className="text-gray-100 font-mono">{value}</span>
                     </div>
                   </div>
                 )
@@ -186,7 +186,7 @@ function SummaryCard({ label, value }: { label: string; value: string | number }
   return (
     <div className="card">
       <p className="text-xs text-gray-400 mb-1">{label}</p>
-      <p className="text-2xl font-bold text-white">{value}</p>
+      <p className="text-2xl font-bold text-gray-100">{value}</p>
     </div>
   )
 }

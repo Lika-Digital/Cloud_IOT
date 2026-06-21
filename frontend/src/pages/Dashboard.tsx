@@ -43,7 +43,7 @@ export default function Dashboard() {
           </button>
         )}
         <div>
-          <h1 className="text-2xl font-bold text-white">
+          <h1 className="text-2xl font-bold text-gray-100">
             {selectedPedestal ? selectedPedestal.name : 'Dashboard'}
           </h1>
           <p className="text-gray-400 text-sm mt-0.5">

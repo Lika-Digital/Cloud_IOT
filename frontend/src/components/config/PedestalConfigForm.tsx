@@ -165,7 +165,7 @@ export default function PedestalConfigForm({ pedestal }: Props) {
         onClick={() => setOpen((v) => !v)}
         className="w-full flex items-center justify-between px-4 py-3 bg-gray-800/60 hover:bg-gray-800 transition-colors text-left"
       >
-        <span className="font-medium text-white">
+        <span className="font-medium text-gray-100">
           {pedestal.name}
           <span className="text-gray-500 text-sm ml-2">{pedestal.location}</span>
         </span>
@@ -198,7 +198,7 @@ export default function PedestalConfigForm({ pedestal }: Props) {
                     <select
                       value={pedestalModel}
                       onChange={(e) => setPedestalModel(e.target.value)}
-                      className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm"
+                      className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-100 text-sm"
                     >
                       <option value="">— Select —</option>
                       <option value="16A">16A</option>
@@ -257,7 +257,7 @@ export default function PedestalConfigForm({ pedestal }: Props) {
                   <select
                     value={sensorMode}
                     onChange={(e) => setSensorMode(e.target.value as 'auto' | 'manual')}
-                    className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1 text-white text-sm"
+                    className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1 text-gray-100 text-sm"
                   >
                     <option value="auto">Auto (MQTT register)</option>
                     <option value="manual">Manual</option>
@@ -370,7 +370,7 @@ export default function PedestalConfigForm({ pedestal }: Props) {
                       value={snmpSubnet}
                       onChange={(e) => setSnmpSubnet(e.target.value)}
                       placeholder="192.168.1"
-                      className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-white text-xs w-32"
+                      className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-100 text-xs w-32"
                     />
                     <span className="text-xs text-gray-500">/24 subnet prefix</span>
                   </div>
@@ -432,7 +432,7 @@ function Field({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:border-blue-600"
+        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-100 text-sm focus:outline-none focus:border-blue-600"
       />
     </div>
   )

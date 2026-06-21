@@ -177,7 +177,7 @@ function SocketCard({
           title={isPending ? pendingTip : undefined}
         >
           <span className="text-base">🔌</span>
-          <span className="text-sm font-medium text-white">{label}</span>
+          <span className="text-sm font-medium text-gray-100">{label}</span>
           <span className="text-xs text-gray-500 font-mono">{socketName}</span>
           {autoActivate && (
             <span
@@ -425,13 +425,13 @@ function QrModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-white">
+          <h3 className="text-sm font-semibold text-gray-100">
             QR for {socketName}
           </h3>
           <button
             type="button"
             onClick={onClose}
-            className="text-gray-400 hover:text-white text-lg leading-none"
+            className="text-gray-400 hover:text-gray-100 text-lg leading-none"
             aria-label="Close"
           >
             ×
@@ -545,7 +545,7 @@ function WaterCard({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-base">💧</span>
-          <span className="text-sm font-medium text-white">{label}</span>
+          <span className="text-sm font-medium text-gray-100">{label}</span>
           <span className="text-xs text-gray-500 font-mono">{valveName}</span>
           {autoActivate && (
             <span
@@ -800,7 +800,7 @@ function LedControl({
     <div className="rounded-lg border border-gray-700 bg-gray-800/40 p-3 space-y-3">
       <div className="flex items-center gap-2">
         <span className="text-base">💡</span>
-        <span className="text-sm font-medium text-white">LED</span>
+        <span className="text-sm font-medium text-gray-100">LED</span>
         <span className={`ml-auto text-[11px] px-2 py-0.5 rounded border flex items-center gap-1.5 ${badge.cls}`}>
           <span className={`w-2.5 h-2.5 rounded-full ${on && !pending ? 'bg-white' : 'bg-gray-600'}`} />
           {badge.text}
@@ -825,7 +825,7 @@ function LedControl({
           <button
             onClick={() => send(false)}
             disabled={loading || pending}
-            className="flex-1 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-white text-xs font-medium disabled:opacity-50"
+            className="flex-1 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-100 text-xs font-medium disabled:opacity-50"
           >
             Turn OFF
           </button>
@@ -1108,7 +1108,7 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
       <div className="rounded-lg border border-gray-700 bg-gray-800/40 p-3">
         <div className="flex items-center gap-2 mb-2">
           <span className="text-base">📡</span>
-          <span className="text-sm font-medium text-white">Cabinet Status</span>
+          <span className="text-sm font-medium text-gray-100">Cabinet Status</span>
           <span className={`ml-auto flex items-center gap-1.5 text-xs ${health?.opta_connected ? 'text-green-400' : 'text-gray-500'}`}>
             <span className={`w-2 h-2 rounded-full ${health?.opta_connected ? 'bg-green-400 animate-pulse' : 'bg-gray-600'}`} />
             {health?.opta_connected ? 'Connected' : 'Offline'}
@@ -1382,7 +1382,7 @@ function QrCodesSection({
           {expanded ? '▾' : '▸'}
         </button>
         <span className="text-base">🔌</span>
-        <span className="text-sm font-medium text-white">Socket Settings</span>
+        <span className="text-sm font-medium text-gray-100">Socket Settings</span>
         <span className="text-xs text-gray-500 font-mono ml-1">{cabinetId}</span>
 
         {expanded && mode === 'qr' && (

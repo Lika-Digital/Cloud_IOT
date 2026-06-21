@@ -181,7 +181,7 @@ export default function BerthOccupancy() {
     <div className="space-y-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-white">Berth Occupancy</h1>
+          <h1 className="text-2xl font-bold text-gray-100">Berth Occupancy</h1>
           <p className="text-gray-400 text-sm mt-1">
             On-demand camera analysis — click Analyze to take a live snapshot and detect ship presence.
           </p>
@@ -279,7 +279,7 @@ export default function BerthOccupancy() {
             const yearly = berthOccupancy.filter((b) => b.berth_type === 'yearly').length
             return (
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <SummaryCard label="Total Berths" value={total} color="text-white" />
+                <SummaryCard label="Total Berths" value={total} color="text-gray-100" />
                 <SummaryCard label="Occupied" value={occupied} color="text-red-400" />
                 <SummaryCard label="Active Pedestals" value={activePedestalIds.size} color="text-blue-400" />
                 <div className="rounded-lg border border-gray-700 bg-gray-900 px-4 py-3 text-center">
@@ -297,7 +297,7 @@ export default function BerthOccupancy() {
           {/* ── Berth table ──────────────────────────────────────────────────── */}
           <div className="bg-gray-900 rounded-xl border border-gray-800">
             <div className="px-6 py-4 border-b border-gray-800 flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-white">Berth Status Summary</h2>
+              <h2 className="text-lg font-semibold text-gray-100">Berth Status Summary</h2>
               <div className="flex items-center gap-3">
                 {berthOccupancy.some((b) => b.alarm) && (
                   <span className="flex items-center gap-2 text-sm font-bold text-red-400 animate-pulse">
@@ -314,7 +314,7 @@ export default function BerthOccupancy() {
                 )}
                 <button
                   onClick={() => refresh()}
-                  className="text-xs px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-white font-medium"
+                  className="text-xs px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-100 font-medium"
                   title="Berths are auto-synced to registered pedestals"
                 >
                   ↺ Refresh
@@ -343,7 +343,7 @@ export default function BerthOccupancy() {
                         b.alarm ? 'bg-red-950/30' : ''
                       }`}
                     >
-                      <td className="px-4 py-3 font-medium text-white">
+                      <td className="px-4 py-3 font-medium text-gray-100">
                         {b.alarm ? '🚨 ' : ''}
                         {b.berth_number != null && (
                           <span className="text-xs text-blue-400 font-mono mr-1.5">#{b.berth_number}</span>
@@ -588,8 +588,8 @@ function AddSectorModal({
     <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-gray-900 rounded-2xl border border-gray-700 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
-          <h3 className="text-white font-bold text-lg">+ Add Sector</h3>
-          <button onClick={onClose} className="w-8 h-8 rounded-full bg-gray-700 text-white text-sm flex items-center justify-center hover:bg-gray-600">✕</button>
+          <h3 className="text-gray-100 font-bold text-lg">+ Add Sector</h3>
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-gray-700 text-gray-100 text-sm flex items-center justify-center hover:bg-gray-600">✕</button>
         </div>
         <div className="p-6 space-y-4">
           <div>
@@ -599,7 +599,7 @@ function AddSectorModal({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. North Dock A"
-              className="w-full bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
+              className="w-full bg-gray-800 border border-gray-700 text-gray-100 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
             />
           </div>
           <div>
@@ -610,7 +610,7 @@ function AddSectorModal({
               value={berthNumber}
               onChange={(e) => setBerthNumber(e.target.value)}
               placeholder="e.g. 1"
-              className="w-full bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
+              className="w-full bg-gray-800 border border-gray-700 text-gray-100 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
             />
           </div>
           <div>
@@ -708,10 +708,10 @@ function BerthConfigModal({ berth, onClose }: { berth: BerthOut; onClose: () => 
       <div className="bg-gray-900 rounded-2xl border border-gray-700 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
           <div>
-            <h3 className="text-white font-bold text-lg">⚙ Berth Configuration</h3>
+            <h3 className="text-gray-100 font-bold text-lg">⚙ Berth Configuration</h3>
             <p className="text-gray-400 text-sm">{berth.name}</p>
           </div>
-          <button onClick={onClose} className="w-8 h-8 rounded-full bg-gray-700 text-white text-sm flex items-center justify-center hover:bg-gray-600">✕</button>
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-gray-700 text-gray-100 text-sm flex items-center justify-center hover:bg-gray-600">✕</button>
         </div>
 
         <div className="p-6 space-y-4">
@@ -812,7 +812,7 @@ function DockVisualization({
   return (
     <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold text-white">⚓ Marina Portorož — Dock A</h2>
+        <h2 className="text-lg font-semibold text-gray-100">⚓ Marina Portorož — Dock A</h2>
         <div className="flex gap-4 text-xs text-gray-400">
           <LegendDot color="#22c55e" label="Free" />
           <LegendDot color="#6b7280" label="Occupied" />
@@ -912,8 +912,8 @@ function LiveModal({ berth, onClose }: { berth: BerthOut; onClose: () => void })
             <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
             LIVE
           </span>
-          <span className="flex-1 text-white font-semibold">{berth.name} — Berth Camera</span>
-          <button onClick={onClose} className="w-8 h-8 rounded-full bg-gray-700 text-white text-sm flex items-center justify-center hover:bg-gray-600">
+          <span className="flex-1 text-gray-100 font-semibold">{berth.name} — Berth Camera</span>
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-gray-700 text-gray-100 text-sm flex items-center justify-center hover:bg-gray-600">
             ✕
           </button>
         </div>
@@ -989,10 +989,10 @@ function RefImagesModal({ berth, onClose }: { berth: BerthOut; onClose: () => vo
       <div className="bg-gray-900 rounded-2xl border border-gray-700 max-w-lg w-full" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
           <div>
-            <h3 className="text-white font-bold text-lg">🖼 Reference Ship Images</h3>
+            <h3 className="text-gray-100 font-bold text-lg">🖼 Reference Ship Images</h3>
             <p className="text-gray-400 text-sm">{berth.name} — used for ship matching during analysis</p>
           </div>
-          <button onClick={onClose} className="w-8 h-8 rounded-full bg-gray-700 text-white text-sm flex items-center justify-center hover:bg-gray-600">✕</button>
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-gray-700 text-gray-100 text-sm flex items-center justify-center hover:bg-gray-600">✕</button>
         </div>
 
         <div className="p-6 space-y-4">
@@ -1064,10 +1064,10 @@ function CalendarModal({
       <div className="bg-gray-900 rounded-2xl border border-gray-700 max-w-lg w-full" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
           <div>
-            <h3 className="text-white font-bold text-lg">📅 Reservation Calendar</h3>
+            <h3 className="text-gray-100 font-bold text-lg">📅 Reservation Calendar</h3>
             <p className="text-gray-400 text-sm">{berth.name}</p>
           </div>
-          <button onClick={onClose} className="w-8 h-8 rounded-full bg-gray-700 text-white text-sm flex items-center justify-center hover:bg-gray-600">✕</button>
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-gray-700 text-gray-100 text-sm flex items-center justify-center hover:bg-gray-600">✕</button>
         </div>
         <div className="p-6">
           {loading ? (
@@ -1081,7 +1081,7 @@ function CalendarModal({
                   e.status === 'confirmed' ? 'bg-amber-900/30 border-amber-700/50' : 'bg-gray-800 border-gray-700 opacity-50'
                 }`}>
                   <div>
-                    <div className="text-white text-sm font-semibold">{e.check_in_date} → {e.check_out_date}</div>
+                    <div className="text-gray-100 text-sm font-semibold">{e.check_in_date} → {e.check_out_date}</div>
                     <div className="text-gray-400 text-xs mt-0.5">Customer #{e.customer_id}</div>
                   </div>
                   <span className={`text-xs font-bold px-2 py-1 rounded-full ${

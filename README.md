@@ -83,6 +83,18 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-06-21 — UI: light theme + mobile fixes (v3.35)
+
+- **Light/dark theme toggle** — for high-sun outdoor visibility. The whole gray
+  ramp resolves to CSS variables; a single `.light` class on `<html>` mirrors the
+  ramp (50<->950, ...) so every surface/text/border flips to a light theme with
+  **no component layout changes**. On-surface `text-white` headings were converted
+  to `text-gray-100` (identical in dark, dark in light); coloured status badges get
+  light-mode tuning. Choice persists (localStorage) and applies pre-paint to avoid
+  a flash. Toggle in the sidebar (next to Sign out) and the mobile top bar.
+- **Mobile sidebar scroll fix** — the drawer nav now scrolls so the pinned
+  Sign-out block is always reachable on small screens (e.g. Samsung S21).
+
 ### 2026-06-20 — Energy interval ledger + daily billing (v3.35)
 
 Makes kWh durable and billable even for sessions that never "end" (a yearly berth

@@ -35,7 +35,7 @@ export default function PredictionPanel() {
 
   return (
     <div className="card space-y-4">
-      <h3 className="text-lg font-semibold text-white">ML Consumption Forecast</h3>
+      <h3 className="text-lg font-semibold text-gray-100">ML Consumption Forecast</h3>
 
       {/* Model status */}
       {status && (
@@ -59,7 +59,7 @@ export default function PredictionPanel() {
         <div>
           <label className="block text-xs text-gray-400 mb-1">Session type</label>
           <select
-            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white"
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100"
             value={sessionType}
             onChange={(e) => setSessionType(e.target.value as 'electricity' | 'water')}
           >
@@ -75,7 +75,7 @@ export default function PredictionPanel() {
             max={480}
             value={duration}
             onChange={(e) => setDuration(Number(e.target.value))}
-            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white"
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100"
           />
         </div>
       </div>
@@ -97,7 +97,7 @@ export default function PredictionPanel() {
             <p className="text-sm text-gray-400">
               Predicted consumption for {result.predicted_duration_minutes} min session
             </p>
-            <p className="text-2xl font-bold text-white">
+            <p className="text-2xl font-bold text-gray-100">
               {result.predicted_consumption.toFixed(4)}{' '}
               <span className="text-base font-normal text-gray-400">{result.unit}</span>
             </p>

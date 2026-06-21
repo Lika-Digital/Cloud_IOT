@@ -5,6 +5,13 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Smart Pedestal IoT Dashboard</title>
+    <!-- Apply the persisted theme before first paint to avoid a flash. -->
+    <script>
+      try {
+        var t = JSON.parse(localStorage.getItem('theme') || '{}');
+        if (t && t.state && t.state.theme === 'light') document.documentElement.classList.add('light');
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

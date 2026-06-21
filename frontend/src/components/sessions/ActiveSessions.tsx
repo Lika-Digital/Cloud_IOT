@@ -38,7 +38,7 @@ function ActiveCard({ session, onStop }: { session: Session; onStop: () => void 
         <div className="flex items-center gap-3">
           <div className="w-3 h-3 rounded-full bg-green-400 animate-pulse" />
           <div>
-            <p className="font-medium text-white">
+            <p className="font-medium text-gray-100">
               {session.type === 'electricity' ? `Socket ${session.socket_id}` : 'Water Meter'}
             </p>
             <p className="text-xs text-gray-400">
@@ -73,7 +73,7 @@ function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="text-right">
       <p className="text-xs text-gray-400">{label}</p>
-      <p className="font-mono font-bold text-white">{value}</p>
+      <p className="font-mono font-bold text-gray-100">{value}</p>
     </div>
   )
 }
@@ -97,7 +97,7 @@ function ElapsedTimer({ startedAt }: { startedAt: string }) {
   return (
     <div className="text-right">
       <p className="text-xs text-gray-400">Duration</p>
-      <p className="font-mono font-bold text-white">
+      <p className="font-mono font-bold text-gray-100">
         {fmt(h)}:{fmt(m)}:{fmt(s)}
       </p>
     </div>

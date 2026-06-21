@@ -158,7 +158,7 @@ export default function PedestalView({ pedestalId }: PedestalViewProps) {
                   onClick={() => setActiveTab('overview')}
                   className={`flex-1 py-1.5 rounded-md text-sm font-medium transition-colors ${
                     activeTab === 'overview'
-                      ? 'bg-gray-700 text-white shadow-sm'
+                      ? 'bg-gray-700 text-gray-100 shadow-sm'
                       : 'text-gray-400 hover:text-gray-200'
                   }`}
                 >
@@ -168,7 +168,7 @@ export default function PedestalView({ pedestalId }: PedestalViewProps) {
                   onClick={() => setActiveTab('control')}
                   className={`flex-1 py-1.5 rounded-md text-sm font-medium transition-colors ${
                     activeTab === 'control'
-                      ? 'bg-gray-700 text-white shadow-sm'
+                      ? 'bg-gray-700 text-gray-100 shadow-sm'
                       : 'text-gray-400 hover:text-gray-200'
                   }`}
                 >
@@ -311,7 +311,7 @@ function ZoneButton({
         `}
       >
         {isCamera && (
-          <span className="flex items-center justify-center w-full h-full text-white text-xs">📷</span>
+          <span className="flex items-center justify-center w-full h-full text-gray-100 text-xs">📷</span>
         )}
         {!isCamera && <span className="sr-only">{zone.label}</span>}
         {breakerTripped && (
@@ -407,7 +407,7 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
             isActive ? 'bg-green-400 animate-pulse' :
             pendingSession ? 'bg-amber-400 animate-pulse' : 'bg-gray-600'
           }`} />
-          <h3 className="text-lg font-bold text-white">{zone.label}</h3>
+          <h3 className="text-lg font-bold text-gray-100">{zone.label}</h3>
           <span className={
             breakerTripped || isFault ? 'badge bg-red-900/40 text-red-300 border border-red-700/50' :
             isActive ? 'badge-active' :
@@ -584,7 +584,7 @@ function LiveMetric({ label, value, big }: { label: string; value: string; big?:
   return (
     <div className="flex justify-between items-center">
       <span className="text-gray-400 text-sm">{label}</span>
-      <span className={`font-mono font-bold ${big ? 'text-2xl text-white' : 'text-gray-200'}`}>{value}</span>
+      <span className={`font-mono font-bold ${big ? 'text-2xl text-gray-100' : 'text-gray-200'}`}>{value}</span>
     </div>
   )
 }
@@ -637,7 +637,7 @@ function SessionTimer({ startedAt }: { startedAt: string }) {
   return (
     <div className="flex justify-between items-center">
       <span className="text-gray-400 text-sm">Duration</span>
-      <span className="font-mono font-bold text-white">{fmt(h)}:{fmt(m)}:{fmt(s)}</span>
+      <span className="font-mono font-bold text-gray-100">{fmt(h)}:{fmt(m)}:{fmt(s)}</span>
     </div>
   )
 }

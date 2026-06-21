@@ -57,7 +57,7 @@ export default function PedestalOverview({ pedestalId }: { pedestalId: number })
       {/* ── Cabinet status ─────────────────────────────────────────────── */}
       <div className="card space-y-2">
         <div className="flex items-center justify-between">
-          <span className="text-sm font-medium text-white">📡 Cabinet Status</span>
+          <span className="text-sm font-medium text-gray-100">📡 Cabinet Status</span>
           <div className="flex items-center gap-2">
             <span className={`badge text-[10px] ${smartMode
               ? 'bg-green-900/40 text-green-300 border border-green-700/50'
@@ -96,7 +96,7 @@ export default function PedestalOverview({ pedestalId }: { pedestalId: number })
             return (
               <div key={name} className="rounded-lg border border-gray-700 bg-gray-800/40 p-3 space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-white">🔌 Socket {sid}</span>
+                  <span className="text-sm font-medium text-gray-100">🔌 Socket {sid}</span>
                   <div className="flex items-center gap-1.5">
                     <button type="button" onClick={() => setUsage({ sid, label: name })}
                       className="text-[10px] px-1.5 py-0.5 rounded border border-gray-600 text-gray-300 hover:bg-gray-700/60"
@@ -125,7 +125,7 @@ export default function PedestalOverview({ pedestalId }: { pedestalId: number })
             return (
               <div key={name} className="rounded-lg border border-gray-700 bg-gray-800/40 p-3 space-y-1">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-white">💧 Valve {name}</span>
+                  <span className="text-sm font-medium text-gray-100">💧 Valve {name}</span>
                   <StateBadge state={state} />
                 </div>
                 {vs ? (

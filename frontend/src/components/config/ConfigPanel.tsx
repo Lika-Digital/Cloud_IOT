@@ -95,14 +95,14 @@ export default function ConfigPanel() {
       )}
 
       <div className="card space-y-5 max-w-lg">
-        <h3 className="text-lg font-semibold text-white">Pedestal Settings</h3>
+        <h3 className="text-lg font-semibold text-gray-100">Pedestal Settings</h3>
 
         {/* Pedestal selector */}
         {pedestals.length > 1 && (
           <div>
             <label className="block text-sm text-gray-400 mb-1">Select Pedestal</label>
             <select
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100"
               value={selectedId ?? ''}
               onChange={(e) => setSelectedId(Number(e.target.value))}
             >

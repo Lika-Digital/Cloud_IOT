@@ -30,7 +30,7 @@ export default function SocketCard({ socketId, pedestalId }: SocketCardProps) {
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <div className={`w-3 h-3 rounded-full ${activeSession ? 'bg-green-400' : pendingSession ? 'bg-amber-400 animate-pulse' : 'bg-gray-600'}`} />
-          <span className="font-semibold text-white">Socket {socketId}</span>
+          <span className="font-semibold text-gray-100">Socket {socketId}</span>
         </div>
         <span
           className={
@@ -46,7 +46,7 @@ export default function SocketCard({ socketId, pedestalId }: SocketCardProps) {
         <div className="mb-3 space-y-1">
           <div className="flex justify-between text-sm">
             <span className="text-gray-400">Power</span>
-            <span className="text-white font-mono font-bold">{liveData.watts.toFixed(0)} W</span>
+            <span className="text-gray-100 font-mono font-bold">{liveData.watts.toFixed(0)} W</span>
           </div>
           <div className="flex justify-between text-sm">
             <span className="text-gray-400">Energy</span>

@@ -22,7 +22,7 @@ import {
 export default function Settings() {
   return (
     <div>
-      <h1 className="text-2xl font-bold text-white mb-6">Settings</h1>
+      <h1 className="text-2xl font-bold text-gray-100 mb-6">Settings</h1>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
         {/* Left column */}
@@ -63,18 +63,18 @@ export default function Settings() {
           <BackupRestorePanel />
 
           <div className="card">
-            <h3 className="font-semibold text-white mb-3">Quick Start</h3>
+            <h3 className="font-semibold text-gray-100 mb-3">Quick Start</h3>
             <ol className="text-sm text-gray-400 space-y-2 list-decimal list-inside">
-              <li>Connect the Arduino to the MQTT broker — it sends a <strong className="text-white">register</strong> message automatically</li>
+              <li>Connect the Arduino to the MQTT broker — it sends a <strong className="text-gray-100">register</strong> message automatically</li>
               <li>The pedestal appears on the Dashboard once the first MQTT message is received</li>
-              <li>Select the pedestal in <strong className="text-white">Pedestal Settings</strong> (left) to configure camera and connection details</li>
-              <li>Click <strong className="text-white">Run Diagnostics</strong> to verify all devices are reachable</li>
-              <li>Enable <strong className="text-white">Mobile App Access</strong> to make the pedestal visible in the customer app</li>
+              <li>Select the pedestal in <strong className="text-gray-100">Pedestal Settings</strong> (left) to configure camera and connection details</li>
+              <li>Click <strong className="text-gray-100">Run Diagnostics</strong> to verify all devices are reachable</li>
+              <li>Enable <strong className="text-gray-100">Mobile App Access</strong> to make the pedestal visible in the customer app</li>
               <li>Click socket zones on the Dashboard to Allow / Deny / Stop sessions</li>
             </ol>
           </div>
           <div className="card">
-            <h3 className="font-semibold text-white mb-3">MQTT Topics</h3>
+            <h3 className="font-semibold text-gray-100 mb-3">MQTT Topics</h3>
             <div className="space-y-1 text-xs font-mono text-gray-400">
 
               <p className="text-purple-400 font-semibold mt-1">// Opta firmware (Arduino → NUC)</p>
@@ -132,7 +132,7 @@ export default function Settings() {
             </div>
           </div>
           <div className="card">
-            <h3 className="font-semibold text-white mb-3">User Roles</h3>
+            <h3 className="font-semibold text-gray-100 mb-3">User Roles</h3>
             <div className="space-y-2 text-sm text-gray-400">
               <div>
                 <span className="text-blue-400 font-medium">Admin</span>
@@ -199,7 +199,7 @@ function PilotModePanel() {
   return (
     <div className="card space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-white">Pilot Mode Assignments</h3>
+        <h3 className="font-semibold text-gray-100">Pilot Mode Assignments</h3>
         <button
           onClick={() => setShowAdd((v) => !v)}
           className="text-xs px-3 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-600 text-white transition-colors"
@@ -228,7 +228,7 @@ function PilotModePanel() {
               maxLength={120}
               value={newUsername}
               onChange={(e) => setNewUsername(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-100 text-sm"
               placeholder="e.g. John Smith"
             />
           </div>
@@ -241,7 +241,7 @@ function PilotModePanel() {
                 min={1}
                 value={newPedestalId}
                 onChange={(e) => setNewPedestalId(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm font-mono"
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-100 text-sm font-mono"
                 placeholder="1"
               />
             </div>
@@ -250,7 +250,7 @@ function PilotModePanel() {
               <select
                 value={newSocketId}
                 onChange={(e) => setNewSocketId(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm"
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-100 text-sm"
               >
                 {[1, 2, 3, 4].map((n) => <option key={n} value={n}>Socket {n}</option>)}
               </select>
@@ -303,7 +303,7 @@ function ActivePedestalsPanel() {
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="font-semibold text-white">Active MQTT Clients</h3>
+        <h3 className="font-semibold text-gray-100">Active MQTT Clients</h3>
         {info && (
           <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
             info.connected > 0
@@ -363,7 +363,7 @@ function NetworkInfoPanel() {
 
   return (
     <div className="card">
-      <h3 className="font-semibold text-white mb-3">Application Network Address</h3>
+      <h3 className="font-semibold text-gray-100 mb-3">Application Network Address</h3>
       <p className="text-xs text-gray-400 mb-3">
         System IP is the address of this machine. MQTT Broker IP is the broker the application
         is connected to. On a NUC deployment these are the same; on a dev setup they may differ.
@@ -428,7 +428,7 @@ function SnmpConfigPanel() {
         type={type}
         value={value as string}
         onChange={(e) => setCfg({ ...cfg, [key]: type === 'number' ? Number(e.target.value) : e.target.value })}
-        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm font-mono"
+        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-100 text-sm font-mono"
       />
     </div>
   )
@@ -436,7 +436,7 @@ function SnmpConfigPanel() {
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="font-semibold text-white">SNMP Trap Receiver</h3>
+        <h3 className="font-semibold text-gray-100">SNMP Trap Receiver</h3>
         <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
           <input
             type="checkbox" checked={cfg.enabled}
@@ -531,7 +531,7 @@ function SmtpSettingsPanel() {
   return (
     <div className="card space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-white">Email / SMTP</h3>
+        <h3 className="font-semibold text-gray-100">Email / SMTP</h3>
         <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
           cfg.configured
             ? 'bg-green-900/50 text-green-400'
@@ -732,7 +732,7 @@ function UserManagementPanel() {
   return (
     <div className="card space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-white">Operator Accounts</h3>
+        <h3 className="font-semibold text-gray-100">Operator Accounts</h3>
         <button
           onClick={() => setShowAdd((v) => !v)}
           className="text-xs px-3 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-600 text-white transition-colors"
@@ -760,7 +760,7 @@ function UserManagementPanel() {
               maxLength={120}
               value={newEmail}
               onChange={(e) => setNewEmail(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-100 text-sm"
               placeholder="user@example.com"
             />
             <FieldHelp example="user@example.com" hint="Email address used to log in" />
@@ -774,7 +774,7 @@ function UserManagementPanel() {
               maxLength={128}
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-100 text-sm"
               placeholder="Min 8 characters"
             />
             <FieldHelp example="min 8 chars" hint="User can change after first login" />
@@ -784,7 +784,7 @@ function UserManagementPanel() {
             <select
               value={newRole}
               onChange={(e) => setNewRole(e.target.value as 'admin' | 'monitor_control' | 'monitor')}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-100 text-sm"
             >
               <option value="monitor">Monitor — read only</option>
               <option value="monitor_control">Monitor &amp; Control — all but System Health / Settings / API Gateway</option>
@@ -921,7 +921,7 @@ function TwoFactorPanel() {
   return (
     <div className="card space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-white">Two-Factor Authentication</h3>
+        <h3 className="font-semibold text-gray-100">Two-Factor Authentication</h3>
         <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
           enabled ? 'bg-green-900/50 text-green-400' : 'bg-yellow-900/50 text-yellow-400'}`}>
           {enabled ? 'Enabled' : 'Disabled'}
@@ -942,11 +942,11 @@ function TwoFactorPanel() {
           <div className="space-y-2 p-3 bg-gray-800/50 rounded-lg border border-gray-700">
             <p className="text-sm text-gray-300">Disable two-factor authentication</p>
             <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="Current password"
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm" autoComplete="current-password" />
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-100 text-sm" autoComplete="current-password" />
             <input type="text" inputMode="numeric" maxLength={6} value={disableCode}
               onChange={(e) => setDisableCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
               placeholder="Current 6-digit code"
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm font-mono" />
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-100 text-sm font-mono" />
             <button onClick={disable} disabled={busy || !pw || disableCode.length !== 6}
               className="text-xs px-3 py-1.5 rounded-lg bg-red-700 hover:bg-red-600 text-white disabled:opacity-40">
               {busy ? '…' : 'Disable Two-Factor Authentication'}
@@ -965,7 +965,7 @@ function TwoFactorPanel() {
           <input type="text" inputMode="numeric" maxLength={6} value={code} autoFocus
             onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
             placeholder="000000"
-            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-center tracking-[0.4em] font-mono" />
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-100 text-center tracking-[0.4em] font-mono" />
           <button onClick={verify} disabled={busy || code.length !== 6} className="btn-primary w-full">
             {busy ? 'Verifying…' : 'Verify and Enable'}
           </button>
@@ -1060,7 +1060,7 @@ function BackupRestorePanel() {
 
   return (
     <div className="card space-y-4">
-      <h3 className="font-semibold text-white">Configuration Backup / Restore</h3>
+      <h3 className="font-semibold text-gray-100">Configuration Backup / Restore</h3>
       <p className="text-xs text-gray-400">
         Export all system configuration to a timestamped JSON file (redacted by default —
         safe to share for troubleshooting). Restore re-applies a saved file.

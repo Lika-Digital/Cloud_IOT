@@ -163,7 +163,7 @@ export default function CameraModal({ pedestalId, dataMode, cameraIp, onClose }:
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-700">
           <div className="flex items-center gap-3">
             <div className={`w-3 h-3 rounded-full ${hasLiveStream ? 'bg-green-400 animate-pulse' : 'bg-gray-500'}`} />
-            <h3 className="font-semibold text-white">Live Camera</h3>
+            <h3 className="font-semibold text-gray-100">Live Camera</h3>
             {hasLiveStream ? (
               <span className="text-xs bg-green-900/50 text-green-300 px-2 py-0.5 rounded-full">
                 {streamUrl}
@@ -191,7 +191,7 @@ export default function CameraModal({ pedestalId, dataMode, cameraIp, onClose }:
                 Ship detected
               </span>
             )}
-            <button onClick={onClose} className="text-gray-400 hover:text-white text-xl leading-none">✕</button>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-100 text-xl leading-none">✕</button>
           </div>
         </div>
 

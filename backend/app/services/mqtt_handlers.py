@@ -620,7 +620,7 @@ async def _handle_marina_water(cabinet_id: str, water_name: str, payload: str):
         finally:
             adb.close()
 
-    await _handle_water_flow(pedestal_id, legacy_payload)
+    await _handle_water_flow(pedestal_id, legacy_payload, valve_id=valve_id, session_liters=session_l)
     # Rich broadcast for Control Center UI
     await ws_manager.broadcast({
         "event": "opta_water_status",
@@ -3168,7 +3168,12 @@ async def _handle_socket_power(pedestal_id: int, socket_id: int, payload: str):
         db.close()
 
 
-async def _handle_water_flow(pedestal_id: int, payload: str):
+async def _handle_water_flow(
+    pedestal_id: int,
+    payload: str,
+    valve_id: int | None = None,
+    session_liters: float | None = None,
+):
     try:
         data = json.loads(payload)
         lpm = float(data["lpm"])
@@ -3184,20 +3189,35 @@ async def _handle_water_flow(pedestal_id: int, payload: str):
 
     db = SessionLocal()
     try:
-        session = session_service.get_active_for_socket(db, pedestal_id, None)
+        # v3.36 — link the reading to the live water session by valve id. The old
+        # default (socket_id=None) only ever matched legacy single-meter rows, so
+        # marina valve sessions (socket_id=1/2) recorded ZERO liters and every
+        # completed session showed 0.0 L.
+        session = session_service.get_active_for_socket(
+            db, pedestal_id, valve_id, session_type="water"
+        )
         session_id = session.id if session and session.status == "active" else None
         customer_id = session.customer_id if session else None
 
-        session_service.add_reading(db, session_id, pedestal_id, None, "water_lpm", lpm, "L/min")
-        session_service.add_reading(db, session_id, pedestal_id, None, "total_liters", total_liters, "L")
+        # v3.36 — bill the per-session counter (session_l), not the meter's
+        # never-resetting cumulative total_l. session_service.complete() takes
+        # max() of the "total_liters" readings; session_l resets to 0 each session
+        # and rises, so max() == the session total. The legacy single-meter path
+        # has no per-session counter, so fall back to total_liters (old behaviour).
+        liters_for_session = session_liters if session_liters is not None else total_liters
+
+        session_service.add_reading(db, session_id, pedestal_id, valve_id, "water_lpm", lpm, "L/min")
+        session_service.add_reading(db, session_id, pedestal_id, valve_id, "total_liters", liters_for_session, "L")
 
         await ws_manager.broadcast({
             "event": "water_reading",
             "data": {
                 "pedestal_id": pedestal_id,
+                "valve_id": valve_id,
                 "session_id": session_id,
                 "lpm": lpm,
                 "total_liters": total_liters,
+                "session_liters": liters_for_session,
                 "timestamp": datetime.utcnow().isoformat(),
                 "customer_id": customer_id,
             },

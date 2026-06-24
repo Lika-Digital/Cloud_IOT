@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from .config import settings
+from .time_utils import iso_z
 from .database import init_db, SessionLocal, engine
 from .models.pedestal import Pedestal
 from .models.session import Session as SessionModel
@@ -250,7 +251,7 @@ async def _camera_health_check():
                             "data": {
                                 "pedestal_id": cfg.pedestal_id,
                                 "camera_reachable": reachable,
-                                "last_camera_check": now.isoformat(),
+                                "last_camera_check": iso_z(now),
                             },
                         })
                 except Exception as e:
@@ -320,7 +321,7 @@ async def _temp_sensor_poll():
                             "data": {
                                 "pedestal_id": pid,
                                 "temp_sensor_reachable": False,
-                                "last_temp_sensor_check": now.isoformat(),
+                                "last_temp_sensor_check": iso_z(now),
                             },
                         })
                         continue
@@ -360,8 +361,8 @@ async def _temp_sensor_poll():
                             "severity": severity,
                             "alarm": severity is not None,
                             "temp_sensor_reachable": True,
-                            "last_temp_sensor_check": now.isoformat(),
-                            "timestamp": now.isoformat(),
+                            "last_temp_sensor_check": iso_z(now),
+                            "timestamp": iso_z(now),
                         },
                     })
                 except Exception as e:

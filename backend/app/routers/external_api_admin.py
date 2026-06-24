@@ -18,6 +18,7 @@ from ..config import settings
 from ..database import get_db
 from ..models.external_api import ExternalApiConfig
 from ..services.api_catalog import ENDPOINT_CATALOG, EVENT_CATALOG
+from ..time_utils import iso_z
 
 logger = logging.getLogger(__name__)
 
@@ -66,10 +67,10 @@ def _config_to_dict(cfg: ExternalApiConfig) -> dict:
         "allowed_events":       json.loads(cfg.allowed_events or "[]"),
         "active":               bool(cfg.active),
         "verified":             bool(cfg.verified),
-        "last_verified_at":     cfg.last_verified_at.isoformat() if cfg.last_verified_at else None,
+        "last_verified_at":     iso_z(cfg.last_verified_at),
         "verification_results": json.loads(cfg.verification_results or "null"),
-        "created_at":           cfg.created_at.isoformat() if cfg.created_at else None,
-        "updated_at":           cfg.updated_at.isoformat() if cfg.updated_at else None,
+        "created_at":           iso_z(cfg.created_at),
+        "updated_at":           iso_z(cfg.updated_at),
     }
 
 

@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse, Response
 from ..config import settings
 from ..database import SessionLocal
 from ..auth.user_database import UserSessionLocal
+from ..time_utils import iso_z
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +199,7 @@ async def ext_berths_occupancy(pedestal_id: str, request: Request):
                 "berth_id": b.id,
                 "berth_name": b.name,
                 "occupied": bool(b.occupied_bit),
-                "last_analyzed": b.last_analyzed.isoformat(),
+                "last_analyzed": iso_z(b.last_analyzed),
             })
 
     return JSONResponse({"pedestal_id": display_id, "berths": berth_list})
@@ -378,6 +379,6 @@ async def ext_camera_stream(pedestal_id: str, request: Request):
         "stream_url": cfg.camera_stream_url,
         "reachable": bool(cfg.camera_reachable),
         "last_checked": (
-            cfg.last_camera_check.isoformat() if cfg.last_camera_check else None
+            iso_z(cfg.last_camera_check)
         ),
     })

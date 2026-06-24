@@ -26,6 +26,7 @@ from ..models.pedestal_config import PedestalConfig
 from ..models.socket_config import SocketConfig
 from ..services.mqtt_client import mqtt_service
 from ..services.websocket_manager import ws_manager
+from ..time_utils import now_iso, iso_z
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ def serialize_breaker_status(cfg: SocketConfig | None) -> dict:
         }
     return {
         "breaker_state": cfg.breaker_state or "unknown",
-        "breaker_last_trip_at": cfg.breaker_last_trip_at.isoformat() if cfg.breaker_last_trip_at else None,
+        "breaker_last_trip_at": iso_z(cfg.breaker_last_trip_at),
         "breaker_trip_cause": cfg.breaker_trip_cause,
         "breaker_trip_count": cfg.breaker_trip_count or 0,
         "breaker_type": cfg.breaker_type,
@@ -85,7 +86,7 @@ def serialize_event(e: BreakerEvent) -> dict:
         "pedestal_id": e.pedestal_id,
         "socket_id": e.socket_id,
         "event_type": e.event_type,
-        "timestamp": e.timestamp.isoformat() if e.timestamp else None,
+        "timestamp": iso_z(e.timestamp),
         "trip_cause": e.trip_cause,
         "current_at_trip": e.current_at_trip,
         "reset_initiated_by": e.reset_initiated_by,
@@ -153,7 +154,7 @@ async def broadcast_resetting(pedestal_id: int, socket_id: int) -> None:
             "socket_id": socket_id,
             "breaker_state": "resetting",
             "trip_cause": None,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_iso(),
         },
     })
 

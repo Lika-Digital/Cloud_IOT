@@ -5,6 +5,7 @@ import re
 import time
 from datetime import datetime, timedelta
 
+from ..time_utils import now_iso, iso_z
 from ..database import SessionLocal
 from ..services.session_service import session_service
 from ..services.websocket_manager import ws_manager
@@ -221,7 +222,7 @@ async def _announce_new_pedestal(pedestal_id: int, cabinet_id: str, name: str) -
             "name": name,
             "is_new": True,
             "socket_ids": ["Q1", "Q2", "Q3", "Q4"],
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_iso(),
         },
     })
 
@@ -242,7 +243,7 @@ async def _announce_pedestal_heartbeat(pedestal_id: int, cabinet_id: str, name: 
             "name": name,
             "is_new": False,
             "socket_ids": ["Q1", "Q2", "Q3", "Q4"],
-            "timestamp": now.isoformat(),
+            "timestamp": iso_z(now),
         },
     })
 
@@ -504,7 +505,7 @@ async def _handle_marina_socket(cabinet_id: str, socket_name: str, payload: str)
                     "data": {
                         "session_id": _adopted.id, "pedestal_id": pedestal_id,
                         "socket_id": socket_id, "type": "electricity", "status": "active",
-                        "started_at": _adopted.started_at.isoformat(),
+                        "started_at": iso_z(_adopted.started_at),
                         "customer_id": None, "customer_name": None, "adopted": True,
                     },
                 })
@@ -551,7 +552,7 @@ async def _handle_marina_socket(cabinet_id: str, socket_name: str, payload: str)
             "hw_status": data.get("hw_status", ""),
             "session": data.get("session"),
             "ts": data.get("ts"),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_iso(),
         },
     })
 
@@ -613,7 +614,7 @@ async def _handle_marina_water(cabinet_id: str, water_name: str, payload: str):
                     "data": {
                         "session_id": _adopted.id, "pedestal_id": pedestal_id,
                         "socket_id": valve_id, "type": "water", "status": "active",
-                        "started_at": _adopted.started_at.isoformat(),
+                        "started_at": iso_z(_adopted.started_at),
                         "customer_id": None, "customer_name": None, "adopted": True,
                     },
                 })
@@ -632,7 +633,7 @@ async def _handle_marina_water(cabinet_id: str, water_name: str, payload: str):
             "total_l": total_l,
             "session_l": session_l,
             "ts": data.get("ts"),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_iso(),
         },
     })
 
@@ -672,7 +673,7 @@ async def _handle_marina_door(cabinet_id: str, payload: str):
             "pedestal_id": pedestal_id,
             "cabinet_id": cabinet_id,
             "door": door_state,
-            "timestamp": data.get("ts", datetime.utcnow().isoformat()),
+            "timestamp": data.get("ts", now_iso()),
         },
     })
 
@@ -717,7 +718,7 @@ async def _handle_marina_status(cabinet_id: str, payload: str):
     # Build a legacy heartbeat payload
     legacy_payload = json.dumps({
         "online": True,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": now_iso(),
         "uptime_ms": data.get("uptime_ms", 0),
         "seq": data.get("seq", 0),
     })
@@ -733,7 +734,7 @@ async def _handle_marina_status(cabinet_id: str, payload: str):
             "uptime_ms": data.get("uptime_ms", 0),
             "door": data.get("door"),
             "smart_mode": smart_mode_val,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_iso(),
         },
     })
 
@@ -800,7 +801,7 @@ async def _handle_marina_events(cabinet_id: str, payload: str):
             "pedestal_id": pedestal_id,
             "cabinet_id": cabinet_id,
             "payload": data,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_iso(),
         },
     })
 
@@ -839,7 +840,7 @@ async def _broadcast_socket_state(pedestal_id: int, socket_id: int, new_state: s
                 "session_id": session_id_for_subs,
                 "state": new_state,
                 "resource": resource,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": now_iso(),
             },
         })
 
@@ -850,7 +851,7 @@ async def _broadcast_socket_state(pedestal_id: int, socket_id: int, new_state: s
             "socket_id": socket_id,
             "state": new_state,
             "resource": resource,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_iso(),
         },
     })
 
@@ -1140,8 +1141,8 @@ async def _standalone_usage_tick(now: datetime) -> None:
                 "energy_kwh": sess.energy_kwh,
                 "customer_id": None, "customer_name": None,
                 "origin": "standalone",
-                "started_at": sess.started_at.isoformat() if sess.started_at else None,
-                "timestamp": datetime.utcnow().isoformat(),
+                "started_at": iso_z(sess.started_at),
+                "timestamp": now_iso(),
             },
         })
 
@@ -1312,7 +1313,7 @@ async def _broadcast_auto_activate_skipped(pedestal_id: int, socket_id: int, rea
             "pedestal_id": pedestal_id,
             "socket_id": socket_id,
             "reason": reason,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_iso(),
         },
     })
 
@@ -1602,7 +1603,7 @@ async def _check_valve_flow_after_30s(pedestal_id: int, valve_id: int) -> None:
             "valve_id": valve_id,
             "reason": "zero_flow_after_auto_open",
             "message": message,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_iso(),
         },
     })
 
@@ -1748,7 +1749,7 @@ async def _handle_event_outlet_activated(db, pedestal_id: int, outlet_id: str, r
             "socket_id": socket_id,
             "type": session_type,
             "status": "active",
-            "started_at": session.started_at.isoformat(),
+            "started_at": iso_z(session.started_at),
             "customer_id": None,
             "customer_name": None,
             "nfc_user_id": nfc_user_id,
@@ -1806,7 +1807,7 @@ async def _handle_event_telemetry_update(db, pedestal_id: int, outlet_id: str, r
                 "session_id": session_id,
                 "watts": watts,
                 "kwh_total": kwh_total,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": now_iso(),
             },
         })
 
@@ -1826,7 +1827,7 @@ async def _handle_event_telemetry_update(db, pedestal_id: int, outlet_id: str, r
                     "duration_seconds": duration_seconds,
                     "energy_kwh": kwh_total,
                     "power_kw": round(power_kw, 3),
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": now_iso(),
                 },
             })
 
@@ -1897,7 +1898,7 @@ async def _handle_event_session_ended(db, pedestal_id: int, outlet_id: str, reso
             "socket_id": socket_id,
             "energy_kwh": session.energy_kwh,
             "water_liters": session.water_liters,
-            "ended_at": session.ended_at.isoformat() if session.ended_at else datetime.utcnow().isoformat(),
+            "ended_at": iso_z(session.ended_at) if session.ended_at else now_iso(),
         },
     }, close_after=True)
 
@@ -1953,7 +1954,7 @@ async def _handle_marina_acks(cabinet_id: str, payload: str):
                     "state": "on" if cfg.led_on else "off",
                     "confirmed": ok,
                     "source": "ack",
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": now_iso(),
                 }
     finally:
         db.close()
@@ -1964,7 +1965,7 @@ async def _handle_marina_acks(cabinet_id: str, payload: str):
             "pedestal_id": pedestal_id,
             "cabinet_id": cabinet_id,
             "payload": data,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_iso(),
         },
     })
     if led_event is not None:
@@ -2261,7 +2262,7 @@ async def _handle_opta_breaker_status(socket_name: str, payload: str):
             "breaker_poles": data.get("poles"),
             "breaker_rcd": _coerce_bool(data.get("rcd")),
             "breaker_rcd_sensitivity": data.get("rcdSensitivity"),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_iso(),
         },
     })
 
@@ -2324,7 +2325,7 @@ async def _handle_event_breaker_tripped(
             "current_at_trip": current_at_trip,
             "severity": "HIGH",
             "occurred_at": occurred_at_str,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_iso(),
         },
     })
 
@@ -2541,7 +2542,7 @@ async def _handle_opta_hardware_config(payload: str) -> None:
                 "phases": cfg.phases,
                 "rated_amps": cfg.rated_amps,
                 "modbus_address": cfg.modbus_address,
-                "hw_config_received_at": cfg.hw_config_received_at.isoformat(),
+                "hw_config_received_at": iso_z(cfg.hw_config_received_at),
             })
 
         db.commit()
@@ -2561,7 +2562,7 @@ async def _handle_opta_hardware_config(payload: str) -> None:
             "firmware_version": data.get("firmwareVersion"),
             "sockets": applied_sockets,
             "valves": data.get("valves", []),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_iso(),
         },
     })
 
@@ -2728,7 +2729,7 @@ async def _handle_opta_meter_telemetry(socket_name: str, payload: str) -> None:
                     "phases": cfg.phases,
                     "load_status": "unknown",
                     "current_amps": cfg.meter_current_amps,
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": now_iso(),
                 },
             })
             return
@@ -2895,7 +2896,7 @@ async def _handle_opta_meter_telemetry(socket_name: str, payload: str) -> None:
         "phases": snapshot_phases,
         "meter_type": snapshot_meter_type,
         "load_status": new_status,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": now_iso(),
     }
     if is_three_phase:
         payload_data["current_l1"] = data.get("currentAmpsL1")
@@ -3160,7 +3161,7 @@ async def _handle_socket_power(pedestal_id: int, socket_id: int, payload: str):
                 "session_id": session_id,
                 "watts": watts,
                 "kwh_total": kwh_total,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": now_iso(),
                 "customer_id": customer_id,
             },
         })
@@ -3218,7 +3219,7 @@ async def _handle_water_flow(
                 "lpm": lpm,
                 "total_liters": total_liters,
                 "session_liters": liters_for_session,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": now_iso(),
                 "customer_id": customer_id,
             },
         })
@@ -3264,7 +3265,7 @@ async def _handle_heartbeat(pedestal_id: int, payload: str):
             "data": {
                 "pedestal_id": pedestal_id,
                 "online": data.get("online", True),
-                "timestamp": data.get("timestamp", now.isoformat()),
+                "timestamp": data.get("timestamp", iso_z(now)),
             },
         })
         await ws_manager.broadcast({
@@ -3272,7 +3273,7 @@ async def _handle_heartbeat(pedestal_id: int, payload: str):
             "data": {
                 "pedestal_id": pedestal_id,
                 "opta_connected": True,
-                "last_heartbeat": now.isoformat(),
+                "last_heartbeat": iso_z(now),
             },
         })
     except Exception as e:
@@ -3359,7 +3360,7 @@ async def _handle_temperature(pedestal_id: int, payload: str):
                 "pedestal_id": pedestal_id,
                 "value": round(value, 1),
                 "alarm": alarm,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": now_iso(),
             },
         })
     except (json.JSONDecodeError, KeyError, ValueError) as e:
@@ -3402,7 +3403,7 @@ async def _handle_moisture(pedestal_id: int, payload: str):
                 "pedestal_id": pedestal_id,
                 "value": round(value, 1),
                 "alarm": alarm,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": now_iso(),
             },
         })
     except (json.JSONDecodeError, KeyError, ValueError) as e:

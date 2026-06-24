@@ -31,6 +31,7 @@ from ..models.external_api import ExternalApiConfig
 from ..models.pedestal import Pedestal
 from ..models.pedestal_config import PedestalConfig
 from ..models.socket_config import SocketConfig
+from ..time_utils import iso_z
 from .breakers import (
     broadcast_resetting,
     perform_breaker_reset,
@@ -268,7 +269,7 @@ async def ext_breaker_marina_alarms(marina_id: str, request: Request):
                 "socket_id": s.socket_id,
                 "breaker_state": s.breaker_state,
                 "breaker_trip_cause": s.breaker_trip_cause,
-                "breaker_last_trip_at": s.breaker_last_trip_at.isoformat() if s.breaker_last_trip_at else None,
+                "breaker_last_trip_at": iso_z(s.breaker_last_trip_at),
                 "breaker_trip_count": s.breaker_trip_count or 0,
             }
             for s in sockets

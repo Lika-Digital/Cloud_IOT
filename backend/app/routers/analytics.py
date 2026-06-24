@@ -4,6 +4,7 @@ from sqlalchemy import func
 from ..database import get_db
 from ..models.session import Session
 from ..models.sensor_reading import SensorReading
+from ..time_utils import iso_z
 from datetime import datetime, timedelta
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
@@ -148,7 +149,7 @@ def recent_readings(
             "type": r.type,
             "value": r.value,
             "unit": r.unit,
-            "timestamp": r.timestamp.isoformat(),
+            "timestamp": iso_z(r.timestamp),
         }
         for r in readings
     ]

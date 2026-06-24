@@ -13,6 +13,7 @@ from ..services.invoice_service import create_invoice_for_session
 from ..schemas.session import SessionResponse
 from ..schemas.customer import StartSessionRequest, PedestalStatusResponse
 from ..models.session import Session
+from ..time_utils import iso_z
 
 router = APIRouter(prefix="/api/customer/sessions", tags=["customer-sessions"])
 
@@ -215,7 +216,7 @@ async def start_session(
             "socket_id": session.socket_id,
             "type": session.type,
             "status": "active",
-            "started_at": session.started_at.isoformat(),
+            "started_at": iso_z(session.started_at),
             "customer_id": customer.id,
             "customer_name": customer.name,
         },

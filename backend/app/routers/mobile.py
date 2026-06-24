@@ -32,6 +32,7 @@ from ..auth.customer_models import Customer
 from ..auth.customer_dependencies import require_customer
 from ..auth.dependencies import require_admin
 from ..auth.tokens import create_websocket_token
+from ..time_utils import now_iso, iso_z
 
 
 router = APIRouter(prefix="/api/mobile", tags=["mobile"])
@@ -196,7 +197,7 @@ def qr_claim(
         "pedestal_id": body.pedestal_id,
         "socket_id": body.socket_id,
         "socket_state": socket_state,
-        "session_started_at": active.started_at.isoformat() if active.started_at else None,
+        "session_started_at": iso_z(active.started_at),
         "duration_seconds": metrics["duration_seconds"],
         "energy_kwh": metrics["energy_kwh"],
         "power_kw": metrics["power_kw"],
@@ -230,7 +231,7 @@ def session_live(
         "duration_seconds": metrics["duration_seconds"],
         "energy_kwh": metrics["energy_kwh"],
         "power_kw": metrics["power_kw"],
-        "last_updated_at": datetime.utcnow().isoformat(),
+        "last_updated_at": now_iso(),
     }
 
 

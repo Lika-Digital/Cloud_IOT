@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 
 from ..database import SessionLocal
 from ..models.active_alarm import ActiveAlarm
+from ..time_utils import iso_z
 
 logger = logging.getLogger(__name__)
 
@@ -212,10 +213,10 @@ def _broadcast(alarm: ActiveAlarm, event: str):
                 "status": alarm.status,
                 "severity": getattr(alarm, "severity", None),
                 "message": alarm.message,
-                "triggered_at": alarm.triggered_at.isoformat(),
-                "acknowledged_at": alarm.acknowledged_at.isoformat() if alarm.acknowledged_at else None,
+                "triggered_at": iso_z(alarm.triggered_at),
+                "acknowledged_at": iso_z(alarm.acknowledged_at),
                 "acknowledged_by": alarm.acknowledged_by,
-                "resolved_at": alarm.resolved_at.isoformat() if getattr(alarm, "resolved_at", None) else None,
+                "resolved_at": iso_z(alarm.resolved_at) if getattr(alarm, "resolved_at", None) else None,
             },
         }
         loop: asyncio.AbstractEventLoop | None = None

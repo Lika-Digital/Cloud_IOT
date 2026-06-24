@@ -29,6 +29,7 @@ from ..auth.customer_models import Customer
 from ..auth.dependencies import require_admin, require_any_role, require_control
 from ..auth.customer_dependencies import require_customer
 from ..database import get_db
+from ..time_utils import iso_z, now_iso
 
 router = APIRouter(tags=["berths"])
 
@@ -134,7 +135,7 @@ def _berth_to_out(b: Berth, pedestal_cfg=None, ref_count: int = 0) -> BerthOut:
         berth_type=b.berth_type or "transit",
         status=b.status,
         detected_status=b.detected_status,
-        last_analyzed=b.last_analyzed.isoformat() if b.last_analyzed else None,
+        last_analyzed=iso_z(b.last_analyzed),
         occupied_bit=b.occupied_bit or 0,
         match_ok_bit=b.match_ok_bit or 0,
         state_code=b.state_code or 0,
@@ -147,7 +148,7 @@ def _berth_to_out(b: Berth, pedestal_cfg=None, ref_count: int = 0) -> BerthOut:
         reference_image_count=ref_count,
         sample_embedding_path=getattr(b, "sample_embedding_path", None),
         sample_updated_at=(
-            b.sample_updated_at.isoformat()
+            iso_z(b.sample_updated_at)
             if getattr(b, "sample_updated_at", None) else None
         ),
         zone_x1=getattr(b, "zone_x1", None),
@@ -169,7 +170,7 @@ def _reservation_to_out(r: BerthReservation, berth_name: str) -> ReservationOut:
         check_out_date=r.check_out_date.isoformat(),
         status=r.status,
         notes=r.notes,
-        created_at=r.created_at.isoformat(),
+        created_at=iso_z(r.created_at),
     )
 
 
@@ -668,7 +669,7 @@ async def match_ship(
 
     return {
         "match_score": round(float(match_score), 4),
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": now_iso(),
     }
 
 

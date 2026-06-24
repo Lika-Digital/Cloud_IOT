@@ -19,6 +19,7 @@ from ..services.invoice_service import create_invoice_for_session
 from ..services.audit_service import log_transition
 from ..auth.dependencies import require_control, require_any_role
 from ..auth.models import User
+from ..time_utils import now_iso, iso_z
 
 logger = logging.getLogger(__name__)
 
@@ -410,7 +411,7 @@ async def approve_socket(
             "socket_id": socket_id,
             "type": "electricity",
             "status": "active",
-            "started_at": session.started_at.isoformat(),
+            "started_at": iso_z(session.started_at),
             "customer_id": None,
             "customer_name": None,
         },
@@ -544,7 +545,7 @@ async def set_pedestal_led(
             "on": intended_on,
             "confirmed": not bool(cabinet_id),   # cabinets: confirmed on ACK
             "source": "manual",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_iso(),
         },
     })
     return {"status": "led_set", "pedestal_id": pedestal_id, "color": body.color,
@@ -566,7 +567,7 @@ def get_pedestal_led(
         "pedestal_id": pedestal_id,
         "on": bool(cfg.led_on),
         "pending": bool(cfg.led_pending),
-        "confirmed_at": cfg.led_confirmed_at.isoformat() if cfg.led_confirmed_at else None,
+        "confirmed_at": iso_z(cfg.led_confirmed_at),
     }
 
 

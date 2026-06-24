@@ -29,6 +29,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from ..time_utils import now_iso
+
 logger = logging.getLogger(__name__)
 
 # Module-level dedup. Key: pedestal_id. Value: dict with optional `on` and
@@ -137,7 +139,7 @@ async def _publish_led(
             "color": color,
             "state": state,
             "source": source,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_iso(),
         },
     })
 

@@ -14,14 +14,17 @@ from datetime import datetime, date
 
 from ..database import SessionLocal
 from ..auth.user_database import DATA_DIR
+from ..time_utils import iso_z
 
 logger = logging.getLogger(__name__)
 STATUS_DIR = DATA_DIR / "status"
 
 
 def _safe(v):
-    if isinstance(v, (datetime, date)):
-        return v.isoformat()
+    if isinstance(v, datetime):
+        return iso_z(v)  # explicit-UTC marker so clients convert to local correctly
+    if isinstance(v, date):
+        return v.isoformat()  # date-only: no timezone designator
     return v
 
 

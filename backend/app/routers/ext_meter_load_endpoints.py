@@ -32,6 +32,7 @@ from ..models.pedestal import Pedestal
 from ..models.pedestal_config import PedestalConfig
 from ..models.socket_config import SocketConfig
 from ..services.websocket_manager import ws_manager
+from ..time_utils import now_iso, iso_z
 from .meter_load import perform_auto_stop_acknowledge, serialize_alarm, serialize_load_state
 
 logger = logging.getLogger(__name__)
@@ -289,10 +290,10 @@ async def ext_auto_stop_acknowledge(pedestal_id: int, socket_id: int, request: R
             "socket_id": socket_id,
             "alarm_id": alarm.id if alarm is not None else None,
             "acknowledged_by": "erp-service",
-            "acknowledged_at": (alarm.acknowledged_at.isoformat()
-                                 if alarm is not None and alarm.acknowledged_at else None),
+            "acknowledged_at": (iso_z(alarm.acknowledged_at)
+                                 if alarm is not None else None),
             "load_status": new_status,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_iso(),
         },
     })
 

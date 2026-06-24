@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 
 from ..database import SessionLocal
 from ..models.error_log import ErrorLog
+from ..time_utils import iso_z
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +181,7 @@ def _broadcast_async(entry: ErrorLog):
                 "category": entry.category,
                 "source": entry.source,
                 "message": entry.message,
-                "created_at": entry.created_at.isoformat(),
+                "created_at": iso_z(entry.created_at),
             },
         }
         loop = None

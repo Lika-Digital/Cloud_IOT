@@ -28,6 +28,7 @@ from ..models.pedestal_config import PedestalConfig
 from ..services.session_service import session_service
 from ..services import nfc_service
 from ..services.nfc_service import DuplicateNfcTagError
+from ..time_utils import iso_z
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +133,7 @@ def _tag_out(tag) -> dict:
         "nfc_tag_id": tag.nfc_tag_id,
         "cabinet_id": tag.cabinet_id,
         "socket_id": tag.socket_id,
-        "provisioned_at": tag.provisioned_at.isoformat() if tag.provisioned_at else None,
+        "provisioned_at": iso_z(tag.provisioned_at),
         "provisioned_by": tag.provisioned_by,
         "is_active": tag.is_active,
     }
@@ -237,7 +238,7 @@ def nfc_scan(body: NfcScanBody, db: DBSession = Depends(get_db),
 
     rec = nfc_service.create_pending(db, body.nfc_tag_id, body.user_id, cabinet_id, socket_id)
     logger.info("[NFC] scan pre-registered user=%s cabinet=%s socket=%s expires=%s",
-                body.user_id, cabinet_id, socket_id, rec.expires_at.isoformat())
+                body.user_id, cabinet_id, socket_id, iso_z(rec.expires_at))
 
     return {
         "status": "pending",
@@ -245,7 +246,7 @@ def nfc_scan(body: NfcScanBody, db: DBSession = Depends(get_db),
         "cabinet_id": cabinet_id,
         "socket_id": socket_id,
         "berth_id": getattr(cfg, "berth_ref", None),
-        "expires_at": rec.expires_at.isoformat(),
+        "expires_at": iso_z(rec.expires_at),
     }
 
 

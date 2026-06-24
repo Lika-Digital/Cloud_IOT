@@ -12,6 +12,7 @@ from ..auth.dependencies import require_any_role, require_control
 from ..auth.models import User
 from ..services.websocket_manager import ws_manager
 from ..schemas.customer import ChatMessageResponse, SendMessageRequest, OperatorReplyRequest
+from ..time_utils import iso_z
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -56,7 +57,7 @@ async def send_message(
             "customer_id": customer.id,
             "message": body.message,
             "direction": "from_customer",
-            "created_at": msg.created_at.isoformat(),
+            "created_at": iso_z(msg.created_at),
         },
     })
     return msg
@@ -89,7 +90,7 @@ async def operator_reply(
             "customer_id": customer_id,
             "message": body.message,
             "direction": "from_operator",
-            "created_at": msg.created_at.isoformat(),
+            "created_at": iso_z(msg.created_at),
         },
     })
     return msg

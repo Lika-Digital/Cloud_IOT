@@ -20,6 +20,8 @@ import shutil
 import sys
 from datetime import datetime
 
+from ..time_utils import now_iso
+
 logger = logging.getLogger(__name__)
 
 # ─── Base directory ────────────────────────────────────────────────────────────
@@ -120,7 +122,7 @@ def save_crop(
     meta = {
         "berth_id":  berth_id,
         "camera_id": camera_id,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": now_iso(),
         "result":    result,
         "confidence": round(float(confidence), 4),
         "rect":      rect,

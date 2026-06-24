@@ -17,6 +17,7 @@ from ..auth.dependencies import require_admin, require_any_role, require_control
 from ..auth.user_database import UserSessionLocal
 from ..models.pedestal_config import PedestalConfig, PedestalSensor
 from ..models.pedestal import Pedestal
+from ..time_utils import iso_z
 
 router = APIRouter(tags=["pedestal-config"])
 logger = logging.getLogger(__name__)
@@ -95,12 +96,12 @@ def _config_to_dict(cfg: PedestalConfig, pedestal=None) -> dict:
         "temp_sensor_port": cfg.temp_sensor_port,
         "temp_sensor_protocol": cfg.temp_sensor_protocol,
         "opta_connected": bool(cfg.opta_connected),
-        "last_heartbeat": cfg.last_heartbeat.isoformat() if cfg.last_heartbeat else None,
+        "last_heartbeat": iso_z(cfg.last_heartbeat),
         "camera_reachable": bool(cfg.camera_reachable),
-        "last_camera_check": cfg.last_camera_check.isoformat() if cfg.last_camera_check else None,
+        "last_camera_check": iso_z(cfg.last_camera_check),
         "temp_sensor_reachable": bool(cfg.temp_sensor_reachable),
-        "last_temp_sensor_check": cfg.last_temp_sensor_check.isoformat() if cfg.last_temp_sensor_check else None,
-        "updated_at": cfg.updated_at.isoformat() if cfg.updated_at else None,
+        "last_temp_sensor_check": iso_z(cfg.last_temp_sensor_check),
+        "updated_at": iso_z(cfg.updated_at),
     }
 
 
@@ -116,7 +117,7 @@ def _sensor_to_dict(s: PedestalSensor) -> dict:
         "max_alarm": s.max_alarm,
         "is_active": s.is_active,
         "source": s.source,
-        "created_at": s.created_at.isoformat() if s.created_at else None,
+        "created_at": iso_z(s.created_at),
     }
 
 
@@ -405,11 +406,11 @@ def get_health(
             "opta_connected": bool(cfg.opta_connected),
             "opta_client_id": cfg.opta_client_id,  # v3.7 — needed by QR UI
             "smart_mode": bool(cfg.smart_mode),     # v3.28 — firmware SmartMode
-            "last_heartbeat": cfg.last_heartbeat.isoformat() if cfg.last_heartbeat else None,
+            "last_heartbeat": iso_z(cfg.last_heartbeat),
             "camera_reachable": bool(cfg.camera_reachable),
-            "last_camera_check": cfg.last_camera_check.isoformat() if cfg.last_camera_check else None,
+            "last_camera_check": iso_z(cfg.last_camera_check),
             "temp_sensor_reachable": bool(cfg.temp_sensor_reachable),
-            "last_temp_sensor_check": cfg.last_temp_sensor_check.isoformat() if cfg.last_temp_sensor_check else None,
+            "last_temp_sensor_check": iso_z(cfg.last_temp_sensor_check),
         }
 
     # Ext endpoint enable status (global — same value across all pedestals)
@@ -622,7 +623,7 @@ def get_auto_activate_log(pedestal_id: int, socket_id: int, db: Session = Depend
     return [
         {
             "id": r.id,
-            "timestamp": r.timestamp.isoformat(),
+            "timestamp": iso_z(r.timestamp),
             "result": r.result,
             "reason": r.reason,
             "session_id": r.session_id,
@@ -683,7 +684,7 @@ def _serialize_schedule(s) -> dict:
         "off_time": s.off_time,
         "color": s.color,
         "days_of_week": s.days_of_week,
-        "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+        "updated_at": iso_z(s.updated_at),
     }
 
 

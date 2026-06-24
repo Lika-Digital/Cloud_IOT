@@ -29,6 +29,7 @@ from ..models.meter_load_alarm import MeterLoadAlarm
 from ..models.pedestal import Pedestal
 from ..models.socket_config import SocketConfig
 from ..services.websocket_manager import ws_manager
+from ..time_utils import now_iso, iso_z
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/pedestals", tags=["meter-load"])
@@ -77,7 +78,7 @@ def serialize_load_state(cfg: SocketConfig, db: DBSession | None = None) -> dict
         "phases": cfg.phases,
         "rated_amps": cfg.rated_amps,
         "modbus_address": cfg.modbus_address,
-        "hw_config_received_at": cfg.hw_config_received_at.isoformat() if cfg.hw_config_received_at else None,
+        "hw_config_received_at": iso_z(cfg.hw_config_received_at),
         "current_amps": cfg.meter_current_amps,
         "voltage_v": cfg.meter_voltage_v,
         "power_kw": cfg.meter_power_kw,
@@ -87,7 +88,7 @@ def serialize_load_state(cfg: SocketConfig, db: DBSession | None = None) -> dict
         "frequency_hz": cfg.meter_frequency_hz,
         "load_pct": cfg.meter_load_pct,
         "load_status": cfg.meter_load_status or "unknown",
-        "meter_load_updated_at": cfg.meter_load_updated_at.isoformat() if cfg.meter_load_updated_at else None,
+        "meter_load_updated_at": iso_z(cfg.meter_load_updated_at),
         "warning_threshold_pct": cfg.load_warning_threshold_pct,
         "critical_threshold_pct": cfg.load_critical_threshold_pct,
     }
@@ -117,11 +118,11 @@ def serialize_alarm(a: MeterLoadAlarm) -> dict:
         "load_pct": a.load_pct,
         "phases": a.phases,
         "meter_type": a.meter_type,
-        "triggered_at": a.triggered_at.isoformat() if a.triggered_at else None,
-        "resolved_at": a.resolved_at.isoformat() if a.resolved_at else None,
+        "triggered_at": iso_z(a.triggered_at),
+        "resolved_at": iso_z(a.resolved_at),
         "resolved_by": a.resolved_by,
         "acknowledged": bool(a.acknowledged),
-        "acknowledged_at": a.acknowledged_at.isoformat() if a.acknowledged_at else None,
+        "acknowledged_at": iso_z(a.acknowledged_at),
         "acknowledged_by": a.acknowledged_by,
     }
 
@@ -376,10 +377,10 @@ async def acknowledge_auto_stop(
             "socket_id": socket_id,
             "alarm_id": alarm.id if alarm is not None else None,
             "acknowledged_by": user.email,
-            "acknowledged_at": (alarm.acknowledged_at.isoformat()
-                                 if alarm is not None and alarm.acknowledged_at else None),
+            "acknowledged_at": (iso_z(alarm.acknowledged_at)
+                                 if alarm is not None else None),
             "load_status": new_status,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_iso(),
         },
     })
 

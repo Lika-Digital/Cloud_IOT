@@ -10,6 +10,7 @@ from ..auth.models import User, SmtpConfig
 from ..auth.schemas import SmtpConfigUpdate
 from ..config import settings
 from ..database import get_db
+from ..time_utils import iso_z
 
 router = APIRouter(prefix="/api/admin/settings", tags=["admin-settings"])
 
@@ -161,7 +162,7 @@ def get_active_pedestals(
             "id": p.id,
             "name": p.name,
             "connected": bool(cfg and cfg.opta_connected),
-            "last_heartbeat": cfg.last_heartbeat.isoformat() if cfg and cfg.last_heartbeat else None,
+            "last_heartbeat": iso_z(cfg.last_heartbeat) if cfg else None,
         })
 
     return {

@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 
 from ..models.nfc_tag import NfcTag
 from ..models.nfc_pending_session import NfcPendingSession
+from ..time_utils import iso_z
 
 PENDING_TTL_MINUTES = 5
 
@@ -227,7 +228,7 @@ def build_session_payload(db, user_db, session) -> dict:
         "socket_id": f"Q{session.socket_id}" if session.socket_id is not None else None,
         "customer_id": session.nfc_user_id,
         "status": "active" if is_active else "ended",
-        "activated_at": session.started_at.isoformat() if session.started_at else None,
+        "activated_at": iso_z(session.started_at),
         "duration_minutes": duration_minutes,
         "energy_kwh": energy_kwh,
         "power_kw_current": round(power_kw_current, 3),

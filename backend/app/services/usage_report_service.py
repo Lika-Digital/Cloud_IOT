@@ -26,6 +26,7 @@ from pathlib import Path
 
 from ..config import settings
 from ..database import SessionLocal
+from ..time_utils import iso_z
 from ..models.session import Session as SessionModel
 from ..models.pedestal import Pedestal
 from ..models.pedestal_config import PedestalConfig
@@ -128,8 +129,8 @@ def usage_rows(
             "session_id": s.id,
             "socket_id": s.socket_id,
             "type": s.type,
-            "started_at": s.started_at.isoformat() if s.started_at else None,
-            "ended_at": s.ended_at.isoformat() if s.ended_at else None,
+            "started_at": iso_z(s.started_at),
+            "ended_at": iso_z(s.ended_at),
             "energy_kwh": s.energy_kwh,
             "water_liters": s.water_liters,
             "customer_id": s.customer_id,

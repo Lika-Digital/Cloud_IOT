@@ -67,5 +67,8 @@ SQL_INJECTION_PATTERNS: list[re.Pattern] = [
     re.compile(r"exec(\s|\+)+(s|x)p\w+",                                  re.IGNORECASE),
     re.compile(r"<script[\s>]",                                            re.IGNORECASE),
     re.compile(r"javascript\s*:",                                          re.IGNORECASE),
-    re.compile(r"on\w+\s*=",                                               re.IGNORECASE),
+    # \b anchor so this matches real event-handler attributes (onclick=, onerror=)
+    # but NOT "on" embedded in a legit word — e.g. the &month=YYYY-MM query param,
+    # whose "m​onth=" substring otherwise flagged every usage-history view.
+    re.compile(r"\bon\w+\s*=",                                             re.IGNORECASE),
 ]

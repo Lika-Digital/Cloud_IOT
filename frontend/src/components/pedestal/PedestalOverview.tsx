@@ -49,7 +49,7 @@ export default function PedestalOverview({ pedestalId }: { pedestalId: number })
   const doorState = marinaDoorState[pedestalId]
   const smartMode = statusInfo?.smart_mode ?? health?.smart_mode ?? false
 
-  const [usage, setUsage] = useState<{ sid: number; label: string } | null>(null)
+  const [usage, setUsage] = useState<{ sid: number; label: string; resource: 'electricity' | 'water' } | null>(null)
   const [alarms, setAlarms] = useState<{ sid: number; label: string } | null>(null)
 
   return (
@@ -98,7 +98,7 @@ export default function PedestalOverview({ pedestalId }: { pedestalId: number })
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-gray-100">🔌 Socket {sid}</span>
                   <div className="flex items-center gap-1.5">
-                    <button type="button" onClick={() => setUsage({ sid, label: name })}
+                    <button type="button" onClick={() => setUsage({ sid, label: name, resource: 'electricity' })}
                       className="text-[10px] px-1.5 py-0.5 rounded border border-gray-600 text-gray-300 hover:bg-gray-700/60"
                       title="Usage history + monthly report">Usage</button>
                     <button type="button" onClick={() => setAlarms({ sid, label: name })}
@@ -120,13 +120,19 @@ export default function PedestalOverview({ pedestalId }: { pedestalId: number })
         <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">Water Valves</p>
         <div className="grid grid-cols-2 gap-2">
           {VALVES.map((name) => {
+            const vid = Number(name.replace('V', ''))
             const vs = optaWaterStates[`${pedestalId}-${name}`]
             const state = vs?.state ?? 'idle'
             return (
               <div key={name} className="rounded-lg border border-gray-700 bg-gray-800/40 p-3 space-y-1">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-gray-100">💧 Valve {name}</span>
-                  <StateBadge state={state} />
+                  <div className="flex items-center gap-1.5">
+                    <button type="button" onClick={() => setUsage({ sid: vid, label: name, resource: 'water' })}
+                      className="text-[10px] px-1.5 py-0.5 rounded border border-gray-600 text-gray-300 hover:bg-gray-700/60"
+                      title="Water usage history + monthly report">Usage</button>
+                    <StateBadge state={state} />
+                  </div>
                 </div>
                 {vs ? (
                   <div className="text-xs text-gray-500 space-y-0.5">
@@ -147,7 +153,7 @@ export default function PedestalOverview({ pedestalId }: { pedestalId: number })
 
       {usage && (
         <SocketUsageHistoryModal
-          pedestalId={pedestalId} socketId={usage.sid} resource="electricity"
+          pedestalId={pedestalId} socketId={usage.sid} resource={usage.resource}
           label={usage.label} isAdmin={isAdmin} onClose={() => setUsage(null)}
         />
       )}

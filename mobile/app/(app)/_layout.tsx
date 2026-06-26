@@ -36,6 +36,10 @@ export default function AppLayout() {
         options={{ title: 'Home', tabBarIcon: () => <Text style={{ fontSize: 20 }}>🏠</Text> }}
       />
       <Tabs.Screen
+        name="scan"
+        options={{ title: 'Scan', tabBarIcon: () => <Text style={{ fontSize: 20 }}>📡</Text> }}
+      />
+      <Tabs.Screen
         name="history"
         options={{ title: 'History', tabBarIcon: () => <Text style={{ fontSize: 20 }}>📋</Text> }}
       />

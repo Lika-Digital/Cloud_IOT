@@ -28,10 +28,35 @@ export function useWebSocket(
 
     function handleMessage(msg: { event: string; data: Record<string, unknown> }) {
       // Read FRESH state every time — avoids stale closure on activeSession
-      const { activeSession, setActiveSession, updateLivePower, updateLiveWater, clearLive } =
+      const { activeSession, setActiveSession, updateLivePower, updateLiveWater, clearLive,
+              nfcPending, setNfcPending } =
         useSessionStore.getState()
 
       switch (msg.event) {
+        case 'session_created': {
+          // NFC flow: after our /api/nfc/scan, the socket activates on plug-in and
+          // the backend broadcasts session_created with our nfc_user_id. Adopt it
+          // so the Scan screen flips to "active" and live power_reading flows in.
+          if (!nfcPending) break
+          const nfcUser = (msg.data.nfc_user_id as string | null) ?? null
+          const sock = (msg.data.socket_id as number | null) ?? null
+          const userMatches = nfcUser != null && nfcUser === nfcPending.user_id
+          const socketMatches = nfcPending.socketNum == null || sock === nfcPending.socketNum
+          if (userMatches && socketMatches) {
+            setActiveSession({
+              id: msg.data.session_id as number,
+              pedestal_id: msg.data.pedestal_id as number,
+              socket_id: sock,
+              type: ((msg.data.type as string) === 'water' ? 'water' : 'electricity'),
+              status: 'active',
+              started_at: msg.data.started_at as string,
+              customer_id: null,
+            })
+            clearLive()
+            setNfcPending(null)
+          }
+          break
+        }
         case 'session_updated': {
           if (!activeSession || msg.data.session_id !== activeSession.id) break
           const status = msg.data.status as string

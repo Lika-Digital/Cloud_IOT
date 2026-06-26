@@ -14,20 +14,33 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NFCReaderUsageDescription": "Marina IoT reads the NFC tag on a pedestal socket to start your charging session."
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
-      }
+      },
+      "permissions": [
+        "android.permission.NFC"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png",
       "bundler": "metro"
     },
     "plugins": [
-      "expo-video"
+      "expo-video",
+      [
+        "react-native-nfc-manager",
+        {
+          "nfcPermission": "Marina IoT reads the NFC tag on a pedestal socket to start your charging session.",
+          "includeNdefEntitlement": true
+        }
+      ]
     ]
   }
 }

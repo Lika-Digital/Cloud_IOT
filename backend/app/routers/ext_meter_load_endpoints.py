@@ -117,7 +117,7 @@ async def ext_pedestal_load(pedestal_id: int, request: Request):
         ).order_by(SocketConfig.socket_id).all()
         return JSONResponse({
             "pedestal_id": pedestal_id,
-            "sockets": [serialize_load_state(r) for r in rows],
+            "sockets": [serialize_load_state(r, db) for r in rows],
         })
     finally:
         db.close()
@@ -143,7 +143,7 @@ async def ext_socket_load(pedestal_id: int, socket_id: int, request: Request):
         ).first()
         if cfg is None:
             return JSONResponse({"detail": "Socket not found on this pedestal"}, status_code=404)
-        return JSONResponse(serialize_load_state(cfg))
+        return JSONResponse(serialize_load_state(cfg, db))
     finally:
         db.close()
 

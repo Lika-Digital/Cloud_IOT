@@ -36,6 +36,8 @@ _EP_BERTHS_OCC = "berths.occupancy_ext"
 _EP_CAM_FRAME  = "camera.frame_ext"
 _EP_CAM_STREAM = "camera.stream_ext"
 _EP_PUSH_IMAGE = "berths.push_image_ext"   # v3.16 — ERP pushes a match image
+_EP_STATUS     = "pedestals.status_ext"    # env/cabinet status (temp, moisture, door)
+_EP_WATER      = "water.status_ext"        # live-ish water valve totals
 
 
 # ── Auth + config helpers ─────────────────────────────────────────────────────
@@ -252,6 +254,127 @@ async def ext_push_berth_image(pedestal_id: str, berth_id: int, request: Request
     except Exception as e:
         return JSONResponse({"detail": f"Failed to store image: {e}"}, status_code=500)
     return JSONResponse({"ok": True, "berth_id": berth_id, "stored": fname})
+
+
+# ── 1c. Environmental / cabinet status (v3.x) ─────────────────────────────────
+
+@router.get("/api/ext/pedestals/{pedestal_id}/status")
+async def ext_pedestal_status(pedestal_id: str, request: Request):
+    """Environmental + cabinet status the dashboard shows: temperature and
+    moisture (latest value + alarm), cabinet door state, and opta link health.
+
+    Values come from the latest persisted SensorReading / PedestalConfig — this
+    is a read-only mirror of the dashboard, no control. Live cabinet uptime/seq
+    are delivered separately via the `opta_status` webhook event.
+
+      200 { pedestal_id, temperature{...}, moisture{...}, door_state, ... }
+      404 pedestal not found · 503 disabled
+    """
+    _, err = _check_ext_auth(request)
+    if err:
+        return err
+    if not _endpoint_enabled(_EP_STATUS):
+        return JSONResponse({"error": "Feature not available", "reason": "Not enabled"}, status_code=503)
+
+    db_id, display_id = _resolve_pedestal(pedestal_id)
+    if db_id is None:
+        return JSONResponse({"detail": "Pedestal not found"}, status_code=404)
+
+    from ..models.sensor_reading import SensorReading
+    from ..models.pedestal_config import PedestalConfig
+
+    db = SessionLocal()
+    try:
+        def _latest(stype):
+            return (
+                db.query(SensorReading)
+                .filter(SensorReading.pedestal_id == db_id, SensorReading.type == stype)
+                .order_by(SensorReading.timestamp.desc())
+                .first()
+            )
+        t = _latest("temperature")
+        m = _latest("moisture")
+        cfg = db.query(PedestalConfig).filter(PedestalConfig.pedestal_id == db_id).first()
+        t_val = t.value if t else None
+        m_val = m.value if m else None
+        return JSONResponse({
+            "pedestal_id": display_id,
+            "temperature": {
+                "value": t_val,
+                "unit": (t.unit if t else "°C"),
+                "alarm": (t_val is not None and t_val > 50),   # >50°C, matches _handle_temperature
+                "updated_at": (iso_z(t.timestamp) if t else None),
+            },
+            "moisture": {
+                "value": m_val,
+                "unit": (m.unit if m else "%"),
+                "alarm": (m_val is not None and m_val > 90),    # >90%, matches _handle_moisture
+                "updated_at": (iso_z(m.timestamp) if m else None),
+            },
+            "door_state": (cfg.door_state if cfg else "unknown"),
+            "opta_connected": (bool(cfg.opta_connected) if cfg else False),
+            "status": (cfg.status if cfg else None),
+            "last_heartbeat": (iso_z(cfg.last_heartbeat) if cfg else None),
+        })
+    finally:
+        db.close()
+
+
+# ── 1d. Live water-valve totals (v3.x) ────────────────────────────────────────
+
+@router.get("/api/ext/pedestals/{pedestal_id}/water")
+async def ext_pedestal_water(pedestal_id: str, request: Request):
+    """Per-valve water totals the dashboard shows: cumulative litres (`total_l`)
+    and current session litres (`session_l`) for valves 1 and 2, from the latest
+    persisted readings. Live valve `state`/`hw_status` are delivered via the
+    `opta_water_status` webhook event (not persisted for pull).
+
+      200 { pedestal_id, valves: [{valve_id, total_l, session_l, updated_at}] }
+      404 pedestal not found · 503 disabled
+    """
+    _, err = _check_ext_auth(request)
+    if err:
+        return err
+    if not _endpoint_enabled(_EP_WATER):
+        return JSONResponse({"error": "Feature not available", "reason": "Not enabled"}, status_code=503)
+
+    db_id, display_id = _resolve_pedestal(pedestal_id)
+    if db_id is None:
+        return JSONResponse({"detail": "Pedestal not found"}, status_code=404)
+
+    from ..models.sensor_reading import SensorReading
+
+    db = SessionLocal()
+    try:
+        def _latest(valve_id, stype):
+            return (
+                db.query(SensorReading)
+                .filter(
+                    SensorReading.pedestal_id == db_id,
+                    SensorReading.socket_id == valve_id,
+                    SensorReading.type == stype,
+                )
+                .order_by(SensorReading.timestamp.desc())
+                .first()
+            )
+        valves = []
+        for vid in (1, 2):   # matches the fixed 2-valve model (valves.config_list)
+            tot = _latest(vid, "total_liters")
+            ses = _latest(vid, "lpm")   # session flow proxy, see _handle_opta_water_status
+            stamps = [r.timestamp for r in (tot, ses) if r]
+            valves.append({
+                "valve_id": vid,
+                "total_l": (tot.value if tot else None),
+                "session_l": (ses.value if ses else None),
+                "updated_at": (iso_z(max(stamps)) if stamps else None),
+            })
+        return JSONResponse({
+            "pedestal_id": display_id,
+            "valves": valves,
+            "note": "Live valve state/hw_status arrive via the opta_water_status webhook event.",
+        })
+    finally:
+        db.close()
 
 
 # ── 2. Camera frame ───────────────────────────────────────────────────────────

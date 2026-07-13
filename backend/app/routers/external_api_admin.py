@@ -6,6 +6,7 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException
@@ -29,7 +30,9 @@ router = APIRouter(prefix="/api/admin/ext-api", tags=["ext-api-admin"])
 
 class EndpointEntry(BaseModel):
     id: str
-    mode: str  # "monitor" | "bidirectional"
+    # Fail closed: only these two values are accepted; a typo is rejected at
+    # write time (422) rather than silently permitting writes at the gateway.
+    mode: Literal["monitor", "bidirectional"] = "monitor"
 
 
 class UpdateConfigRequest(BaseModel):
@@ -150,6 +153,19 @@ def update_config(
 ):
     """Upsert endpoint/event/webhook config. Resets verified=False on any change."""
     from ..services.webhook_service import invalidate_cache
+
+    # Fail-closed validation: reject unknown endpoint ids and any attempt to set
+    # a catalog-designated read-only endpoint to "bidirectional".
+    _catalog = {e["id"]: e for e in ENDPOINT_CATALOG}
+    for e in body.allowed_endpoints:
+        cat = _catalog.get(e.id)
+        if cat is None:
+            raise HTTPException(status_code=400, detail=f"Unknown endpoint id: {e.id}")
+        if e.mode == "bidirectional" and not cat.get("allow_bidirectional"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Endpoint '{e.id}' is read-only and cannot be set to bidirectional",
+            )
 
     cfg = _get_or_create_config(db)
     cfg.allowed_endpoints    = json.dumps([e.model_dump() for e in body.allowed_endpoints])

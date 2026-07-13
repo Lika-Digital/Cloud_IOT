@@ -179,6 +179,19 @@ async def ext_breaker_reset(pedestal_id: int, socket_id: int, request: Request):
 
     db = SessionLocal()
     try:
+        # Smart-Mode gate: breaker reset is a physical control action, so refuse
+        # it over the API while the pedestal is in standalone (Smart Mode OFF) —
+        # consistent with the gateway control gate and controls._require_smart_mode.
+        from ..models.pedestal_config import PedestalConfig
+        _pc = db.query(PedestalConfig).filter(
+            PedestalConfig.pedestal_id == pedestal_id
+        ).first()
+        if _pc is None or not _pc.smart_mode:
+            return JSONResponse(
+                {"detail": "Smart Mode is OFF on this pedestal — breaker reset is "
+                           "disabled while the cabinet is in standalone control."},
+                status_code=409,
+            )
         try:
             perform_breaker_reset(db, pedestal_id, socket_id, initiated_by="erp-service")
         except Exception as e:

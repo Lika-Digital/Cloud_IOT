@@ -8,6 +8,7 @@ Proxy: httpx self-proxy to http://127.0.0.1:{port}/api/{path} using a short-live
 import hmac
 import json
 import logging
+import os
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -17,11 +18,22 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
 from ..config import settings
+from ..ratelimit import limiter
 from ..services.api_catalog import ENDPOINT_CATALOG
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["ext-api-gateway"])
+
+# Max request body accepted from an external caller — protects worker memory
+# from an oversized/malicious upload. Tune via EXT_API_MAX_BODY_BYTES (bytes).
+_MAX_BODY_BYTES = int(os.environ.get("EXT_API_MAX_BODY_BYTES", str(1 * 1024 * 1024)))
+
+# Per-IP rate limit for the gateway. The ERP is a single IP polling the whole
+# marina, so keep this generous and tune to its polling volume via
+# EXT_API_RATE_LIMIT. Only enforced when the limiter is enabled
+# (production / RATE_LIMIT_ENABLED) — see app/ratelimit.py.
+_EXT_RATE_LIMIT = os.environ.get("EXT_API_RATE_LIMIT", "1200/minute")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -86,13 +98,100 @@ def _path_matches(incoming: str, catalog_path: str) -> bool:
     return bool(re.fullmatch(pattern, incoming))
 
 
+def _extract_placeholders(incoming: str, catalog_path: str) -> dict[str, str]:
+    """Pull {name}->value from an incoming path using its catalog pattern.
+
+    e.g. ("/api/controls/5/allow", "/api/controls/{id}/allow") -> {"id": "5"}.
+    """
+    names = re.findall(r"\{([^}]+)\}", catalog_path)
+    parts = re.split(r"\{[^}]+\}", catalog_path)
+    pattern = "([^/]+)".join(re.escape(p) for p in parts)
+    m = re.fullmatch(pattern, incoming)
+    if not m:
+        return {}
+    return dict(zip(names, m.groups()))
+
+
+# For each bidirectional CONTROL endpoint, how to find the target pedestal so we
+# can enforce the Smart-Mode gate (Smart Mode OFF => API is view-only). Endpoints
+# deliberately NOT listed (alarms.acknowledge, mobile.qr_claim,
+# qr.pedestal_regenerate) are metadata writes, not physical pedestal actuation,
+# and are allowed to pass. Direct ext_* control routers (breaker reset, etc.) are
+# not proxied here and enforce the gate in their own handlers.
+_CONTROL_PEDESTAL_RESOLVER: dict[str, tuple[str, str]] = {
+    "controls.allow":          ("session", "id"),      # {id} is a session_id
+    "controls.deny":           ("session", "id"),
+    "controls.stop":           ("session", "id"),
+    "controls.socket_approve": ("path", "pedestal_id"),
+    "controls.socket_reject":  ("path", "pedestal_id"),
+    "controls.socket_cmd":     ("path", "pedestal_id"),
+    "controls.water_cmd":      ("path", "pedestal_id"),
+    "controls.reset":          ("path", "id"),          # {id} is a pedestal_id
+    "controls.led":            ("path", "id"),
+    "diagnostics.run":         ("path", "id"),
+    "sockets.config_patch":    ("path", "pedestal_id"),
+    "valves.config_patch":     ("path", "pedestal_id"),
+    "led_schedule.upsert":     ("path", "pedestal_id"),
+    "led_schedule.delete":     ("path", "pedestal_id"),
+    "led_schedule.test":       ("path", "pedestal_id"),
+}
+
+
+def _resolve_control_pedestal(ep_id: str, placeholders: dict, db) -> int | None:
+    """Best-effort resolution of the pedestal a control call targets.
+
+    Returns None when the endpoint is not a gated control or the pedestal cannot
+    be determined — callers treat None as 'do not block'.
+    """
+    spec = _CONTROL_PEDESTAL_RESOLVER.get(ep_id)
+    if not spec:
+        return None
+    kind, key = spec
+    raw = placeholders.get(key)
+    try:
+        ident = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if kind == "path":
+        return ident
+    if kind == "session":
+        from ..models.session import Session as SessionModel
+        row = db.get(SessionModel, ident)
+        return row.pedestal_id if row is not None else None
+    return None
+
+
+def _smart_mode_off(db, pedestal_id: int) -> bool:
+    """True when the pedestal is in standalone (Smart Mode OFF) — mirrors
+    controls._require_smart_mode so the API matches the dashboard's control gate."""
+    from ..models.pedestal_config import PedestalConfig
+    cfg = db.query(PedestalConfig).filter(
+        PedestalConfig.pedestal_id == pedestal_id
+    ).first()
+    return cfg is None or not cfg.smart_mode
+
+
 # ── Gateway route ─────────────────────────────────────────────────────────────
 
 @router.api_route(
     "/api/ext/{path:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
 )
+@limiter.limit(_EXT_RATE_LIMIT)
 async def gateway(request: Request, path: str) -> Response:
+    # 0. Reject oversized bodies up front, before we read them into memory.
+    clen = request.headers.get("content-length")
+    if clen is not None:
+        try:
+            if int(clen) > _MAX_BODY_BYTES:
+                return Response(
+                    content=json.dumps({"detail": "Request body too large"}),
+                    status_code=413,
+                    media_type="application/json",
+                )
+        except ValueError:
+            pass
+
     # 1. Extract and validate external API bearer token
     token = _extract_bearer(request)
     if not token:
@@ -168,13 +267,43 @@ async def gateway(request: Request, path: str) -> Response:
             media_type="application/json",
         )
 
-    # 5. Mode check: monitor mode only allows GET
-    if matched_mode == "monitor" and request.method.upper() != "GET":
-        return Response(
-            content=json.dumps({"detail": "Endpoint is in monitor mode — only GET allowed"}),
-            status_code=403,
-            media_type="application/json",
-        )
+    # 5. Mode check — fail closed. A write (non-GET) is honoured ONLY when the
+    # operator explicitly set this endpoint to "bidirectional" AND the catalog
+    # permits it. Any other mode value (typo, legacy, empty) is treated as
+    # read-only, so a misconfiguration denies the write instead of allowing it.
+    if request.method.upper() != "GET":
+        writable = matched_mode == "bidirectional" and bool(matched_ep.get("allow_bidirectional"))
+        if not writable:
+            return Response(
+                content=json.dumps({"detail": "Endpoint is read-only (monitor mode) — only GET allowed"}),
+                status_code=403,
+                media_type="application/json",
+            )
+
+    # 5b. Smart-Mode gate: a control (write) action is only honoured when the
+    # target pedestal has Smart Mode ON. When OFF the cabinet is in standalone
+    # control (the Opta ignores NUC commands), so the API is view-only. GET
+    # (view) requests always pass; unresolved-pedestal writes also pass.
+    if matched_ep.get("allow_bidirectional") and request.method.upper() != "GET":
+        from ..database import SessionLocal as _SmSessionLocal
+        _sm_db = _SmSessionLocal()
+        try:
+            ped_id = _resolve_control_pedestal(
+                matched_ep["id"],
+                _extract_placeholders(internal_path, matched_ep["path"]),
+                _sm_db,
+            )
+            if ped_id is not None and _smart_mode_off(_sm_db, ped_id):
+                return Response(
+                    content=json.dumps({
+                        "detail": "Smart Mode is OFF on this pedestal — the API is "
+                                  "view-only while the cabinet is in standalone control.",
+                    }),
+                    status_code=409,
+                    media_type="application/json",
+                )
+        finally:
+            _sm_db.close()
 
     # 6. Generate short-lived internal admin JWT
     internal_token = _make_internal_admin_jwt()
@@ -193,6 +322,12 @@ async def gateway(request: Request, path: str) -> Response:
         target_url = f"{target_url}?{query}"
 
     body = await request.body()
+    if len(body) > _MAX_BODY_BYTES:
+        return Response(
+            content=json.dumps({"detail": "Request body too large"}),
+            status_code=413,
+            media_type="application/json",
+        )
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:

@@ -97,6 +97,18 @@ def _pedestal_id_for_cabinet() -> int:
         db.close()
 
 
+def _set_smart_mode(pedestal_id: int, on: bool) -> None:
+    from app.models.pedestal_config import PedestalConfig
+    db = _TestSession()
+    try:
+        cfg = db.query(PedestalConfig).filter_by(pedestal_id=pedestal_id).first()
+        if cfg is not None:
+            cfg.smart_mode = on
+            db.commit()
+    finally:
+        db.close()
+
+
 def _seed_socket_config(pedestal_id: int, socket_id: int, **kwargs) -> None:
     from app.models.socket_config import SocketConfig
     db = _TestSession()
@@ -433,6 +445,7 @@ def test_erp_reset_rejects_when_not_tripped(client):
 def test_erp_reset_publishes_and_writes_audit(client):
     pid = _trip_socket(2)
     _enable_ext_endpoints(["breakers.socket_reset_ext"])
+    _set_smart_mode(pid, True)   # breaker reset is a control action — requires Smart Mode ON
 
     published = []
 
@@ -475,6 +488,19 @@ def test_erp_reset_publishes_and_writes_audit(client):
         assert rows, "Expected erp-service audit row"
     finally:
         db.close()
+
+
+def test_erp_reset_blocked_when_smart_mode_off(client):
+    """Smart Mode OFF => the API is view-only, so ERP breaker reset is refused."""
+    pid = _trip_socket(2)
+    _enable_ext_endpoints(["breakers.socket_reset_ext"])
+    _set_smart_mode(pid, False)
+    r = client.post(
+        f"/api/ext/pedestals/{pid}/sockets/2/breaker/reset",
+        headers={"Authorization": f"Bearer {_make_ext_jwt()}"},
+    )
+    assert r.status_code == 409
+    assert "Smart Mode" in r.json()["detail"]
 
 
 def test_erp_reset_rejects_invalid_token(client):

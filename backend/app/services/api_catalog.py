@@ -3,6 +3,8 @@
 ENDPOINT_CATALOG = [
     {"id": "pedestals.list",         "path": "/api/pedestals",                       "method": "GET",  "category": "Pedestals",   "allow_bidirectional": False},
     {"id": "pedestals.health",       "path": "/api/pedestals/health",                "method": "GET",  "category": "Health",      "allow_bidirectional": False},
+    {"id": "pedestals.status_ext",   "path": "/api/ext/pedestals/{pedestal_id}/status", "method": "GET", "category": "Health",   "allow_bidirectional": False},
+    {"id": "water.status_ext",       "path": "/api/ext/pedestals/{pedestal_id}/water",  "method": "GET", "category": "Sensors",  "allow_bidirectional": False},
     {"id": "sessions.active",        "path": "/api/sessions/active",                 "method": "GET",  "category": "Sessions",    "allow_bidirectional": False},
     {"id": "sessions.pending",       "path": "/api/sessions/pending",                "method": "GET",  "category": "Sessions",    "allow_bidirectional": False},
     {"id": "controls.allow",         "path": "/api/controls/{id}/allow",             "method": "POST", "category": "Controls",    "allow_bidirectional": True},

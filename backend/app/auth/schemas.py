@@ -19,7 +19,8 @@ class TokenResponse(BaseModel):
 class UserCreate(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
-    role: str = Field("monitor", pattern=r"^(admin|monitor_control|monitor)$")
+    # api_client = ERP service account (external API access; no operator login/2FA)
+    role: str = Field("monitor", pattern=r"^(admin|monitor_control|monitor|api_client)$")
 
 
 class UserResponse(BaseModel):

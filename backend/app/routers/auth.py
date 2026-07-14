@@ -204,15 +204,22 @@ def create_user(
 ):
     if db.query(User).filter(User.email == body.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
-    if body.role not in ("admin", "monitor_control", "monitor"):
-        raise HTTPException(status_code=400, detail="Role must be 'admin', 'monitor_control' or 'monitor'")
+    if body.role not in ("admin", "monitor_control", "monitor", "api_client"):
+        raise HTTPException(
+            status_code=400,
+            detail="Role must be 'admin', 'monitor_control', 'monitor' or 'api_client'",
+        )
+    # api_client = ERP service account: it authenticates via /api/auth/service-token
+    # with this admin-set password and never uses the operator login, so the forced
+    # password change + TOTP enrolment (which apply to human operators) do not apply.
+    is_erp = body.role == "api_client"
     user = User(
         email=body.email,
         password_hash=hash_password(body.password),
         role=body.role,
-        # v3.33 — the admin sets a temporary password; the user must replace it
-        # and enrol an authenticator on first login.
-        must_change_password=True,
+        # v3.33 — the admin sets a temporary password; human operators must replace
+        # it and enrol an authenticator on first login. ERP accounts skip this.
+        must_change_password=not is_erp,
     )
     db.add(user)
     db.commit()

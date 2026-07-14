@@ -12,7 +12,7 @@ export interface TokenResponse {
 export interface UserResponse {
   id: number
   email: string
-  role: 'admin' | 'monitor_control' | 'monitor'
+  role: 'admin' | 'monitor_control' | 'monitor' | 'api_client'
   is_active: boolean
   created_at: string
 }
@@ -20,7 +20,7 @@ export interface UserResponse {
 export interface UserCreate {
   email: string
   password: string
-  role: 'admin' | 'monitor_control' | 'monitor'
+  role: 'admin' | 'monitor_control' | 'monitor' | 'api_client'
 }
 
 import { useAuthStore } from '../store/authStore'

@@ -658,7 +658,7 @@ function UserManagementPanel() {
   const [showAdd, setShowAdd] = useState(false)
   const [newEmail, setNewEmail] = useState('')
   const [newPassword, setNewPassword] = useState('')
-  const [newRole, setNewRole] = useState<'admin' | 'monitor_control' | 'monitor'>('monitor')
+  const [newRole, setNewRole] = useState<'admin' | 'monitor_control' | 'monitor' | 'api_client'>('monitor')
   const [addMsg, setAddMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [adding, setAdding] = useState(false)
 
@@ -783,13 +783,21 @@ function UserManagementPanel() {
             <label className="block text-xs text-gray-400 mb-1">Role</label>
             <select
               value={newRole}
-              onChange={(e) => setNewRole(e.target.value as 'admin' | 'monitor_control' | 'monitor')}
+              onChange={(e) => setNewRole(e.target.value as 'admin' | 'monitor_control' | 'monitor' | 'api_client')}
               className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-100 text-sm"
             >
               <option value="monitor">Monitor — read only</option>
               <option value="monitor_control">Monitor &amp; Control — all but System Health / Settings / API Gateway</option>
               <option value="admin">Admin — full access</option>
+              <option value="api_client">ERP User — external API access (no login / 2FA)</option>
             </select>
+            {newRole === 'api_client' && (
+              <p className="text-xs text-purple-300/80 mt-1">
+                Creates an ERP service account. Give this email + password to the ERP; it
+                authenticates via <code className="text-purple-200">POST /api/auth/service-token</code>.
+                Choose what it may access on the API Gateway page.
+              </p>
+            )}
           </div>
           <button type="submit" disabled={adding} className="btn-primary w-full">
             {adding ? 'Creating…' : 'Create User'}
@@ -813,23 +821,33 @@ function UserManagementPanel() {
               </p>
             </div>
             <div className="flex items-center gap-1 ml-2 flex-shrink-0">
-              {/* Role selector (admin / monitor_control / monitor) */}
-              <select
-                value={u.role}
-                onChange={(e) => handleSetRole(u, e.target.value as 'admin' | 'monitor_control' | 'monitor')}
-                title="Change this operator's role"
-                className={`text-xs px-2 py-0.5 rounded-full border bg-gray-800 transition-colors ${
-                  u.role === 'admin'
-                    ? 'text-blue-400 border-blue-700/40'
-                    : u.role === 'monitor_control'
-                      ? 'text-amber-400 border-amber-700/40'
-                      : 'text-green-400 border-green-700/40'
-                }`}
-              >
-                <option value="admin">admin</option>
-                <option value="monitor_control">monitor &amp; control</option>
-                <option value="monitor">monitor</option>
-              </select>
+              {/* ERP service accounts are machine identities — show a static badge,
+                  not the operator role selector (their scope is set on the API Gateway page). */}
+              {u.role === 'api_client' ? (
+                <span
+                  title="ERP service account — external API access; scope set on the API Gateway page"
+                  className="text-xs px-2 py-0.5 rounded-full border bg-gray-800 text-purple-300 border-purple-700/40"
+                >
+                  ERP User
+                </span>
+              ) : (
+                <select
+                  value={u.role}
+                  onChange={(e) => handleSetRole(u, e.target.value as 'admin' | 'monitor_control' | 'monitor')}
+                  title="Change this operator's role"
+                  className={`text-xs px-2 py-0.5 rounded-full border bg-gray-800 transition-colors ${
+                    u.role === 'admin'
+                      ? 'text-blue-400 border-blue-700/40'
+                      : u.role === 'monitor_control'
+                        ? 'text-amber-400 border-amber-700/40'
+                        : 'text-green-400 border-green-700/40'
+                  }`}
+                >
+                  <option value="admin">admin</option>
+                  <option value="monitor_control">monitor &amp; control</option>
+                  <option value="monitor">monitor</option>
+                </select>
+              )}
               {/* Active toggle */}
               <button
                 onClick={() => handleToggleActive(u)}
@@ -842,14 +860,16 @@ function UserManagementPanel() {
               >
                 {u.is_active ? 'Active' : 'Inactive'}
               </button>
-              {/* Reset 2FA */}
-              <button
-                onClick={() => handleReset2fa(u.id, u.email)}
-                className="text-xs px-2 py-0.5 rounded-full border bg-gray-700/50 text-gray-400 border-gray-600/40 hover:bg-amber-900/30 hover:text-amber-400 hover:border-amber-700/40 transition-colors"
-                title="Reset two-factor — user re-enrols authenticator on next login"
-              >
-                Reset 2FA
-              </button>
+              {/* Reset 2FA — only for human operators (ERP accounts have no 2FA) */}
+              {u.role !== 'api_client' && (
+                <button
+                  onClick={() => handleReset2fa(u.id, u.email)}
+                  className="text-xs px-2 py-0.5 rounded-full border bg-gray-700/50 text-gray-400 border-gray-600/40 hover:bg-amber-900/30 hover:text-amber-400 hover:border-amber-700/40 transition-colors"
+                  title="Reset two-factor — user re-enrols authenticator on next login"
+                >
+                  Reset 2FA
+                </button>
+              )}
               {/* Delete */}
               <button
                 onClick={() => handleDelete(u.id, u.email)}

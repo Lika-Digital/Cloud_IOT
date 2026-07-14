@@ -27,27 +27,44 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 @router.post("/service-token", response_model=TokenResponse)
-def service_token(body: LoginRequest, db: Session = Depends(get_user_db)):
+def service_token(request: Request, body: LoginRequest, db: Session = Depends(get_user_db)):
     """
     Direct JWT login for api_client service accounts — skips OTP.
 
     Only accounts with role='api_client' are accepted here. Human operator
     accounts (admin / monitor) must use the two-step /login + TOTP flow.
+
+    ERP auth outcomes are written to the security log (category "security",
+    source "ext-api/auth") so "who connected / who tried" is visible in the
+    dashboard and queryable, not just in the uvicorn access log.
     """
+    from ..services.error_log_service import log_info, log_warning
+    xff = request.headers.get("x-forwarded-for")
+    ip = xff.split(",")[0].strip() if xff else (request.client.host if request.client else "unknown")
+
     user = db.query(User).filter(User.email == body.email).first()
     if not user or not verify_password(body.password, user.password_hash):
+        log_warning("security", "ext-api/auth",
+                    f"Failed ERP service-token attempt for '{body.email}' (src {ip})",
+                    details="invalid email or password")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
         )
     if not user.is_active:
+        log_warning("security", "ext-api/auth",
+                    f"ERP service-token denied for disabled account '{body.email}' (src {ip})")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled")
     if user.role != "api_client":
+        log_warning("security", "ext-api/auth",
+                    f"Non-ERP account '{body.email}' (role={user.role}) attempted service-token (src {ip})")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="This endpoint is only for api_client service accounts",
         )
     token = create_access_token(user.id, user.email, user.role)
+    log_info("security", "ext-api/auth",
+             f"ERP service account '{user.email}' authenticated (src {ip})")
     return TokenResponse(access_token=token, role=user.role, email=user.email)
 
 

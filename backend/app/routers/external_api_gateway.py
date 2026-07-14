@@ -171,6 +171,27 @@ def _smart_mode_off(db, pedestal_id: int) -> bool:
     return cfg is None or not cfg.smart_mode
 
 
+def _client_ip(request: Request) -> str:
+    """Real client IP, honouring the X-Forwarded-For set by nginx / Cloudflare."""
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _audit(level: str, source: str, message: str, request, details: str | None = None) -> None:
+    """Best-effort security-log entry for external-API activity so it is visible
+    in the dashboard log viewer and queryable. Never raises (logging must not
+    break the request path). Successful GET reads are intentionally not audited
+    to avoid flooding the log — only auth, denials, and control actions are."""
+    try:
+        from ..services.error_log_service import log_info, log_warning
+        fn = log_warning if level == "warning" else log_info
+        fn("security", source, f"{message} (src {_client_ip(request)})", details)
+    except Exception:
+        pass
+
+
 # ── Gateway route ─────────────────────────────────────────────────────────────
 
 @router.api_route(
@@ -203,6 +224,8 @@ async def gateway(request: Request, path: str) -> Response:
 
     payload = _decode_external_jwt(token)
     if not payload:
+        _audit("warning", "ext-api/gateway",
+               f"Denied {request.method} /api/{path}: invalid or expired token", request)
         return Response(
             content=json.dumps({"detail": "Invalid or expired API key"}),
             status_code=401,
@@ -226,6 +249,8 @@ async def gateway(request: Request, path: str) -> Response:
             media_type="application/json",
         )
     if not cfg.active:
+        _audit("warning", "ext-api/gateway",
+               f"Denied {request.method} /api/{path}: gateway not active", request)
         return Response(
             content=json.dumps({"detail": "External API is not active"}),
             status_code=403,
@@ -236,6 +261,8 @@ async def gateway(request: Request, path: str) -> Response:
     # external_api tokens are static keys stored in ExternalApiConfig and must match.
     if payload.get("role") == "external_api":
         if not hmac.compare_digest(cfg.api_key or "", token):
+            _audit("warning", "ext-api/gateway",
+                   f"Denied {request.method} /api/{path}: invalid API key", request)
             return Response(
                 content=json.dumps({"detail": "Invalid API key"}),
                 status_code=403,
@@ -261,6 +288,8 @@ async def gateway(request: Request, path: str) -> Response:
             break
 
     if matched_ep is None:
+        _audit("warning", "ext-api/gateway",
+               f"Denied {request.method} /api/{path}: endpoint not allowed", request)
         return Response(
             content=json.dumps({"detail": "Endpoint not allowed"}),
             status_code=403,
@@ -294,6 +323,8 @@ async def gateway(request: Request, path: str) -> Response:
                 _sm_db,
             )
             if ped_id is not None and _smart_mode_off(_sm_db, ped_id):
+                _audit("info", "ext-api/gateway",
+                       f"Control blocked (Smart Mode OFF): {request.method} /api/{path}", request)
                 return Response(
                     content=json.dumps({
                         "detail": "Smart Mode is OFF on this pedestal — the API is "
@@ -348,6 +379,11 @@ async def gateway(request: Request, path: str) -> Response:
             status_code=502,
             media_type="application/json",
         )
+
+    # Audit control (write) actions performed via the API — reads are not logged.
+    if request.method.upper() != "GET":
+        _audit("info", "ext-api/gateway",
+               f"Control {request.method} /api/{path} -> {resp.status_code}", request)
 
     # 8. Pass through response
     content_type = resp.headers.get("content-type", "application/json")

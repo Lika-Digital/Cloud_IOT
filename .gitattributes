@@ -1,0 +1,12 @@
+# Treat generated documents and images as binary so core.autocrlf (line-ending
+# conversion) never corrupts them on commit/checkout.
+*.pdf   binary
+*.docx  binary
+*.doc   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.deb   binary
+*.zip   binary

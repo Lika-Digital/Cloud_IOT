@@ -1802,8 +1802,10 @@ def build_pdf():
     ))
     story.append(bullet_list([
         "<b>Step 1:</b> ERP provider sends Lika Digital the desired service account email and password.",
-        "<b>Step 2:</b> Lika Digital creates the account on the NUC via the admin API or directly "
-        "in the database with role <font face='Courier'>api_client</font>.",
+        "<b>Step 2:</b> Lika Digital creates the account on the NUC from the dashboard "
+        "(<b>Settings &rarr; Add User &rarr; role \"ERP User\"</b>, setting the email + password), or "
+        "equivalently via <font face='Courier'>scripts/create_erp_service_account.py</font>. "
+        "Both create a role <font face='Courier'>api_client</font> account.",
         "<b>Step 3:</b> Lika Digital configures the API Gateway endpoints and events for this integration.",
         "<b>Step 4:</b> ERP team tests authentication: "
         "<font face='Courier'>POST /api/auth/service-token</font> with their credentials.",
@@ -1815,6 +1817,16 @@ def build_pdf():
         "login (which requires authenticator-app TOTP two-factor). The service-token endpoint "
         "returns a JWT directly, with no 2FA step, making it suitable for automated "
         "system-to-system integration."
+    ))
+
+    story.append(note(
+        "ERP authentication and access are audited. Every service-token success and every "
+        "failed / denied attempt is written to the security log (source "
+        "<font face='Courier'>ext-api/auth</font>), and gateway denials plus control (write) "
+        "actions are logged (source <font face='Courier'>ext-api/gateway</font>) with the source IP. "
+        "These appear in the dashboard log viewer (category \"security\") and via "
+        "<font face='Courier'>journalctl -u cloud-iot-backend</font>, so the operator can see who "
+        "connected, when, and from where. Successful GET reads are not logged, to avoid noise."
     ))
 
     story.append(p("13.5 Multiple ERP Systems on One Pedestal", "H2"))

@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useStore } from '../../store'
-import { useAuthStore } from '../../store/authStore'
+import { useAuthStore, canManageApi } from '../../store/authStore'
 import { useThemeStore } from '../../store/themeStore'
 import logo from '../../assets/logo.png'
 import { useEffect, useState } from 'react'
@@ -15,6 +15,9 @@ export default function Layout() {
   const location = useLocation()
 
   const isAdmin = role === 'admin'
+  // v3.35 — API Gateway is visible to admin + monitor_control_api; System Health
+  // and Settings stay admin-only.
+  const canApi = canManageApi(role)
 
   // v3.33 — mobile: the sidebar collapses into a slide-in drawer behind a
   // hamburger. Close it on every route change so a nav tap doesn't leave the
@@ -44,7 +47,11 @@ export default function Layout() {
     { to: '/berths', label: 'Berth Occupancy', icon: '⚓', badge: 0 },
     ...(isAdmin ? [
       { to: '/system-health', label: 'System Health', icon: '🔧', badge: newErrorCount, hwAlarm: hwAlarmLevel },
+    ] : []),
+    ...(canApi ? [
       { to: '/api-gateway', label: 'API Gateway', icon: '🔌', badge: 0 },
+    ] : []),
+    ...(isAdmin ? [
       { to: '/settings', label: 'Settings', icon: '⚙️', badge: 0 },
     ] : []),
   ]

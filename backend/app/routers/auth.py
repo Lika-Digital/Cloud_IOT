@@ -19,6 +19,7 @@ from ..auth.schemas import (
     ChangePasswordRequest,
     RegisterRequest,
     UserPatch,
+    PasswordResetRequest,
 )
 from ..config import settings
 from ..ratelimit import limiter
@@ -221,10 +222,10 @@ def create_user(
 ):
     if db.query(User).filter(User.email == body.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
-    if body.role not in ("admin", "monitor_control", "monitor", "api_client"):
+    if body.role not in ("admin", "monitor_control_api", "monitor_control", "monitor", "api_client"):
         raise HTTPException(
             status_code=400,
-            detail="Role must be 'admin', 'monitor_control', 'monitor' or 'api_client'",
+            detail="Role must be 'admin', 'monitor_control_api', 'monitor_control', 'monitor' or 'api_client'",
         )
     # api_client = ERP service account: it authenticates via /api/auth/service-token
     # with this admin-set password and never uses the operator login, so the forced
@@ -273,16 +274,43 @@ def patch_user(
     current_user: User = Depends(require_admin),
     db: Session = Depends(get_user_db),
 ):
-    """Partially update a user: role and/or is_active. Admin only."""
+    """Partially update a user: role, is_active and/or email. Admin only."""
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    if body.email is not None and body.email != user.email:
+        if db.query(User).filter(User.email == body.email, User.id != user_id).first():
+            raise HTTPException(status_code=400, detail="Email already registered")
+        user.email = body.email
     if body.role is not None:
         user.role = body.role
     if body.is_active is not None:
         if user.id == current_user.id and not body.is_active:
             raise HTTPException(status_code=400, detail="Cannot deactivate your own account")
         user.is_active = body.is_active
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.post("/users/{user_id}/reset-password", response_model=UserResponse)
+def reset_password(
+    user_id: int,
+    body: PasswordResetRequest,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_user_db),
+):
+    """v3.35 — admin sets a new password for an account. Human operators must
+    replace it on their next login (must_change_password=True). ERP service
+    accounts (api_client) keep the set password as-is — they authenticate with a
+    fixed password via /service-token and have no first-login change flow."""
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.password_hash = hash_password(body.new_password)
+    # ERP accounts have no login/first-password flow — leave the flag off so the
+    # password they were given keeps working directly.
+    user.must_change_password = user.role != "api_client"
     db.commit()
     db.refresh(user)
     return user

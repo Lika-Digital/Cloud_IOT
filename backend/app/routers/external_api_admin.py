@@ -1,6 +1,7 @@
 """Admin endpoints for the External API Gateway configurator.
 
-All routes require admin role.
+All routes require API-config access (admin or monitor_control_api) — see
+require_api_config in auth.dependencies.
 """
 import json
 import logging
@@ -13,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session as DBSession
 
-from ..auth.dependencies import require_admin
+from ..auth.dependencies import require_api_config
 from ..auth.models import User
 from ..config import settings
 from ..database import get_db
@@ -116,7 +117,7 @@ def _make_internal_admin_jwt() -> str | None:
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @router.get("/catalog")
-def get_catalog(_: User = Depends(require_admin)):
+def get_catalog(_: User = Depends(require_api_config)):
     """Return the full endpoint and event catalogs."""
     return {"endpoints": ENDPOINT_CATALOG, "events": EVENT_CATALOG}
 
@@ -124,7 +125,7 @@ def get_catalog(_: User = Depends(require_admin)):
 @router.get("/config")
 def get_config(
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_api_config),
 ):
     """Return current config (or empty defaults if not yet created)."""
     cfg = db.get(ExternalApiConfig, 1)
@@ -149,7 +150,7 @@ def get_config(
 def update_config(
     body: UpdateConfigRequest,
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_api_config),
 ):
     """Upsert endpoint/event/webhook config. Resets verified=False on any change."""
     from ..services.webhook_service import invalidate_cache
@@ -183,7 +184,7 @@ def update_config(
 @router.post("/config/rotate-key")
 def rotate_key(
     db: DBSession = Depends(get_db),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_api_config),
 ):
     """Generate a new external API JWT and store it. Returns the new key."""
     cfg = _get_or_create_config(db)
@@ -206,7 +207,7 @@ def rotate_key(
 @router.post("/config/verify")
 async def verify_config(
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_api_config),
 ):
     """
     Live-test each non-parameterised GET endpoint in the allowed list.
@@ -303,7 +304,7 @@ async def verify_config(
 @router.post("/config/activate")
 def activate_config(
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_api_config),
 ):
     """Activate the gateway."""
     from ..services.webhook_service import invalidate_cache
@@ -319,7 +320,7 @@ def activate_config(
 @router.post("/config/deactivate")
 def deactivate_config(
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_api_config),
 ):
     """Deactivate the gateway."""
     from ..services.webhook_service import invalidate_cache

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import ConfigPanel from '../components/config/ConfigPanel'
 import FieldHelp from '../components/config/FieldHelp'
 import DevicesPanel from '../components/config/DevicesPanel'
-import { authListUsers, authCreateUser, authDeleteUser, authPatchUser, authResetUser2fa, type UserResponse } from '../api/auth'
+import { authListUsers, authCreateUser, authDeleteUser, authPatchUser, authResetUser2fa, authResetUserPassword, type UserResponse, type OperatorRole, type UserRole } from '../api/auth'
 import {
   getSmtpConfig, updateSmtpConfig, testSmtp, type SmtpConfig,
   getNetworkInfo, type NetworkInfo,
@@ -136,7 +136,15 @@ export default function Settings() {
             <div className="space-y-2 text-sm text-gray-400">
               <div>
                 <span className="text-blue-400 font-medium">Admin</span>
-                <p className="text-xs mt-0.5">Full access — control sessions, configure pedestals, manage users</p>
+                <p className="text-xs mt-0.5">Full access — control sessions, configure pedestals, System Health, Settings, API Gateway, manage users</p>
+              </div>
+              <div>
+                <span className="text-purple-400 font-medium">Monitor, Control &amp; API</span>
+                <p className="text-xs mt-0.5">Everything Monitor &amp; Control can do, plus the API Gateway configurator (no System Health / Settings / user management)</p>
+              </div>
+              <div>
+                <span className="text-amber-400 font-medium">Monitor &amp; Control</span>
+                <p className="text-xs mt-0.5">Control &amp; configure every section except System Health, Settings, and API Gateway</p>
               </div>
               <div>
                 <span className="text-green-400 font-medium">Monitor</span>
@@ -658,7 +666,8 @@ function UserManagementPanel() {
   const [showAdd, setShowAdd] = useState(false)
   const [newEmail, setNewEmail] = useState('')
   const [newPassword, setNewPassword] = useState('')
-  const [newRole, setNewRole] = useState<'admin' | 'monitor_control' | 'monitor' | 'api_client'>('monitor')
+  const [newRole, setNewRole] = useState<UserRole>('monitor')
+  const [editing, setEditing] = useState<UserResponse | null>(null)
   const [addMsg, setAddMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [adding, setAdding] = useState(false)
 
@@ -686,7 +695,7 @@ function UserManagementPanel() {
     }
   }
 
-  const handleSetRole = async (user: UserResponse, newRole: 'admin' | 'monitor_control' | 'monitor') => {
+  const handleSetRole = async (user: UserResponse, newRole: OperatorRole) => {
     if (newRole === user.role) return
     try {
       const updated = await authPatchUser(user.id, { role: newRole })
@@ -694,6 +703,21 @@ function UserManagementPanel() {
     } catch {
       setAddMsg({ type: 'error', text: 'Failed to update role.' })
     }
+  }
+
+  // v3.35 — admin edits an operator's email and/or resets their password (forced
+  // change at next login). Applied from the Edit dialog.
+  const handleSaveEdit = async (id: number, email: string, newPassword: string) => {
+    const current = users.find((u) => u.id === id)
+    if (current && email && email !== current.email) {
+      const updated = await authPatchUser(id, { email })
+      setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)))
+    }
+    if (newPassword) {
+      await authResetUserPassword(id, newPassword)
+    }
+    setEditing(null)
+    setAddMsg({ type: 'success', text: 'User updated.' })
   }
 
   const handleToggleActive = async (user: UserResponse) => {
@@ -783,11 +807,12 @@ function UserManagementPanel() {
             <label className="block text-xs text-gray-400 mb-1">Role</label>
             <select
               value={newRole}
-              onChange={(e) => setNewRole(e.target.value as 'admin' | 'monitor_control' | 'monitor' | 'api_client')}
+              onChange={(e) => setNewRole(e.target.value as UserRole)}
               className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-100 text-sm"
             >
               <option value="monitor">Monitor — read only</option>
               <option value="monitor_control">Monitor &amp; Control — all but System Health / Settings / API Gateway</option>
+              <option value="monitor_control_api">Monitor, Control &amp; API — Monitor &amp; Control plus API Gateway</option>
               <option value="admin">Admin — full access</option>
               <option value="api_client">ERP User — external API access (no login / 2FA)</option>
             </select>
@@ -833,17 +858,20 @@ function UserManagementPanel() {
               ) : (
                 <select
                   value={u.role}
-                  onChange={(e) => handleSetRole(u, e.target.value as 'admin' | 'monitor_control' | 'monitor')}
+                  onChange={(e) => handleSetRole(u, e.target.value as OperatorRole)}
                   title="Change this operator's role"
                   className={`text-xs px-2 py-0.5 rounded-full border bg-gray-800 transition-colors ${
                     u.role === 'admin'
                       ? 'text-blue-400 border-blue-700/40'
-                      : u.role === 'monitor_control'
-                        ? 'text-amber-400 border-amber-700/40'
-                        : 'text-green-400 border-green-700/40'
+                      : u.role === 'monitor_control_api'
+                        ? 'text-purple-400 border-purple-700/40'
+                        : u.role === 'monitor_control'
+                          ? 'text-amber-400 border-amber-700/40'
+                          : 'text-green-400 border-green-700/40'
                   }`}
                 >
                   <option value="admin">admin</option>
+                  <option value="monitor_control_api">monitor, control &amp; api</option>
                   <option value="monitor_control">monitor &amp; control</option>
                   <option value="monitor">monitor</option>
                 </select>
@@ -859,6 +887,14 @@ function UserManagementPanel() {
                 }`}
               >
                 {u.is_active ? 'Active' : 'Inactive'}
+              </button>
+              {/* Edit — change email and/or reset password */}
+              <button
+                onClick={() => setEditing(u)}
+                className="text-xs px-2 py-0.5 rounded-full border bg-gray-700/50 text-gray-400 border-gray-600/40 hover:bg-blue-900/30 hover:text-blue-400 hover:border-blue-700/40 transition-colors"
+                title="Edit email / reset password"
+              >
+                Edit
               </button>
               {/* Reset 2FA — only for human operators (ERP accounts have no 2FA) */}
               {u.role !== 'api_client' && (
@@ -884,6 +920,117 @@ function UserManagementPanel() {
         {users.length === 0 && (
           <p className="text-sm text-gray-600 text-center py-2">No users found.</p>
         )}
+      </div>
+
+      {editing && (
+        <EditUserDialog
+          user={editing}
+          onClose={() => setEditing(null)}
+          onSave={handleSaveEdit}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── Edit User Dialog ──────────────────────────────────────────────────────────
+
+function EditUserDialog({
+  user,
+  onClose,
+  onSave,
+}: {
+  user: UserResponse
+  onClose: () => void
+  onSave: (id: number, email: string, newPassword: string) => Promise<void>
+}) {
+  const [email, setEmail] = useState(user.email)
+  const [newPassword, setNewPassword] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const isErp = user.role === 'api_client'
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (newPassword && newPassword.length < 8) {
+      setErr('Password must be at least 8 characters.')
+      return
+    }
+    if (email === user.email && !newPassword) {
+      onClose()
+      return
+    }
+    setSaving(true); setErr(null)
+    try {
+      await onSave(user.id, email.trim(), newPassword)
+    } catch (e: unknown) {
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setErr(detail ?? 'Failed to save changes.')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-md bg-gray-900 border border-gray-700 rounded-xl p-5 space-y-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-gray-100">Edit User</h3>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-lg leading-none">✕</button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Email</label>
+            <input
+              type="email"
+              required
+              maxLength={120}
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-100 text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">
+              New password <span className="text-gray-600">(leave blank to keep current)</span>
+            </label>
+            <input
+              type="password"
+              minLength={8}
+              maxLength={128}
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="Min 8 characters"
+              autoComplete="new-password"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-100 text-sm"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              {isErp
+                ? 'ERP service account — the new password takes effect immediately for /service-token.'
+                : 'The operator must set their own new password at next login.'}
+            </p>
+          </div>
+
+          {err && (
+            <div className="text-sm px-3 py-2 rounded-lg bg-red-900/30 text-red-400">{err}</div>
+          )}
+
+          <div className="flex gap-2 pt-1">
+            <button type="submit" disabled={saving} className="btn-primary flex-1">
+              {saving ? 'Saving…' : 'Save Changes'}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 bg-gray-700 text-gray-200 text-sm rounded-lg hover:bg-gray-600 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   )

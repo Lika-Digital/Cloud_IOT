@@ -20,7 +20,10 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
     # api_client = ERP service account (external API access; no operator login/2FA)
-    role: str = Field("monitor", pattern=r"^(admin|monitor_control|monitor|api_client)$")
+    role: str = Field(
+        "monitor",
+        pattern=r"^(admin|monitor_control_api|monitor_control|monitor|api_client)$",
+    )
 
 
 class UserResponse(BaseModel):
@@ -45,8 +48,17 @@ class RegisterRequest(BaseModel):
 
 
 class UserPatch(BaseModel):
-    role: Optional[str] = Field(None, pattern=r"^(admin|monitor_control|monitor)$")
+    role: Optional[str] = Field(
+        None, pattern=r"^(admin|monitor_control_api|monitor_control|monitor)$"
+    )
     is_active: Optional[bool] = None
+    email: Optional[EmailStr] = None
+
+
+class PasswordResetRequest(BaseModel):
+    """Admin-initiated password reset — sets a temporary password the operator
+    must replace on next login (must_change_password=True)."""
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 class SmtpConfigUpdate(BaseModel):

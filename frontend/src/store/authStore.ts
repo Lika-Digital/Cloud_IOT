@@ -1,14 +1,20 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-// v3.34 — three operator roles. monitor_control sits between admin and monitor:
+// v3.34 — operator roles. monitor_control sits between admin and monitor:
 // it can control/configure every section EXCEPT the three admin-only ones
 // (System Health, Settings, API Gateway).
-export type Role = 'admin' | 'monitor_control' | 'monitor'
+// v3.35 — monitor_control_api = monitor_control PLUS the API Gateway configurator
+// (still no System Health, Settings, or user management).
+export type Role = 'admin' | 'monitor_control_api' | 'monitor_control' | 'monitor'
 
 /** Can act (control/configure) in the non-admin sections. */
 export const canControl = (role: Role | null): boolean =>
-  role === 'admin' || role === 'monitor_control'
+  role === 'admin' || role === 'monitor_control' || role === 'monitor_control_api'
+
+/** Can manage the External API Gateway configuration. */
+export const canManageApi = (role: Role | null): boolean =>
+  role === 'admin' || role === 'monitor_control_api'
 
 interface AuthState {
   token: string | null

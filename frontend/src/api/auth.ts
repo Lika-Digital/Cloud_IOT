@@ -2,17 +2,22 @@ import axios from 'axios'
 
 const api = axios.create({ baseURL: '/api/auth' })
 
+// Operator roles selectable in the UI (excludes the ERP-only api_client).
+export type OperatorRole = 'admin' | 'monitor_control_api' | 'monitor_control' | 'monitor'
+// Every role that can appear on a user record (incl. ERP service accounts).
+export type UserRole = OperatorRole | 'api_client'
+
 export interface TokenResponse {
   access_token: string
   token_type: string
-  role: 'admin' | 'monitor_control' | 'monitor'
+  role: OperatorRole
   email: string
 }
 
 export interface UserResponse {
   id: number
   email: string
-  role: 'admin' | 'monitor_control' | 'monitor' | 'api_client'
+  role: UserRole
   is_active: boolean
   created_at: string
 }
@@ -20,7 +25,7 @@ export interface UserResponse {
 export interface UserCreate {
   email: string
   password: string
-  role: 'admin' | 'monitor_control' | 'monitor' | 'api_client'
+  role: UserRole
 }
 
 import { useAuthStore } from '../store/authStore'
@@ -99,8 +104,13 @@ export const authListUsers = () =>
 export const authCreateUser = (data: UserCreate) =>
   api.post<UserResponse>('/users', data).then((r) => r.data)
 
-export const authPatchUser = (id: number, data: { role?: 'admin' | 'monitor_control' | 'monitor'; is_active?: boolean }) =>
+export const authPatchUser = (id: number, data: { role?: OperatorRole; is_active?: boolean; email?: string }) =>
   api.patch<UserResponse>(`/users/${id}`, data).then((r) => r.data)
+
+// v3.35 — admin sets a new password. Human operators must change it at next
+// login (forced); ERP accounts keep it as-is.
+export const authResetUserPassword = (id: number, new_password: string) =>
+  api.post<UserResponse>(`/users/${id}/reset-password`, { new_password }).then((r) => r.data)
 
 export const authDeleteUser = (id: number) =>
   api.delete(`/users/${id}`).then((r) => r.data)

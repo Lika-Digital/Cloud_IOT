@@ -11,10 +11,15 @@ bearer_scheme = HTTPBearer()
 # Operator roles (admin User records in users.db) — never "customer" or "external_api"
 # v3.34 — monitor_control is a middle tier: it can control/configure every section
 # EXCEPT the three admin-only sections (System Health, Settings, API Gateway).
-_OPERATOR_ROLES = {"admin", "monitor", "monitor_control"}
+# v3.35 — monitor_control_api = monitor_control PLUS the API Gateway configurator
+# (still no System Health, Settings, or user management).
+_OPERATOR_ROLES = {"admin", "monitor", "monitor_control", "monitor_control_api"}
 
 # Roles allowed to act (control/configure) in the non-admin sections.
-_CONTROL_ROLES = {"admin", "monitor_control"}
+_CONTROL_ROLES = {"admin", "monitor_control", "monitor_control_api"}
+
+# Roles allowed to manage the External API Gateway configuration.
+_API_CONFIG_ROLES = {"admin", "monitor_control_api"}
 
 
 def _get_current_user(
@@ -71,10 +76,25 @@ def require_control(user: User = Depends(_get_current_user)) -> User:
 
 
 def require_admin(user: User = Depends(_get_current_user)) -> User:
-    """Admin role only — System Health, Settings, API Gateway, user management."""
+    """Admin role only — System Health, Settings, user management."""
     if user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",
+        )
+    return user
+
+
+def require_api_config(user: User = Depends(_get_current_user)) -> User:
+    """Admin or monitor_control_api — may manage the External API Gateway.
+
+    v3.35 — gates the API Gateway configurator (external_api_admin router). This
+    is a strict superset of admin: monitor_control_api can configure the gateway
+    but nothing else in the admin-only sections.
+    """
+    if user.role not in _API_CONFIG_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="API configuration access required (admin or monitor_control_api)",
         )
     return user

@@ -273,6 +273,7 @@ async def _temp_sensor_poll():
     from .services.alarm_service import trigger_alarm, resolve_alarm_type, has_active_alarm
     from .services.session_service import session_service
     from .services.temp_alarm import evaluate_temp_band, threshold_for
+    from .services.error_log_service import log_warning as _elog_warn, log_info as _elog_info
     while True:
         await asyncio.sleep(30)
         try:
@@ -295,16 +296,32 @@ async def _temp_sensor_poll():
                     now = datetime.utcnow()
                     reachable = value is not None
 
+                    # Edge-triggered so the log records the transition, not every
+                    # 30 s poll: compare the reachability we're about to write with
+                    # the previously-stored value. A benign values.xml→fresh.xml
+                    # fallback still yields reachable=True, so it never logs here.
+                    was_reachable = None
                     db2 = SessionLocal()
                     try:
                         row = db2.get(PedestalConfig, cfg_id)
                         if row:
+                            was_reachable = row.temp_sensor_reachable
                             row.temp_sensor_reachable = 1 if reachable else 0
                             row.last_temp_sensor_check = now
                             row.updated_at = now
                             db2.commit()
                     finally:
                         db2.close()
+
+                    # Surface genuine offline / recovery in the System Health log
+                    # list (Active Alarms already carries the live state). Only on
+                    # a real state change — was_reachable is None on first poll.
+                    if not reachable and was_reachable == 1:
+                        _elog_warn("hw", "sensor/temp-poll",
+                                   f"Pedestal {pid}: temperature sensor at {ip}:{port} went offline (no response)")
+                    elif reachable and was_reachable == 0:
+                        _elog_info("hw", "sensor/temp-poll",
+                                   f"Pedestal {pid}: temperature sensor at {ip}:{port} recovered")
 
                     if not reachable:
                         # D6 — configured but not sending data.

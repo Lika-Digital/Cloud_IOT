@@ -46,6 +46,7 @@ from .routers import ext_meter_load_endpoints as ext_meter_load_router
 from .routers import settings as settings_router
 from .routers import config_backup as config_backup_router
 from .routers import usage_history as usage_history_router  # v3.31 — usage history + monthly reports
+from .routers import data_export as data_export_router  # v3.37 — DB backup + usage export downloads
 from .auth.user_database import init_user_db, UserSessionLocal
 from .auth.models import User
 from .auth.customer_models import BillingConfig
@@ -772,6 +773,7 @@ app.include_router(config_backup_router.router)  # v3.16 — config backup/resto
 app.include_router(breakers_router.router)       # v3.8 — internal breaker admin routes
 app.include_router(meter_load_router.router)    # v3.11 — internal load monitoring routes
 app.include_router(usage_history_router.router) # v3.31 — usage history + monthly reports
+app.include_router(data_export_router.router)   # v3.37 — DB backup + usage export downloads
 app.include_router(ext_pedestal_router.router)   # must be before gateway catch-all
 app.include_router(ext_breaker_router.router)    # v3.8 — must be before gateway catch-all
 app.include_router(ext_meter_load_router.router) # v3.11 — must be before gateway catch-all

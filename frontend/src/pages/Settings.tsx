@@ -14,6 +14,7 @@ import {
   exportConfig, getSupportBundle, listBackups, importConfig,
   type BackupMeta, type ConfigBundle, type RestoreReport,
 } from '../api/configBackup'
+import { downloadDatabaseBackup } from '../api/dataExport'
 import {
   totpStatus, totpSetup, totpVerifySetup, totpDisable,
   type TotpStatusResponse, type TotpSetupResponse,
@@ -1177,8 +1178,20 @@ function BackupRestorePanel() {
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [report, setReport] = useState<RestoreReport | null>(null)
 
+  const [dbBusy, setDbBusy] = useState(false)
+
   const load = () => listBackups().then((r) => setBackups(r.backups)).catch(() => {})
   useEffect(() => { load() }, [])
+
+  const handleDbBackup = async () => {
+    setDbBusy(true); setMsg(null); setReport(null)
+    try {
+      await downloadDatabaseBackup()
+      setMsg({ type: 'success', text: 'Database backup downloaded (pedestal.db + users.db).' })
+    } catch {
+      setMsg({ type: 'error', text: 'Database backup failed.' })
+    } finally { setDbBusy(false) }
+  }
 
   const stamp = (prefix: string) =>
     `${prefix}_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`
@@ -1238,6 +1251,21 @@ function BackupRestorePanel() {
           {msg.text}
         </div>
       )}
+
+      {/* Full database backup — the actual data (sessions, billing, customers),
+          not just config. Downloads a zip of consistent DB snapshots to your
+          computer (off the NUC). */}
+      <div className="p-3 rounded-lg bg-gray-800/50 border border-gray-700 space-y-2">
+        <p className="text-sm font-medium text-gray-200">Full Database Backup</p>
+        <p className="text-xs text-gray-400">
+          Downloads a consistent snapshot of <code className="text-gray-300">pedestal.db</code> +{' '}
+          <code className="text-gray-300">users.db</code> (sessions, billing, customers, config) as a
+          zip. Save it somewhere off the NUC — this is your disaster-recovery copy.
+        </p>
+        <button onClick={handleDbBackup} disabled={dbBusy} className="btn-primary w-full">
+          {dbBusy ? 'Preparing…' : 'Download Database Backup'}
+        </button>
+      </div>
 
       <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
         <input type="checkbox" checked={full} onChange={(e) => setFull(e.target.checked)} className="accent-blue-500" />

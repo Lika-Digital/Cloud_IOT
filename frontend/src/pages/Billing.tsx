@@ -4,6 +4,7 @@ import {
   type BillingConfig, type SpendingRow, type SessionDetailRow, type DailyBillingRow,
 } from '../api/billing'
 import { useAuthStore, canControl } from '../store/authStore'
+import { exportUsageData } from '../api/dataExport'
 
 export default function Billing() {
   // Monitor sees billing read-only; Admin + Monitor & Control may change prices.
@@ -63,6 +64,9 @@ export default function Billing() {
           {loadError}
         </div>
       )}
+
+      {/* Export usage data for the ERP / offline pricing */}
+      <ExportUsagePanel />
 
       {/* Price config */}
       <div className="card max-w-md space-y-4">
@@ -255,6 +259,79 @@ export default function Billing() {
             })}
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ── Usage data export (for ERP / offline pricing) ─────────────────────────────
+
+function ExportUsagePanel() {
+  const [fmt, setFmt] = useState<'csv' | 'json'>('csv')
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  const handleExport = async () => {
+    setBusy(true); setMsg(null)
+    try {
+      await exportUsageData(fmt, from || undefined, to || undefined)
+      setMsg({ type: 'success', text: 'Usage export downloaded.' })
+    } catch {
+      setMsg({ type: 'error', text: 'Export failed.' })
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="card space-y-4">
+      <div>
+        <h2 className="font-semibold text-gray-200">Export Usage Data</h2>
+        <p className="text-xs text-gray-400 mt-1">
+          Download sessions, the 15-minute energy ledger, and invoices (with customer / ship)
+          for the ERP or offline pricing. Leave dates blank for all-time.
+        </p>
+      </div>
+
+      {msg && (
+        <div className={`text-sm px-3 py-2 rounded-lg ${msg.type === 'success' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'}`}>
+          {msg.text}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">Format</label>
+          <select
+            value={fmt}
+            onChange={(e) => setFmt(e.target.value as 'csv' | 'json')}
+            className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-100"
+          >
+            <option value="csv">CSV (zip)</option>
+            <option value="json">JSON</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">From</label>
+          <input
+            type="date"
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+            className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-100"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">To</label>
+          <input
+            type="date"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+            className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-100"
+          />
+        </div>
+        <button onClick={handleExport} disabled={busy} className="btn-primary">
+          {busy ? 'Preparing…' : 'Export'}
+        </button>
       </div>
     </div>
   )

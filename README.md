@@ -83,6 +83,29 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-07-19 — "Monitor, Control & API" role + admin password reset + sensor-offline logging (v3.36)
+
+- **`monitor_control_api` ("Monitor, Control & API")** — a fourth operator tier: same
+  as `monitor_control` **plus** the **API Gateway** configurator; still no System
+  Health, Settings, or user management. Backend adds a `require_api_config` dependency
+  (`{admin, monitor_control_api}`) and moves every `external_api_admin` route onto it;
+  the role is also in `_CONTROL_ROLES`. Frontend: `canManageApi()`, a `ProtectedRoute
+  apiConfig` gate, and the API Gateway nav item + route shown for the new role while
+  System Health/Settings stay Admin-only. `da8f6d4`.
+- **Admin password reset + email edit** — new `POST /api/auth/users/{id}/reset-password`
+  (admin sets a temp password; human operators must change it at next login via
+  `must_change_password=True`; ERP `api_client` accounts keep it as-is, no first-login
+  flow). `PATCH /users/{id}` now also accepts `email` (duplicate-email guarded).
+  Settings → Operator Accounts gains an **Edit** dialog (email + reset password) and the
+  new role in both the Add-User and per-user role dropdowns. `da8f6d4`.
+- **Temperature-sensor offline/recovery logging** — `_temp_sensor_poll` writes an `hw`
+  warning to `error_logs` when a Papouch TME transitions to unreachable and an `hw` info
+  on recovery, edge-triggered off the stored `temp_sensor_reachable` so it logs once per
+  state change (not every 30 s). The benign `values.xml`→`fresh.xml` fallback keeps
+  `reachable=True`, so a healthy older-firmware sensor (404 on `values.xml`) produces no
+  noise. Genuine sensor-down events now appear in the System Health log list, not only
+  under Active Alarms. `ac443df`.
+
 ### 2026-06-21 — UI: light theme + mobile fixes (v3.35)
 
 - **Light/dark theme toggle** — for high-sun outdoor visibility. The whole gray

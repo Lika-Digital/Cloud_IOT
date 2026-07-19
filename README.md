@@ -83,6 +83,23 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-07-19 — On-demand DB backup + usage/billing export downloads (v3.37)
+
+Edge-level data redundancy + portability, no external infra — both are HTTPS
+browser downloads (off-box the moment they hit a laptop/drive).
+
+- **Full database backup download** — `GET /api/admin/backup/database` (admin) returns
+  a zip of consistent `pedestal.db` + `users.db` snapshots taken via the SQLite
+  online-backup API (WAL-safe, read-only — never blocks the app). Disaster-recovery
+  copy the operator saves off the NUC; restore = stop backend, drop the two `.db`
+  files into place, restart. UI: "Download Database Backup" in Settings → Configuration
+  Backup / Restore. `454344a`.
+- **Usage / billing export** — `GET /api/admin/export/usage?format=json|csv&date_from=&date_to=`
+  (control role) exports sessions + the 15-min energy-interval ledger + invoices, joined
+  with customer name/ship, date-range filtered. JSON, or a zip of CSVs. For the marina
+  manager to hand to the ERP or do offline pricing. UI: "Export Usage Data" on the Billing
+  page (reachable by monitor_control managers, not only admin). `454344a`.
+
 ### 2026-07-19 — "Monitor, Control & API" role + admin password reset + sensor-offline logging (v3.36)
 
 - **`monitor_control_api` ("Monitor, Control & API")** — a fourth operator tier: same

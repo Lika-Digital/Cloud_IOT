@@ -83,6 +83,46 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-08-23 — ERP NFC: per-user session pull path (v3.38)
+
+Fills the one gap the myMarina/ERP verification surfaced: the ERP could read a
+session **by `session_id`** but had no way to query our DB **by its own user id**.
+Both additions just expose data we already store — no new tracking, low risk.
+
+**How the NFC/ERP model actually works** (confirmed against the code during this
+work, documented here so it isn't re-derived every time):
+
+- The cabinet does **not** know users until an NFC/QR activation. The mobile app
+  scans the NFC tag → sends the tag id to the ERP → the ERP calls us.
+- `POST /api/nfc/scan` `{nfc_tag_id, user_id}` (`X-API-Key: ERP_API_KEY`) pre-registers
+  intent. **Unchanged.** The tag→cabinet+socket mapping is held on our side via admin
+  provisioning (`/api/nfc/tags`), so the ERP sends only the tag id + user id — not
+  location/socket.
+- The ERP `user_id` is stored on the session as **`sessions.nfc_user_id`** (a string),
+  kept deliberately separate from the internal `customer_id` FK (the local Customer
+  table is standalone/test only). The id we return to the ERP **is** the id the ERP
+  sent us — same value, round-tripped.
+- The ERP learns `session_id` from us via the **`session_created` webhook** (payload
+  carries `session_id` + `nfc_user_id`) — the session only exists after plug-in, so
+  `/scan` can't return it. Reading a known session by id already existed:
+  `GET /api/nfc/session/{id}`.
+
+**Added:**
+- **`GET /api/nfc/sessions/by-user/{user_id}`** (`X-API-Key`) — every session (active +
+  historical) for one ERP user id, newest-first, each with the same spending payload as
+  `GET /api/nfc/session/{id}` (`session_id`, `energy_kwh`, `duration_minutes`,
+  `estimated_cost`, `status`, …). Optional `?status=active|ended` and `?limit` (default
+  100, max 500). Lets the ERP reconcile its own records against ours by its own user id.
+  `routers/nfc.py`.
+- **`nfc_user_id`** added to the `/api/sessions/active` response (`SessionResponse`), so
+  the ERP user can be correlated there too. `schemas/session.py`.
+
+Note on consumption: energy is still the **per-session** `power×time` integral on
+`sessions.energy_kwh` (the Opta's cumulative `energyKwh` register reports 0). The NFC
+model is session-scoped-per-authenticated-user by design and does **not** need a
+hardware totalizer — a true cumulative counter would only be needed for a
+read-meter-anytime model, which would require the firmware to report the register.
+
 ### 2026-07-19 — On-demand DB backup + usage/billing export downloads (v3.37)
 
 Edge-level data redundancy + portability, no external infra — both are HTTPS

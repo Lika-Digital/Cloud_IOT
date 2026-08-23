@@ -14,7 +14,7 @@ Critical architecture notes (per spec):
 import logging
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DBSession
 
@@ -259,6 +259,36 @@ def nfc_session_status(session_id: int, db: DBSession = Depends(get_db),
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     return nfc_service.build_session_payload(db, user_db, session)
+
+
+@router.get("/sessions/by-user/{user_id}")
+def nfc_sessions_by_user(
+    user_id: str,
+    status: Optional[str] = Query(None, pattern="^(active|ended)$"),
+    limit: int = Query(default=100, ge=1, le=500),
+    db: DBSession = Depends(get_db),
+    user_db: DBSession = Depends(get_user_db),
+    _: str = Depends(require_erp_api_key),
+):
+    """All sessions (active + historical) for one ERP user_id, newest first.
+
+    Lets the ERP reconcile its own records against our DB by *its own* user id —
+    the `nfc_user_id` we stored from POST /api/nfc/scan. Each entry uses the same
+    spending payload as GET /api/nfc/session/{id} (session_id, energy_kwh,
+    duration_minutes, estimated_cost, status, …). Optional `status` narrows to
+    active or ended; `limit` caps the result (default 100, max 500).
+    """
+    q = db.query(Session).filter(Session.nfc_user_id == user_id)
+    if status == "active":
+        q = q.filter(Session.status == "active")
+    elif status == "ended":
+        q = q.filter(Session.status != "active")
+    rows = q.order_by(Session.started_at.desc()).limit(limit).all()
+    return {
+        "user_id": user_id,
+        "count": len(rows),
+        "sessions": [nfc_service.build_session_payload(db, user_db, s) for s in rows],
+    }
 
 
 @router.post("/session/{session_id}/stop")

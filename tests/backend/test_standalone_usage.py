@@ -17,6 +17,8 @@ import pytest
 from conftest import TestSession as _S
 
 PID = 9200
+# Fixed test clock — every tick below is expressed relative to this instant.
+T0 = datetime(2026, 6, 19, 12, 0, 0)
 
 
 @pytest.fixture(autouse=True)
@@ -59,7 +61,7 @@ def _set_mode(smart: bool):
         db.close()
 
 
-def _set_power(socket_id: int, power_kw: float):
+def _set_power(socket_id: int, power_kw: float, at: datetime = T0):
     from app.models.socket_config import SocketConfig
     db = _S()
     try:
@@ -67,6 +69,8 @@ def _set_power(socket_id: int, power_kw: float):
         if sc is None:
             sc = SocketConfig(pedestal_id=PID, socket_id=socket_id, auto_activate=False)
             db.add(sc)
+        # v3.39 — the reading's timestamp is what the staleness guard checks.
+        sc.meter_load_updated_at = at
         sc.meter_power_kw = power_kw
         sc.meter_current_amps = 0.0
         sc.meter_current_l1 = 0.0

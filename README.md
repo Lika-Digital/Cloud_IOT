@@ -83,6 +83,55 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-09-20 — Socket state consistency: fleet count vs. pedestal view (v3.39)
+
+Reported from the field: the fleet overview card showed **3 Active** for a cabinet
+while every socket badge on that pedestal's detail screen read **IDLE** — two of
+them directly above a live meter reading of 1.9 A / 0.6 A. The two screens read
+two different sources and neither one was self-correcting.
+
+- Fleet card / "Active" counter → rows in `sessions` with `status='active'` (REST).
+- Pedestal detail badges → `socketComputedStates`, written **only** by the
+  change-only `socket_state_changed` WebSocket event.
+
+Four independent defects, all fixed:
+
+- **Meter telemetry never announced the state it produced.** A socket delivering
+  power with no NUC session is `active` by `_compute_socket_display_state`
+  (v3.32, Smart Mode OFF / standalone), but `_handle_opta_meter_telemetry`
+  emitted load alarms only — never `socket_state_changed`. The transition reached
+  no dashboard. It now recomputes and broadcasts **on change only** (telemetry
+  lands every ~5 s; `_meter_last_display_state` keeps it from becoming a 5 s
+  heartbeat). `services/mqtt_handlers.py`.
+- **The dashboard dropped the state the REST read already carried.**
+  `GET /api/pedestals/{id}/sockets/{sid}/load` has returned `display_state` since
+  v3.21, and `SocketLoadMeterPanel` copied *every other* field of that payload
+  into the store. So any page loaded after the last transition started with an
+  empty `socketComputedStates` and fell back to IDLE — the same class of bug
+  v3.32 fixed for breaker state. It now hydrates `setSocketComputedState` from
+  the mount fetch. `api/meterLoad.ts`, `components/pedestal/SocketLoadMeterPanel.tsx`.
+- **A stale reading counted as live draw forever.** `_socket_delivering_power`
+  never looked at `meter_load_updated_at`, so the last value from a cabinet that
+  went offline (the reported one was ~460 h stale) kept a socket "active" and
+  kept `_standalone_usage_tick` holding a usage session open — the draw never
+  "stops", so the 120 s grace close never fired. Readings older than
+  `_METER_STALE_AFTER_S` (120 s) — or never received — are now no draw.
+- **Nothing finalised orphaned `active` sessions.** The pending watchdog only
+  touches `pending`, idle auto-finalise (v3.35) only customer/NFC sessions, and
+  the standalone grace close only `origin='standalone'` — so an
+  operator-activated session stayed `active` indefinitely once the Opta dropped
+  off, which is what the fleet counter kept counting. `_comm_loss_watchdog` now
+  completes them with `end_reason="comm_loss"` and re-broadcasts the resolved
+  socket state. Idempotent, runs on every pass. `main.py`.
+
+**Regression coverage** — `tests/backend/test_socket_state_consistency.py`
+(TC-SSC-01..11), in the pre-commit/pre-push gate with the rest of the suite. It
+pins the operator-visible invariant end-to-end over REST (every session the
+fleet counter counts resolves to a socket the detail view renders `active`, and
+an offline cabinet drains both views to zero/idle), plus a cross-layer guard that
+fails if the frontend ever stops consuming `display_state` again — a break that
+is invisible to any backend-only test.
+
 ### 2026-08-23 — ERP NFC: per-user session pull path (v3.38)
 
 Fills the one gap the myMarina/ERP verification surfaced: the ERP could read a

@@ -30,6 +30,12 @@ api.interceptors.response.use(
 // path that switches on LoadStatus must handle this case.
 export type LoadStatus = 'normal' | 'warning' | 'critical' | 'auto_stop' | 'unknown'
 
+// v3.39 — the backend's unified socket display state (fault > active > pending
+// > idle), the same value the `socket_state_changed` WS event carries. It is
+// returned on every load read so a page that loads AFTER the last state change
+// can hydrate the badge instead of falling back to IDLE.
+export type SocketDisplayState = 'idle' | 'pending' | 'active' | 'fault'
+
 export interface SocketLoadState {
   pedestal_id: number
   socket_id: number
@@ -47,6 +53,8 @@ export interface SocketLoadState {
   load_pct: number | null
   load_status: LoadStatus
   meter_load_updated_at: string | null
+  /** Unified socket state computed server-side; see SocketDisplayState. */
+  display_state?: SocketDisplayState
   warning_threshold_pct: number
   critical_threshold_pct: number
   // 3-phase only

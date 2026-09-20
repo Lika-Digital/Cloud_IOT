@@ -860,13 +860,30 @@ async def _broadcast_socket_state(pedestal_id: int, socket_id: int, new_state: s
 # Small thresholds so standby/measurement noise does not flicker the badge.
 _METER_ACTIVE_KW = 0.05       # >= 50 W
 _METER_ACTIVE_AMPS = 0.30     # >= 0.3 A on any phase
+# v3.39 — telemetry arrives every ~5 s. Anything older than this is a stale
+# leftover from before the cabinet went offline and must NOT count as live
+# draw: otherwise a dead Opta's last reading keeps a socket shown "active" and
+# holds a standalone usage session open forever.
+_METER_STALE_AFTER_S = 120
 
 
-def _socket_delivering_power(cfg) -> bool:
+def _socket_delivering_power(cfg, *, now: datetime | None = None) -> bool:
     """True when the live meter shows real current/power above a small
     threshold. Handles single- and three-phase configs (the Opta reports the
-    meter in BOTH Smart Mode ON and OFF)."""
+    meter in BOTH Smart Mode ON and OFF).
+
+    v3.39 — readings older than `_METER_STALE_AFTER_S` (or never received) are
+    treated as no draw. `meter_load_updated_at` is stamped on every telemetry
+    message, so a cabinet that stops reporting decays to "not delivering"
+    instead of freezing on its last value.
+    """
     if cfg is None:
+        return False
+    updated_at = getattr(cfg, "meter_load_updated_at", None)
+    if updated_at is None:
+        return False
+    age_s = ((now or datetime.utcnow()) - updated_at).total_seconds()
+    if age_s > _METER_STALE_AFTER_S:
         return False
     pwr = getattr(cfg, "meter_power_kw", None)
     if pwr is not None and pwr >= _METER_ACTIVE_KW:
@@ -1022,6 +1039,11 @@ _customer_idle_since: dict = {}
 # handler: (pid, sid) -> (last_sample_time, last_power_kw, session_id).
 _meter_energy_last: dict = {}
 
+# v3.39 — last display state broadcast from the meter telemetry path:
+# (pid, sid) -> "idle"|"pending"|"active"|"fault". Telemetry lands every ~5 s;
+# this keeps `socket_state_changed` change-only instead of a 5 s heartbeat.
+_meter_last_display_state: dict = {}
+
 
 def _integrate_session_energy(db, pedestal_id: int, socket_id: int, power_kw, now=None) -> None:
     """Accumulate energy_kwh on the active electricity session from power × time.
@@ -1082,7 +1104,7 @@ async def _standalone_usage_tick(now: datetime) -> None:
                 open_sess is not None and (open_sess.customer_id or open_sess.nfc_user_id)
             ) else None
             if attributed is not None:
-                if _socket_delivering_power(sc):
+                if _socket_delivering_power(sc, now=now):
                     _customer_idle_since.pop(key, None)
                 else:
                     first_idle = _customer_idle_since.setdefault(key, now)
@@ -1103,7 +1125,7 @@ async def _standalone_usage_tick(now: datetime) -> None:
                     broadcasts.append(("session_completed", standalone_open, pid, sid))
                 continue
 
-            if _socket_delivering_power(sc):
+            if _socket_delivering_power(sc, now=now):
                 _standalone_usage_low_since.pop(key, None)
                 if open_sess is None:
                     s = _Session(
@@ -2883,8 +2905,21 @@ async def _handle_opta_meter_telemetry(socket_name: str, payload: str) -> None:
         _integrate_session_energy(db, pedestal_id, socket_id, cfg.meter_power_kw)
 
         db.commit()
+
+        # v3.39 — the meter is what makes a socket "active" when it draws power
+        # with no NUC session (Smart Mode OFF / standalone). This handler used to
+        # emit only load alarms, so that transition never reached the dashboard
+        # and the badge stayed IDLE next to a live current reading. Recompute
+        # here and emit `socket_state_changed` only when the value actually
+        # changes — telemetry lands every ~5 s and must not flood the socket.
+        display_state = _compute_socket_display_state(db, pedestal_id, socket_id)
     finally:
         db.close()
+
+    state_key = (pedestal_id, socket_id)
+    if _meter_last_display_state.get(state_key) != display_state:
+        _meter_last_display_state[state_key] = display_state
+        await _broadcast_socket_state(pedestal_id, socket_id, display_state, resource="POWER")
 
     # Build common WS payload.
     payload_data = {

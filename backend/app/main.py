@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from .config import settings
-from .time_utils import iso_z
+from .time_utils import iso_z, now_iso
 from .database import init_db, SessionLocal, engine
 from .models.pedestal import Pedestal
 from .models.session import Session as SessionModel
@@ -389,6 +389,73 @@ async def _temp_sensor_poll():
             logger.warning(f"Temp sensor poll loop error: {e}")
 
 
+async def _close_sessions_on_comm_loss(pedestal_id: int) -> None:
+    """v3.39 — finalise sessions left `active` on a cabinet that went silent.
+
+    Nothing else closes them: the pending watchdog only touches `pending`, the
+    idle auto-finalise only touches customer/NFC sessions, and the standalone
+    grace close only touches `origin='standalone'`. An operator-activated
+    session therefore stayed `active` forever once the Opta dropped off — which
+    is what made the fleet "Active" counter disagree with the pedestal view.
+
+    Idempotent: once the sessions are completed, re-entry is a no-op.
+    """
+    from .services.mqtt_handlers import _compute_socket_display_state, _meter_last_display_state
+
+    closed: list[tuple[int, int | None, str]] = []
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(SessionModel)
+            .filter(SessionModel.pedestal_id == pedestal_id, SessionModel.status == "active")
+            .all()
+        )
+        for s in rows:
+            try:
+                socket_id, stype = s.socket_id, s.type
+                session_service.complete(db, s, end_reason="comm_loss")  # commits
+                closed.append((s.id, socket_id, stype))
+            except Exception as e:
+                logger.warning(f"Comm-loss watchdog: failed to complete session {s.id}: {e}")
+
+        states: dict[int, str] = {}
+        for _sid, socket_id, stype in closed:
+            if socket_id is not None and stype == "electricity":
+                _meter_last_display_state.pop((pedestal_id, socket_id), None)
+                states[socket_id] = _compute_socket_display_state(db, pedestal_id, socket_id)
+    finally:
+        db.close()
+
+    for sess_id, socket_id, stype in closed:
+        await ws_manager.broadcast({
+            "event": "session_completed",
+            "data": {
+                "session_id": sess_id,
+                "pedestal_id": pedestal_id,
+                "socket_id": socket_id,
+                "type": stype,
+                "end_reason": "comm_loss",
+                "timestamp": now_iso(),
+            },
+        })
+    for socket_id, state in states.items():
+        await ws_manager.broadcast({
+            "event": "socket_state_changed",
+            "data": {
+                "pedestal_id": pedestal_id,
+                "socket_id": socket_id,
+                "state": state,
+                "resource": "POWER",
+                "timestamp": now_iso(),
+            },
+        })
+    if closed:
+        logger.warning(
+            "[CommLoss] pedestal=%d — completed %d stale active session(s): %s",
+            pedestal_id, len(closed), [c[0] for c in closed],
+        )
+
+
 async def _comm_loss_watchdog():
     """
     Every 30 s: check each known pedestal against its last-heartbeat timestamp.
@@ -396,6 +463,9 @@ async def _comm_loss_watchdog():
     (deduplicated — only one active comm_loss alarm per pedestal at a time).
     When the pedestal recovers (heartbeat seen again), the alarm stays until
     the operator acknowledges it.
+
+    v3.39 — a cabinet that has gone silent can no longer be delivering power, so
+    any session still marked `active` is also finalised (end_reason="comm_loss").
     """
     from .services.error_log_service import log_warning
     from .services.alarm_service import trigger_alarm, get_active_alarms
@@ -424,7 +494,9 @@ async def _comm_loss_watchdog():
                 last_hb = last_heartbeat.get(pid)
                 if last_hb is None:
                     continue  # never received a heartbeat — pedestal not yet active
-                if last_hb < cutoff and pid not in already_alarmed:
+                if last_hb >= cutoff:
+                    continue
+                if pid not in already_alarmed:
                     trigger_alarm(
                         alarm_type="comm_loss",
                         source="sensor_auto",
@@ -436,6 +508,10 @@ async def _comm_loss_watchdog():
                         "hw", "comm_loss_watchdog",
                         f"Pedestal {pid} communication loss — no heartbeat in {COMM_LOSS_TIMEOUT_SECONDS}s",
                     )
+                # Runs on every pass (not just the first alarm) so a session
+                # started just before the drop is still cleaned up. No-op once
+                # the pedestal has no active sessions left.
+                await _close_sessions_on_comm_loss(pid)
         except Exception as e:
             logger.warning(f"Comm loss watchdog error: {e}")
 

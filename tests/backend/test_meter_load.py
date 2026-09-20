@@ -171,6 +171,11 @@ def _seed_hw_config(pedestal_id: int, socket_id: int, **fields) -> None:
         if cfg is None:
             cfg = SocketConfig(pedestal_id=pedestal_id, socket_id=socket_id, auto_activate=False)
             db.add(cfg)
+        # v3.39 — seeded meter values represent a live reading, so stamp the
+        # freshness column the staleness guard reads. Set BEFORE `fields` so a
+        # test can pass an explicit `meter_load_updated_at` to simulate a
+        # cabinet that has gone silent.
+        cfg.meter_load_updated_at = datetime.utcnow()
         for k, v in fields.items():
             setattr(cfg, k, v)
         cfg.hw_config_received_at = datetime.utcnow()

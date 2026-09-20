@@ -91,6 +91,7 @@ export default function SocketLoadMeterPanel({
   const live = useStore((s) => s.socketLoadStates[key])
   const setLoadState = useStore((s) => s.setLoadState)
   const setHardwareConfig = useStore((s) => s.setHardwareConfig)
+  const setSocketComputedState = useStore((s) => s.setSocketComputedState)
   // v3.12 — auto-stop latch + recent alarm payload.
   const autoStopPending = useStore((s) => s.autoStopPendingAck[key] ?? false)
   const autoStopAlarm = useStore((s) =>
@@ -138,12 +139,21 @@ export default function SocketLoadMeterPanel({
           modbus_address: r.modbus_address,
           hw_config_received_at: r.hw_config_received_at,
         })
+        // v3.39 — hydrate the unified socket state from the SAME payload.
+        // `socket_state_changed` is a change-only broadcast, so a dashboard
+        // opened after the last transition had an empty socketComputedStates
+        // and every badge fell back to IDLE — including sockets visibly drawing
+        // current right below the badge. The REST read always carries the
+        // server-computed truth (fault > active > pending > idle).
+        if (r.display_state) {
+          setSocketComputedState(pedestalId, socketId, r.display_state)
+        }
         setWarnInput(r.warning_threshold_pct)
         setCritInput(r.critical_threshold_pct)
       })
       .catch(() => { /* fine — defaults stay; WS will populate later */ })
     return () => { cancelled = true }
-  }, [pedestalId, socketId, setLoadState, setHardwareConfig])
+  }, [pedestalId, socketId, setLoadState, setHardwareConfig, setSocketComputedState])
 
   const phases = hwCfg?.phases ?? null
   const isThreePhase = phases === 3

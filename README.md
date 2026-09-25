@@ -83,6 +83,52 @@ is exposed via the Cloudflare tunnel:
 
 Every merge to `main` must be described here before the push. Entries are newest-first; each references its commit hash so the history on disk matches what operators actually see on the NUC after `upgrade.sh`.
 
+### 2026-09-25 — Retained MQTT messages no longer resurrect a dead cabinet (v3.40)
+
+Found while explaining why an `mosquitto_sub` trace showed traffic dated 2026-09-01
+from a cabinet that had been silent for 19 days. The answer — MQTT **retained**
+messages, which the broker stores per topic (persisted to `mosquitto.db` in the
+`mosquitto-data` volume) and replays to every new subscriber — exposed a real bug.
+
+`MQTTService._on_message` read `msg.topic` and `msg.payload` but **discarded
+`msg.retain`**, so no handler could tell a replay from live traffic. Since
+`opta/status` → `_handle_marina_status` → `_handle_heartbeat` writes
+`last_heartbeat = now`, `opta_connected = 1` and `status = "online"` on receipt,
+**every backend restart marked a long-dead cabinet as online with a fresh
+heartbeat.** Two consequences, both observed on MAR_KRK_ORM_01 (silent since
+2026-09-01 via the signed-int32 `millis()` rollover at 24.85 d uptime):
+
+- the dashboard showed the cabinet connected when nothing was there;
+- `_comm_loss_watchdog` compares against `last_heartbeat`, so the restart-seeded
+  timestamp suppressed the comm-loss alarm — and, since v3.39, would have
+  suppressed the stale-session cleanup that depends on it.
+
+**Fixed** by threading the flag through `handle_message(topic, payload, *,
+retained=False)` and splitting the two kinds of state a status message carries:
+
+- **Liveness is never taken from a replay** — `last_heartbeat`, `opta_connected`,
+  `status="online"`, the `pedestal_registered` heartbeat announce, and the
+  `seq == 0` time-sync publish are all skipped (that last one would command a
+  cabinet that is not there). `_handle_heartbeat` drops a retained message
+  outright; both `opta/status` and the legacy `pedestal/{id}/heartbeat` path
+  honour it.
+- **Durable config still hydrates from a replay** — SmartMode, door state, and the
+  `opta_status` broadcast, because that is precisely what retain is for. The
+  broadcast now carries `retained: true/false`, and the Overview's Cabinet Status
+  card marks the uptime row **"last known"** so a weeks-old value no longer reads
+  as live.
+
+`retained` defaults to `False`, so the simulator and every direct handler caller
+are unaffected. **Operational note:** clear a dead cabinet's retained liveness
+topic with `mosquitto_pub -t opta/status -r -n` — config topics can stay.
+
+**Regression coverage** — `tests/backend/test_mqtt_retained_liveness.py`
+(TC-RET-01..11), in the commit gate. Pins both directions (a retained replay
+writes no liveness; a live message still does — the flag must not become a blanket
+off-switch), that config/broadcast still flow, that no time sync is published to a
+replay, and that the transport actually forwards `msg.retain` — without which every
+handler guard above is dead code.
+
 ### 2026-09-20 — Socket state consistency: fleet count vs. pedestal view (v3.39)
 
 Reported from the field: the fleet overview card showed **3 Active** for a cabinet

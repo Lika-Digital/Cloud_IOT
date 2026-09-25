@@ -366,11 +366,23 @@ def _coerce_bool(value):
     return None
 
 
-async def handle_message(topic: str, payload: str):
+async def handle_message(topic: str, payload: str, *, retained: bool = False):
+    """Dispatch one MQTT message to its handler.
+
+    `retained` is the broker's RETAIN flag (v3.40). The broker stores the last
+    retained message per topic and replays it to every new subscriber, so each
+    backend restart re-delivers a cabinet's final status — even one that has been
+    dead for weeks. Config-bearing topics (hwconfig, breakers, door) are still
+    applied from a replay: that data is durable and hydrating it is the whole
+    point of retain. LIVENESS must not be: a replayed heartbeat is not evidence
+    the cabinet is alive, so the status handlers skip the
+    `last_heartbeat`/`opta_connected`/`status=online` writes when this is set.
+    Defaults to False so direct callers (tests, simulator) are unaffected.
+    """
     try:
         # ── Opta firmware (cabinetId in payload) ─────────────────────────────
         if OPTA_STATUS_RE.match(topic):
-            await _handle_opta_status(payload)
+            await _handle_opta_status(payload, retained=retained)
         elif m := OPTA_SOCKET_RE.match(topic):
             await _handle_opta_socket(m.group(1), payload)
         elif m := OPTA_SOCKET_POWER_RE.match(topic):
@@ -399,7 +411,7 @@ async def handle_message(topic: str, payload: str):
         elif m := MARINA_DOOR_RE.match(topic):
             await _handle_marina_door(m.group(1), payload)
         elif m := MARINA_STATUS_RE.match(topic):
-            await _handle_marina_status(m.group(1), payload)
+            await _handle_marina_status(m.group(1), payload, retained=retained)
         elif m := MARINA_EVENTS_RE.match(topic):
             await _handle_marina_events(m.group(1), payload)
         elif m := MARINA_ACKS_RE.match(topic):
@@ -412,7 +424,7 @@ async def handle_message(topic: str, payload: str):
         elif m := WATER_FLOW_RE.match(topic):
             await _handle_water_flow(int(m.group(1)), payload)
         elif m := HEARTBEAT_RE.match(topic):
-            await _handle_heartbeat(int(m.group(1)), payload)
+            await _handle_heartbeat(int(m.group(1)), payload, retained=retained)
         elif m := SENSOR_TEMP_RE.match(topic):
             await _handle_temperature(int(m.group(1)), payload)
         elif m := SENSOR_MOIST_RE.match(topic):
@@ -681,11 +693,15 @@ async def _handle_marina_door(cabinet_id: str, payload: str):
         _hw_warn(f"cabinet_{cabinet_id}", f"Cabinet door OPEN on {cabinet_id}")
 
 
-async def _handle_marina_status(cabinet_id: str, payload: str):
+async def _handle_marina_status(cabinet_id: str, payload: str, *, retained: bool = False):
     """
     marina/cabinet/{cabinetId}/status
     Payload: {"cabinetId":"...","seq":34,"uptime_ms":512397,"door":"closed"}
     Maps to heartbeat handler so the pedestal shows as connected.
+
+    v3.40 — on a RETAINED replay the durable parts are still applied (SmartMode,
+    and the `opta_status` broadcast so the Control Center can show last-known
+    uptime/door), but the heartbeat is NOT: see `_handle_heartbeat`.
     """
     try:
         data = json.loads(payload)
@@ -722,9 +738,12 @@ async def _handle_marina_status(cabinet_id: str, payload: str):
         "uptime_ms": data.get("uptime_ms", 0),
         "seq": data.get("seq", 0),
     })
-    logger.debug("[Marina] cabinet=%s status seq=%s → heartbeat pedestal=%d", cabinet_id, data.get("seq"), pedestal_id)
-    await _handle_heartbeat(pedestal_id, legacy_payload)
-    # Also broadcast raw opta status details for Control Center UI
+    logger.debug("[Marina] cabinet=%s status seq=%s retained=%s → heartbeat pedestal=%d",
+                 cabinet_id, data.get("seq"), retained, pedestal_id)
+    await _handle_heartbeat(pedestal_id, legacy_payload, retained=retained)
+    # Also broadcast raw opta status details for Control Center UI. `retained`
+    # is passed through so the UI can mark the reading as last-known rather than
+    # live (v3.40).
     await ws_manager.broadcast({
         "event": "opta_status",
         "data": {
@@ -734,6 +753,7 @@ async def _handle_marina_status(cabinet_id: str, payload: str):
             "uptime_ms": data.get("uptime_ms", 0),
             "door": data.get("door"),
             "smart_mode": smart_mode_val,
+            "retained": retained,
             "timestamp": now_iso(),
         },
     })
@@ -2027,29 +2047,43 @@ def _opta_cabinet_id(payload: str, topic_hint: str) -> str | None:
     return cid
 
 
-async def _handle_opta_status(payload: str):
+async def _handle_opta_status(payload: str, *, retained: bool = False):
     """opta/status — cabinet heartbeat (same as marina status but cabinetId in payload).
 
     When seq=0 (Opta just restarted), publish a time sync immediately.
+
+    v3.40 — a RETAINED replay updates no liveness state and triggers no time
+    sync: `seq` in a replay is the cabinet's last value before it went silent,
+    so acting on it would command a device that is not there.
     """
     global _opta_cached_cabinet_id
     cabinet_id = _opta_cabinet_id(payload, "opta/status")
     if cabinet_id:
         _opta_cached_cabinet_id = cabinet_id
-        await _handle_marina_status(cabinet_id, payload)
+        await _handle_marina_status(cabinet_id, payload, retained=retained)
 
-        # Detect Opta restart and send time sync
-        try:
-            data = json.loads(payload)
-            if data.get("seq") == 0:
-                _publish_time_sync()
-        except (json.JSONDecodeError, Exception):
-            pass
+        # Detect Opta restart and send time sync (live messages only — a replayed
+        # seq is historical and the cabinet may be long gone).
+        if not retained:
+            try:
+                data = json.loads(payload)
+                if data.get("seq") == 0:
+                    _publish_time_sync()
+            except (json.JSONDecodeError, Exception):
+                pass
 
         # v3.7 — heartbeat-side `pedestal_registered is_new=False` broadcast.
         # `_cabinet_to_pedestal_id` already handled first-contact creation +
         # the `is_new=True` announce; here we just nudge connected dashboards
         # that this pedestal is alive, throttled to once per 60 s.
+        # v3.40 — skipped on a replay: this announce and the `status="online"`
+        # write below both assert liveness, which a retained message cannot.
+        if retained:
+            logger.info(
+                "[Opta] cabinet=%s — RETAINED status replay; cabinet NOT marked online "
+                "(last-known state only)", cabinet_id,
+            )
+            return
         try:
             db = SessionLocal()
             try:
@@ -3262,7 +3296,18 @@ async def _handle_water_flow(
         db.close()
 
 
-async def _handle_heartbeat(pedestal_id: int, payload: str):
+async def _handle_heartbeat(pedestal_id: int, payload: str, *, retained: bool = False):
+    """v3.40 — `retained=True` means the broker replayed a stored message, not
+    that the cabinet just spoke. A heartbeat is pure liveness, so a replay is
+    dropped entirely: writing it would resurrect a dead cabinet as `online` with
+    a fresh `last_heartbeat` on every backend restart, hiding the outage from the
+    dashboard AND from the comm-loss watchdog."""
+    if retained:
+        logger.info(
+            "[Heartbeat] pedestal=%d — ignoring RETAINED heartbeat replay "
+            "(no evidence the cabinet is alive)", pedestal_id,
+        )
+        return
     try:
         data = json.loads(payload)
         now = datetime.utcnow()

@@ -76,7 +76,20 @@ export default function PedestalOverview({ pedestalId }: { pedestalId: number })
           {statusInfo && (
             <>
               <span className="text-gray-500">Uptime</span>
-              <span className="text-gray-300 font-mono">{fmtUptime(statusInfo.uptime_ms)}</span>
+              {/* v3.40 — a RETAINED status is the cabinet's last-known state
+                  replayed by the broker, not a live reading. Label it, or a
+                  weeks-old uptime reads as if the cabinet were up right now. */}
+              <span className="text-gray-300 font-mono">
+                {fmtUptime(statusInfo.uptime_ms)}
+                {statusInfo.retained && (
+                  <span
+                    className="ml-1.5 font-sans text-[10px] text-amber-400"
+                    title="Last known value replayed by the MQTT broker — the cabinet has not reported since."
+                  >
+                    last known
+                  </span>
+                )}
+              </span>
             </>
           )}
           <span className="text-gray-500">Door</span>

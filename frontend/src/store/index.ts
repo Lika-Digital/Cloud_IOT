@@ -132,6 +132,10 @@ export interface OptaStatusInfo {
   uptime_ms: number
   door?: string
   smart_mode?: boolean   // v3.28 — firmware SmartMode (null/undefined = unknown)
+  /** v3.40 — true when this came from the broker's RETAINED replay rather than
+   *  live traffic, i.e. it is the cabinet's LAST-KNOWN state (possibly weeks
+   *  old), not proof it is online. Drives the "last known" marker on uptime. */
+  retained?: boolean
   timestamp: string
 }
 

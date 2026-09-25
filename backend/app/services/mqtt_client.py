@@ -149,10 +149,19 @@ class MQTTService:
         except Exception:
             payload = str(msg.payload)
 
-        logger.debug(f"MQTT received ← {topic}: {payload}")
+        # v3.40 — forward the RETAIN flag. The broker replays the last retained
+        # message per topic to every new subscriber, so on each backend restart a
+        # long-dead cabinet's final status arrives looking exactly like a live
+        # one. Without this flag the handlers cannot tell the two apart and stamp
+        # the cabinet `online` with a fresh heartbeat. See handle_message().
+        retained = bool(getattr(msg, "retain", False))
+
+        logger.debug(f"MQTT received ← {topic}{' [retained]' if retained else ''}: {payload}")
 
         if self._loop and self._loop.is_running():
-            asyncio.run_coroutine_threadsafe(handle_message(topic, payload), self._loop)
+            asyncio.run_coroutine_threadsafe(
+                handle_message(topic, payload, retained=retained), self._loop,
+            )
 
     @property
     def is_connected(self) -> bool:

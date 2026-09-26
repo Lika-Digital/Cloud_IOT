@@ -129,65 +129,14 @@ def _redact(url: str) -> str:
     return url
 
 
-# ─── the real alarm rule (pure; Stage B must reuse this logic) ───────────────
+# ─── the alarm rule now lives in the backend, shared with the worker ─────────
 #
-# Frame-level recall can look excellent and still produce a false alarm every ten
-# minutes, so this is the number the marina actually feels. The rule mirrors the
-# Stage B spec: a person seen in >= `frames_required` inferences inside a rolling
-# `window_seconds`, then a cooldown before another alarm can fire.
-#
-# Kept as a pure function over (timestamp, detected) pairs so it is unit-testable
-# without a model — see tests/backend/test_guard_alarm_rule.py. Stage B should
-# promote this into app/guard/ rather than reimplementing it.
-
-def evaluate_alarm_rule(
-    samples: list[tuple[float, bool]],
-    *,
-    frames_required: int = 2,
-    window_seconds: float = 3.0,
-    cooldown_seconds: float = 60.0,
-) -> list[dict]:
-    """Replay detections through the alarm rule.
-
-    Args:
-        samples: (timestamp_seconds, person_detected) in chronological order.
-        frames_required: positives needed inside the window to alarm.
-        window_seconds: rolling window length.
-        cooldown_seconds: after an alarm, suppress further alarms this long.
-
-    Returns:
-        One dict per alarm: {t, first_positive_t, latency_s, positives_in_window}.
-    """
-    alarms: list[dict] = []
-    window: list[float] = []
-    cooldown_until: float | None = None
-    first_positive_t: float | None = None
-
-    for t, detected in samples:
-        if not detected:
-            continue
-        if first_positive_t is None:
-            first_positive_t = t
-
-        window.append(t)
-        window = [w for w in window if t - w <= window_seconds]
-
-        if cooldown_until is not None and t < cooldown_until:
-            continue   # motion still observed, but no new alarm during cooldown
-
-        if len(window) >= frames_required:
-            alarms.append({
-                "t": t,
-                "first_positive_t": first_positive_t,
-                "latency_s": t - first_positive_t,
-                "positives_in_window": len(window),
-            })
-            cooldown_until = t + cooldown_seconds
-            window = []
-            first_positive_t = None
-
-    return alarms
-
+# Promoted to app/guard/alarm_rule.py in step 2. The probe imports it rather than
+# carrying its own copy, so replaying a clip and running live use provably the same
+# decision code — the "probe and worker share ONE code path" requirement applied to the
+# alarm decision as well as to detection. Re-exported here so existing callers and tests
+# keep working.
+from app.guard.alarm_rule import evaluate_alarm_rule  # noqa: E402  (after sys.path setup)
 
 def crop_jpeg(data: bytes, zone: tuple[float, float, float, float] | None) -> bytes:
     """Crop to a fractional zone. Mirrors berths.py:445-460 so the probe measures

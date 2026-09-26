@@ -655,6 +655,28 @@ def test_tc_gcap_19_real_camera_ring_survives_sigkill(tmp_path):
         "and guard must never record it — this is a policy requirement, not a codec "
         "workaround. Check -map 0:v:0 -an -dn -sn on the segment output."
     )
+    assert "data" not in kinds, f"the data stream reached disk ({kinds})"
+
+    # `-map 0:v:0` admits exactly ONE video stream, so a segment must contain exactly one.
+    # The first real-camera run reported ['video', 'video']. That is either a genuine
+    # duplication — wasting bitrate and disk, and yielding an alarm clip with two video
+    # tracks that browsers play badly once step 3 concatenates segments — or an artefact of
+    # this particular segment. Either way it has to be understood BEFORE recording assembly
+    # is built on top of it, so it is asserted rather than left in a printout.
+    #
+    # Diagnose with:
+    #   ffprobe -v error -show_entries stream=index,codec_type,codec_name -of csv SEG.ts
+    #   ffprobe -v error -show_streams -of default=noprint_wrappers=1 SEG.ts
+    video_streams = [k for k in kinds if k == "video"]
+    assert len(video_streams) == 1, (
+        f"expected exactly ONE video stream in a segment, found {len(video_streams)} "
+        f"({kinds}). -map 0:v:0 admits a single stream, so either the muxer emits a "
+        f"duplicate or the source announces two. Diagnose with:\n"
+        f"  ffprobe -v error -show_entries stream=index,codec_type,codec_name -of csv "
+        f"{complete[0]}\n"
+        "Resolve before step 3 (recording assembly): concatenating two-video-track "
+        "segments produces a clip browsers handle badly."
+    )
 
 # ═══════════════════════════════════════════════════════════════════════════
 # TC-GCAP-20/21 — static guards for the class of bug synthetic tests cannot see

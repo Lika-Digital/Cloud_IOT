@@ -1,3 +1,60 @@
+# Implementation Status - Guard Stage B step 2 DONE (pipeline + alarm rule)
+
+## 2026-09-26 - Step 1 ACCEPTED on the NUC (TC-GCAP-19 green, 24 passed). Step 2 complete.
+
+Step-1 acceptance evidence: 3 frames from stdout, bytes growing 2.36 MB -> 9.49 MB, 5 segments
+(4 complete) surviving SIGKILL and decoding 83-220 frames each, and **no audio stream on
+disk** - proven against the source that actually carries pcm_alaw.
+
+- [FLAGGED - must resolve before step 3] The acceptance output showed
+  `streams in segment: ['video','video']` - **two** video streams where `-map 0:v:0` admits
+  exactly one. Either a genuine duplication (wasted bitrate/disk, and an alarm clip with two
+  video tracks that browsers play badly once segments are concatenated) or an artefact of
+  that probe. TC-GCAP-19 now **asserts exactly one video stream** with the ffprobe diagnostic
+  in the failure message, so it is settled by evidence rather than guesswork. Does not block
+  step 2 (detection never touches segments) but **does block step 3**.
+
+### Step 2 - detection + alarm rule on the shared pipeline (DONE)
+- [DONE] `backend/app/guard/alarm_rule.py` (NEW) - **promoted** from the probe, not
+  reimplemented. `evaluate_alarm_rule` (batch, for clip replay) is implemented **on top of**
+  `AlarmState` (incremental, for the live worker), so the two provably cannot drift -
+  TC-GAR-12 asserts equivalence across four scripted scenarios. Defaults are the settled
+  values (2 frames / 4.0 s window), pinned by TC-GAR-11.
+- [DONE] `backend/app/guard/pipeline.py` (NEW) - the one per-frame path: crop -> visibility ->
+  detect -> band. Detector is **injected**, so this module needs no openvino import and stays
+  usable from the staging venv. Three bands, not two: `none` writes NO row (absence is not a
+  weak detection), `uncertain` is stored and is the Phase 2 escalation/training candidate,
+  `alarm` can fire the rule. `FrameResult.detected` is true only in the alarm band.
+- [DONE] Detection runs at **`uncertain_min`, not `conf_threshold`** (TC-GPL-04), so
+  below-threshold detections are returned and can be logged. Those rows are the missing A.5
+  accuracy numbers and the Phase 2 training index - unrecoverable after the fact.
+- [DONE] `LIMITED_VISIBILITY` implemented as a **flag, not a state**: mean luma + Laplacian
+  variance (same slicing convention as `berth_analyzer`, no scipy), detection keeps running
+  while flagged and the event is stamped. It is how the system SAYS it cannot see rather than
+  silently finding nothing - which matters because night is out of scope on this camera.
+- [DONE] `tests/backend/test_guard_import_isolation.py` (NEW, 8 cases) - the guard that keeps
+  the staging-venv measurement flow alive. Statically rejects FastAPI/SQLAlchemy/pydantic/etc
+  anywhere in the shared modules, rejects module-level relative imports (which would pull
+  SQLAlchemy in transitively), requires numpy/PIL to be function-local, asserts
+  `guard_worker/capture.py` is **stdlib-only** so a detection dependency problem cannot stop
+  the segment ring recording evidence - and TC-GIS-06 actually imports both modules with the
+  forbidden names blocked. This class of breakage is invisible until someone runs the probe
+  on the NUC.
+- [DONE] `tests/backend/test_guard_pipeline.py` (NEW, 22 cases) - bands, storage rules,
+  uncertain-must-not-alarm, unavailable-is-not-nothing-there, crop geometry, **pixel height
+  measured against the CROP** (measuring against the full frame would overstate range by
+  ~1.7x), visibility flagging, graceful degradation on a corrupt frame, config validation,
+  and an end-to-end pipeline->rule scenario at the settled settings.
+- [FIXED - found by the promotion] TC-GAR-03's premise was stale: it assumed a 3 s window,
+  but the settled default is 4 s, so 10.0 s + 14.0 s now correctly alarms. Rewritten to cover
+  the explicit 3 s case, the 4 s default, AND the inclusive boundary.
+- [DONE] `scripts/guard_detect_probe.py` now **imports** the shared rule instead of carrying
+  a copy - the "probe and worker share ONE code path" requirement applied to the alarm
+  decision as well as detection.
+- [VERIFIED] Full suite **733 passed, 4 skipped**. Probe still runs.
+- [NEXT] Step 3 - recording assembly from segments, timestamp filenames, retention.
+  **Blocked on the two-video-stream question above.**
+
 # Implementation Status — Guard Stage B step 1 DONE (capture) — step 2 next
 
 ## 2026-09-26 — B1 approved with all six decisions. Concurrent-RTSP check PASSED on site.

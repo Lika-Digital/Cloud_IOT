@@ -81,6 +81,22 @@ mpegts to survive **SIGKILL and power loss**, not SIGTERM — state that correct
 docs, and state that guard records **no audio, by policy** (pontoon conversations are a
 separate legal question from video), enforced by `-map 0:v:0 -an -dn -sn` on every output.
 
+### Standing rule to write down (earned the hard way)
+
+**For anything touching the camera: a synthetic test proves the SHAPE, only the real
+stream proves it WORKS.** Three consecutive failures on the capture module all came from
+the same root — a synthetic source accepting what the real camera rejects:
+
+| Symptom | Synthetic behaviour | Real-camera behaviour |
+|---|---|---|
+| `-reconnect` on the input | harmless on lavfi/file — every test passed | **fatal** on RTSP; ffmpeg 8.0.1 refuses to start, so 0 frames / 0 segments / 0 bytes |
+| rawvideo into `-c:v copy` | failed **silently**, left a 0-byte segment | n/a — the weak assertion (`file exists`) was satisfied by the 0-byte file |
+| mpegts + SIGKILL | 0 bytes: a tiny stream stayed in ffmpeg's AVIO buffer | fine: a 1080p25 feed writes continuously, completed segments always land |
+
+So **TC-GCAP-19 (opt-in `GUARD_TEST_RTSP_URL`) is a REQUIRED gate, not an optional
+extra** — the capture module is not 'done' without it, and the same rule applies to any
+future camera-facing change. State this in the Operations/Testing section.
+
 ## Carry-forward tasks — separate work, NOT inside guard or UI v2
 
 1. **`requirements.txt` drift audit.** Only numpy was fixed (`6a404b2`,

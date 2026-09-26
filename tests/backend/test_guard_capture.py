@@ -28,7 +28,7 @@ merely intended:
   TC-GCAP-11  MJPEG framing bounds its buffer on a stream with no end marker
   TC-GCAP-12  ring keeps the newest N and deletes the rest, oldest first
   TC-GCAP-13  ring NEVER deletes a pinned segment (an in-progress alarm clip)
-  TC-GCAP-14  [ffmpeg] killed mid-recording leaves a PLAYABLE file  ← the regression
+  TC-GCAP-14  [ffmpeg] SIGKILL mid-recording leaves a PLAYABLE file  ← the regression
   TC-GCAP-15  [ffmpeg] a real capture produces segments and frames from one process
   TC-GCAP-16  complete_segments() excludes the segment still being written
 """
@@ -252,82 +252,143 @@ def test_tc_gcap_16_complete_segments_excludes_the_one_being_written(tmp_path):
 # TC-GCAP-14/15 — real ffmpeg. Synthetic source, so no camera is needed.
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _probe_duration(path: Path) -> float | None:
-    """Seconds of decodable video, via ffprobe. None if unreadable."""
+def ffmpeg_version() -> str:
+    """First line of `ffmpeg -version`.
+
+    Recorded in every failure message because dev and production DIVERGED on exactly this
+    behaviour: observed **ffmpeg 8.0.1-3ubuntu2 on marina-iot (2026-09-26)**, where the
+    original form of TC-GCAP-14 failed while passing on the dev box. A future divergence
+    should be visible rather than confusing.
+    """
+    try:
+        out = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True,
+                             timeout=30)
+        return out.stdout.splitlines()[0] if out.stdout else "unknown"
+    except Exception:
+        return "unknown"
+
+
+def decoded_frame_count(path: Path) -> int | None:
+    """Frames that actually DECODE, via `ffprobe -count_frames`.
+
+    Deliberately not a header duration and not a packet count: a damaged file can carry a
+    plausible-looking header over unreadable payload, which is how the first version of
+    TC-GCAP-14 fooled itself into reporting 393 s for a 4 s clip. Decoding is much harder
+    to fool. Returns None when the file cannot be read at all.
+    """
     try:
         out = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-count_packets", "-show_entries", "stream=nb_read_packets,codec_name",
-             "-of", "default=noprint_wrappers=1", str(path)],
-            capture_output=True, text=True, timeout=60,
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
+             "-show_entries", "stream=nb_read_frames",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True, text=True, timeout=120,
         )
         if out.returncode != 0:
             return None
-        packets = None
-        for line in out.stdout.splitlines():
-            if line.startswith("nb_read_packets="):
-                packets = int(line.split("=")[1])
-        return None if not packets else packets / 25.0
+        first = out.stdout.strip().splitlines()[0] if out.stdout.strip() else ""
+        return int(first) if first.isdigit() else None
     except Exception:
         return None
 
 
-@needs_ffmpeg
-def test_tc_gcap_14_killed_mid_recording_leaves_playable_file(tmp_path):
-    """THE regression the field finding demands.
+def _record_then_signal(tmp_path: Path, container: str, suffix: str, sig: str,
+                        seconds: float = 6.0):
+    """Record `container` in REALTIME, then stop it with SIGTERM or SIGKILL.
 
-    The watchdog is designed to stop the worker abruptly (SUSPENDED_CPU), so a
-    mid-recording kill must never leave unplayable evidence. mpegts survives; MP4 does
-    not — and this test proves both halves, so nobody can 'simplify' the ring back to
-    MP4 without a red test.
+    `-re` is essential. Without it lavfi generates frames as fast as the encoder consumes
+    them, so a few seconds of wall time yields minutes of video and every duration-based
+    assertion becomes meaningless.
     """
-    src = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25"]
-
-    # ── mpegts: killed mid-write, must still decode ──
-    ts_path = tmp_path / "killed.ts"
+    out_path = tmp_path / ("killed_" + container + suffix)
     proc = subprocess.Popen(
-        ["ffmpeg", "-hide_banner", "-loglevel", "error", *src,
-         "-map", "0:v:0", "-an", "-dn", "-sn", "-c:v", "libx264", "-preset", "ultrafast",
-         "-f", "mpegts", "-y", str(ts_path)],
+        ["ffmpeg", "-hide_banner", "-loglevel", "error",
+         "-re",                                   # realtime: frames approx wall seconds
+         "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25",
+         "-map", "0:v:0", "-an", "-dn", "-sn",
+         "-c:v", "libx264", "-preset", "ultrafast", "-g", "25",
+         "-f", container, "-y", str(out_path)],
         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
     )
-    time.sleep(4)
-    proc.terminate()                      # exactly what the watchdog will do
+    t0 = time.time()
+    time.sleep(seconds)
+    if sig == "SIGKILL":
+        proc.kill()
+    else:
+        proc.terminate()
     try:
-        proc.wait(timeout=10)
+        proc.wait(timeout=15)
     except subprocess.TimeoutExpired:
-        proc.kill(); proc.wait(timeout=5)
+        proc.kill()
+        proc.wait(timeout=5)
+    return out_path, time.time() - t0
 
-    assert ts_path.exists(), "mpegts file missing entirely"
-    size = ts_path.stat().st_size
-    assert size > 0, "mpegts left a 0-byte file — the ring format is not abrupt-stop safe"
-    dur = _probe_duration(ts_path)
-    assert dur is not None and dur > 0.5, (
-        f"mpegts killed mid-write did not decode (size={size}, duration={dur}) — "
-        "the segment ring would be producing unplayable evidence"
+
+@needs_ffmpeg
+def test_tc_gcap_14_abrupt_kill_leaves_playable_file(tmp_path):
+    """THE regression the field finding demands — corrected after the NUC run.
+
+    The first version asserted the wrong property and was rightly caught: it reported a
+    393.48 s duration for what should have been a 4 s clip. Two mistakes, both fixed:
+
+      1. No `-re`, so lavfi ran far faster than realtime. The MP4 really did contain
+         ~393 s of video; nothing was corrupt.
+      2. It stopped ffmpeg with SIGTERM, which **ffmpeg handles gracefully** by writing a
+         valid MP4 `moov` trailer. So the MP4 was fine and the assertion was simply false.
+
+    That corrects the RATIONALE as well as the test. mpegts is NOT needed to survive
+    SIGTERM. It is needed to survive **SIGKILL and power loss** — the genuine hazard here,
+    because `CameraCapture.stop()` escalates to SIGKILL after a 5 s timeout, systemd
+    escalates the same way, and a pontoon loses power. The conclusion (mpegts for the ring)
+    stands; the reason is now accurate.
+
+    Switching the ring to MP4 is caught by TC-GCAP-03, which asserts the segment format
+    directly. This test exists to prove why that assertion matters.
+    """
+    ver = ffmpeg_version()
+    fps = 25
+
+    # mpegts under SIGKILL: must still decode roughly the length actually recorded.
+    ts_path, elapsed = _record_then_signal(tmp_path, "mpegts", ".ts", "SIGKILL")
+    expected = elapsed * fps
+    assert ts_path.exists() and ts_path.stat().st_size > 0, (
+        "mpegts left no usable file after SIGKILL (ffmpeg: " + ver + ")"
+    )
+    ts_frames = decoded_frame_count(ts_path)
+    assert ts_frames is not None and ts_frames > 0, (
+        "mpegts killed with SIGKILL did not decode at all - the segment ring would be "
+        "producing unplayable evidence. ffmpeg: " + ver
+    )
+    assert 0.4 * expected <= ts_frames <= 1.6 * expected, (
+        f"mpegts decoded {ts_frames} frames but ~{expected:.0f} were recorded "
+        f"({elapsed:.1f}s at {fps}fps). A count far outside that band means the file is "
+        f"not a faithful recording even though it opened. ffmpeg: {ver}"
     )
 
-    # ── mp4: the same treatment, to document WHY we do not use it ──
-    mp4_path = tmp_path / "killed.mp4"
-    proc2 = subprocess.Popen(
-        ["ffmpeg", "-hide_banner", "-loglevel", "error", *src,
-         "-map", "0:v:0", "-an", "-dn", "-sn", "-c:v", "libx264", "-preset", "ultrafast",
-         "-f", "mp4", "-y", str(mp4_path)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+    # MP4 under SIGKILL: must NOT come back as a faithful recording.
+    mp4_path, mp4_elapsed = _record_then_signal(tmp_path, "mp4", ".mp4", "SIGKILL")
+    mp4_expected = mp4_elapsed * fps
+    mp4_frames = decoded_frame_count(mp4_path) if mp4_path.exists() else None
+    mp4_faithful = (mp4_frames is not None
+                    and 0.4 * mp4_expected <= mp4_frames <= 1.6 * mp4_expected)
+    assert not mp4_faithful, (
+        f"MP4 SURVIVED a SIGKILL as a faithful recording ({mp4_frames} frames vs "
+        f"~{mp4_expected:.0f} recorded, ffmpeg: {ver}). If this ffmpeg now writes a "
+        "recoverable moov on SIGKILL, the premise behind the mpegts ring has changed. "
+        "Revisit the ring format DELIBERATELY - measure it, update "
+        "docs/guard_b1_design.md and this docstring - do not just relax this assertion. "
+        "mpegts remains safe either way, so there is no urgency."
     )
-    time.sleep(4)
-    proc2.terminate()
-    try:
-        proc2.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        proc2.kill(); proc2.wait(timeout=5)
 
-    mp4_dur = _probe_duration(mp4_path) if mp4_path.exists() else None
-    assert mp4_dur is None or mp4_dur == 0, (
-        f"MP4 unexpectedly survived a mid-write kill (duration={mp4_dur}). If ffmpeg "
-        "now writes a recoverable moov, revisit the ring-format choice deliberately "
-        "rather than leaving this comment stale."
-    )
+    # Document the trap: MP4 DOES survive SIGTERM. That is exactly why graceful shutdown
+    # cannot be the safety mechanism, and why the ring format has to carry the guarantee.
+    term_path, term_elapsed = _record_then_signal(tmp_path, "mp4", ".mp4", "SIGTERM")
+    term_frames = decoded_frame_count(term_path) if term_path.exists() else None
+    print("\n[TC-GCAP-14] ffmpeg: " + ver)
+    print(f"  mpegts + SIGKILL : {ts_frames} frames (~{expected:.0f} recorded) -> SAFE")
+    print(f"  mp4    + SIGKILL : {mp4_frames} frames (~{mp4_expected:.0f} recorded) -> unsafe")
+    print(f"  mp4    + SIGTERM : {term_frames} frames "
+          f"(~{term_elapsed * fps:.0f} recorded) -> survives, which is WHY graceful "
+          "shutdown cannot be relied on")
 
 
 @needs_ffmpeg

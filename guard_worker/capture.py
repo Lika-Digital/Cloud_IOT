@@ -23,12 +23,18 @@ merely intended:
    `test_guard_capture.py` asserts it on every command shape, so it cannot be dropped by
    a future edit.
 
-2. **mpegts for the ring, never MP4.** An MP4 killed mid-write leaves a 0-byte file with
-   no `moov` atom — unplayable. mpegts survives SIGTERM intact (verified: a 40 s session
-   killed by timeout produced a usable 16.4 MB file). This matters because the watchdog
-   is *designed* to stop the worker abruptly: SUSPENDED_CPU does exactly that in
-   production, so a mid-recording kill must never leave unplayable evidence. ffmpeg's
-   segment muxer also closes each completed segment cleanly.
+2. **mpegts for the ring, never MP4.** MP4 keeps its index (`moov`) until the file is
+   finalised, so an MP4 that is not finalised is unplayable. mpegts carries no such
+   global index — every packet stands alone, so a truncated file still decodes up to the
+   truncation point.
+
+   The precise hazard, corrected after the NUC run (TC-GCAP-14): **ffmpeg handles SIGTERM
+   gracefully and DOES write a valid MP4 trailer**, so MP4 survives a polite stop. What
+   it does not survive is **SIGKILL or power loss** — and both are real here:
+   `CameraCapture.stop()` escalates to SIGKILL after a 5 s timeout, systemd escalates the
+   same way, and a pontoon loses power. Graceful shutdown therefore cannot be the safety
+   mechanism; the container format has to carry the guarantee. ffmpeg's segment muxer also
+   closes each completed segment cleanly, so only the segment in flight is ever at risk.
 
 Stream confirmed on site: h264 High, 1920x1080, 25 fps, plus a pcm_alaw audio stream and
 a data stream — the latter two discarded.
@@ -364,9 +370,10 @@ class CameraCapture:
     def stop(self, timeout: float = 5.0) -> int | None:
         """Terminate gracefully, then kill.
 
-        SIGTERM lets ffmpeg close the current segment cleanly. mpegts is playable even
-        without that courtesy, which is the point of choosing it, but a clean close is
-        still preferable when it is available.
+        SIGTERM first: ffmpeg handles it gracefully and closes the current segment
+        cleanly. The SIGKILL escalation below is why the ring is mpegts rather than MP4 —
+        an unfinalised MP4 is unplayable, whereas a truncated mpegts still decodes up to
+        the cut. So the common path is clean and the abrupt path is still safe.
         """
         if self._proc is None:
             return None

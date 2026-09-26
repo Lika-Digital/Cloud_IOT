@@ -66,6 +66,21 @@ Measured 2026-09-26 on marina-iot (Atom x7425E, 4 cores, Python 3.14.4, openvino
 | Class map | class 0 = person, class 8 = boat, 80 classes |
 | Person-clip rows (recall, px height, latency, partial/crouch) | **PENDING — fill in when measured** |
 
+**Environment versions to state (dev and production diverged once already):**
+
+| Component | Version |
+|---|---|
+| ffmpeg on marina-iot | **8.0.1-3ubuntu2** (observed 2026-09-26) |
+| openvino | 2026.4.0 |
+| Python | 3.14.4 |
+| numpy | 2.4.6 |
+
+The ffmpeg version matters: TC-GCAP-14 behaved differently on the NUC than on the dev box,
+because ffmpeg handles SIGTERM gracefully and writes a valid MP4 trailer. The ring is
+mpegts to survive **SIGKILL and power loss**, not SIGTERM — state that correctly in the
+docs, and state that guard records **no audio, by policy** (pontoon conversations are a
+separate legal question from video), enforced by `-map 0:v:0 -an -dn -sn` on every output.
+
 ## Carry-forward tasks — separate work, NOT inside guard or UI v2
 
 1. **`requirements.txt` drift audit.** Only numpy was fixed (`6a404b2`,

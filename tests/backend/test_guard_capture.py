@@ -31,6 +31,10 @@ merely intended:
   TC-GCAP-14  [ffmpeg] the RING retains usable history across SIGKILL ← the regression
   TC-GCAP-18  [ffmpeg] why mpegts and not mp4 segments (the in-flight segment)
   TC-GCAP-19  [ffmpeg, opt-in GUARD_TEST_RTSP_URL] the same, against the REAL camera
+  TC-GCAP-20  no HTTP-only input options on an RTSP command (ffmpeg 8 refuses to start)
+  TC-GCAP-21  -nostdin is always present, and precedes -i
+  TC-GCAP-22  supervisor restarts with backoff and REPORTS why
+  TC-GCAP-23  supervisor does not retry a missing ffmpeg binary
   TC-GCAP-15  [ffmpeg] a real capture produces segments and frames from one process
   TC-GCAP-16  complete_segments() excludes the segment still being written
 """
@@ -564,6 +568,25 @@ def test_tc_gcap_19_real_camera_ring_survives_sigkill(tmp_path):
         fps=1, segment_seconds=5, segment_ring=6, ffmpeg="ffmpeg",
     )
     cap.start()
+
+    # Did the process even START? Claiming "output 2 is not working" while ffmpeg had
+    # already exited on an invalid option cost real debugging time, so diagnose first and
+    # assert second. drain_stderr() existed all along and the test simply never used it.
+    time.sleep(3)
+    alive = cap.is_running
+    early_exit_rc = None if alive else (cap._proc.returncode if cap._proc else None)
+    if not alive:
+        why = cap.drain_stderr()
+        print(f"\n[TC-GCAP-19] ffmpeg EXITED EARLY rc={early_exit_rc}")
+        print(f"  command: {' '.join(_redact(a) for a in cap.command())}")
+        print(f"  stderr : {why.strip()}")
+        cap.stop()
+        pytest.fail(
+            f"ffmpeg exited within 3s (rc={early_exit_rc}) — the process never ran, so "
+            f"any claim about frames or segments would be misleading.\nstderr: "
+            f"{why.strip()}\ncommand: {' '.join(_redact(a) for a in cap.command())}"
+        )
+
     sizes = []
     frames_seen = 0
     try:
@@ -576,11 +599,17 @@ def test_tc_gcap_19_real_camera_ring_survives_sigkill(tmp_path):
         while time.time() - t0 < 22:
             time.sleep(2)
             sizes.append(sum(p.stat().st_size for p in list_segments(seg_dir)))
+            if not cap.is_running:
+                break
     finally:
+        still_running = cap.is_running
+        stderr_tail = "" if still_running else cap.drain_stderr()
         # SIGKILL directly — the watchdog's escalation path, and the worst realistic case.
         if cap._proc is not None and cap._proc.poll() is None:
             cap._proc.kill()
             cap._proc.wait(timeout=10)
+    if not still_running:
+        print(f"\n[TC-GCAP-19] ffmpeg exited during the run: {stderr_tail.strip()[-600:]}")
 
     all_segs = list_segments(seg_dir)
     complete = complete_segments(seg_dir)
@@ -626,3 +655,131 @@ def test_tc_gcap_19_real_camera_ring_survives_sigkill(tmp_path):
         "and guard must never record it — this is a policy requirement, not a codec "
         "workaround. Check -map 0:v:0 -an -dn -sn on the segment output."
     )
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TC-GCAP-20/21 — static guards for the class of bug synthetic tests cannot see
+#
+# -reconnect / -reconnect_streamed / -reconnect_delay_max are HTTP/TCP protocol options.
+# On a lavfi or file input they are harmless, so every synthetic test passed. On an RTSP
+# input ffmpeg 8.0.1 REFUSES TO START ("Option reconnect not found"), so the real command
+# produced 0 frames, 0 segments and 0 bytes. Only TC-GCAP-19 against the real camera
+# exposed it.
+#
+# A static assertion cannot replace TC-GCAP-19, but it does stop this specific regression
+# from returning silently, and it names the reason at the point of failure.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Input options that only exist for HTTP/TCP protocols and are invalid for RTSP.
+HTTP_ONLY_INPUT_OPTIONS = (
+    "-reconnect",
+    "-reconnect_streamed",
+    "-reconnect_at_eof",
+    "-reconnect_on_network_error",
+    "-reconnect_delay_max",
+    "-multiple_requests",
+    "-http_persistent",
+)
+
+
+def test_tc_gcap_20_no_http_only_options_on_rtsp_input(tmp_path):
+    cmd = build_capture_command(URL, tmp_path, fps=1, segment_seconds=10, ffmpeg="ffmpeg")
+    for opt in HTTP_ONLY_INPUT_OPTIONS:
+        assert opt not in cmd, (
+            f"{opt} is an HTTP/TCP protocol option and is INVALID for an RTSP input. "
+            "ffmpeg 8.0.1 refuses to start with it ('Option reconnect not found'), so the "
+            "capture process never runs at all — no frames, no segments, no bytes. It "
+            "looks harmless in synthetic tests because lavfi and file inputs accept it. "
+            "RTSP reconnection belongs in CaptureSupervisor, not in the input flags."
+        )
+
+
+def test_tc_gcap_21_nostdin_is_always_present(tmp_path):
+    """Without -nostdin ffmpeg reads the terminal: it wedged an interactive shell during
+    field testing, and under systemd it risks blocking on an stdin that never delivers."""
+    capture = build_capture_command(URL, tmp_path, fps=1, segment_seconds=10,
+                                    ffmpeg="ffmpeg")
+    concat = build_concat_command(["a.ts"], tmp_path / "l.txt", tmp_path / "o.mp4",
+                                  ffmpeg="ffmpeg")
+    for name, cmd in (("capture", capture), ("concat", concat)):
+        assert "-nostdin" in cmd, f"{name} command is missing -nostdin"
+        # Must be a global option, i.e. ahead of the input.
+        if "-i" in cmd:
+            assert cmd.index("-nostdin") < cmd.index("-i"), (
+                f"{name}: -nostdin must precede -i to take effect as a global option"
+            )
+
+
+def test_tc_gcap_22_supervisor_restarts_with_backoff_and_reports():
+    """The replacement for the flags that never worked: supervise and restart.
+
+    Uses a fake capture so no ffmpeg is needed — what matters is the restart/backoff/report
+    behaviour, not the subprocess.
+    """
+    from guard_worker.capture import CaptureSupervisor
+
+    events: list[tuple[str, dict]] = []
+    attempts = {"n": 0}
+
+    class _FakeCapture:
+        def __init__(self, frames_to_yield):
+            self._frames = frames_to_yield
+            self.pid = 4242
+            self.stopped = False
+
+        def start(self):
+            pass
+
+        def frames(self):
+            for f in self._frames:
+                yield f
+
+        def stop(self):
+            self.stopped = True
+
+        def drain_stderr(self):
+            return "camera went away"
+
+    def make():
+        attempts["n"] += 1
+        # First run yields one frame then "dies"; second yields two; then nothing.
+        if attempts["n"] == 1:
+            return _FakeCapture([b"f1"])
+        if attempts["n"] == 2:
+            return _FakeCapture([b"f2", b"f3"])
+        return _FakeCapture([])
+
+    sup = CaptureSupervisor(
+        make, min_backoff=0.01, max_backoff=0.02, stable_after=999,
+        on_event=lambda e, f: events.append((e, f)),
+    )
+
+    got = []
+    for frame in sup.frames():
+        got.append(frame)
+        if len(got) >= 3:
+            sup.stop()
+
+    assert got == [b"f1", b"f2", b"f3"], "frames must flow across restarts"
+    assert sup.restart_count >= 1, "an exited capture must be counted as a restart"
+    kinds = [e for e, _ in events]
+    assert "capture_started" in kinds
+    assert "capture_exited" in kinds, "restarts must be reported, not hidden"
+    exited = next(f for e, f in events if e == "capture_exited")
+    assert "camera went away" in exited["stderr"], (
+        "ffmpeg's own complaint must reach the event so the worker can report WHY"
+    )
+    assert sup.last_error and "camera" in sup.last_error
+
+
+def test_tc_gcap_23_supervisor_does_not_retry_a_missing_binary():
+    """A missing ffmpeg is a deployment fault, not a transient one — retrying it forever
+    would bury the real problem in a restart loop."""
+    from guard_worker.capture import CaptureSupervisor, FfmpegNotAvailable
+
+    def make():
+        raise FfmpegNotAvailable("ffmpeg not found on PATH")
+
+    sup = CaptureSupervisor(make, min_backoff=0.01)
+    with pytest.raises(FfmpegNotAvailable):
+        next(iter(sup.frames()))
+

@@ -136,15 +136,23 @@ def build_capture_command(
         ffmpeg or _require_ffmpeg(),
         "-hide_banner",
         "-loglevel", loglevel,
+        # -nostdin is mandatory, not tidiness. Without it ffmpeg reads the terminal: it
+        # wedged an interactive shell during field testing, and inside a systemd unit it
+        # risks blocking forever on an stdin that never delivers.
+        "-nostdin",
         # Input flags. `input_args` overrides the RTSP-specific set so a non-RTSP source
-        # (e.g. `-f lavfi` in tests) can be used without rewriting the command by hand.
+        # (e.g. a pre-encoded file in tests) can be used without rewriting the command.
+        #
+        # NOTE — do NOT add -reconnect / -reconnect_streamed / -reconnect_delay_max here.
+        # They are HTTP/TCP protocol options and are NOT valid for an RTSP input; ffmpeg
+        # 8.0.1 refuses to start outright ("Option reconnect not found"), so the process
+        # never runs and there are no frames, no segments and no bytes. They were present
+        # in the first version of this module and every synthetic test passed anyway,
+        # because on a lavfi/file input they are harmless — only the real RTSP source
+        # exposes it (TC-GCAP-19). RTSP reconnection is the supervisor's job instead; see
+        # CaptureSupervisor below. TC-GCAP-20 guards against them being re-added.
         *(input_args if input_args is not None else [
             "-rtsp_transport", rtsp_transport,
-            # A marina camera drops. Without these ffmpeg exits and we lean on the
-            # supervisor; with them short blips are absorbed in-process.
-            "-reconnect", "1",
-            "-reconnect_streamed", "1",
-            "-reconnect_delay_max", "10",
             "-fflags", "+genpts",
         ]),
         "-i", str(stream_url),
@@ -191,6 +199,7 @@ def build_concat_command(
     cmd = [
         ffmpeg or _require_ffmpeg(),
         "-hide_banner", "-loglevel", loglevel,
+        "-nostdin",
         "-f", "concat", "-safe", "0",
         "-i", str(list_file),
         *_video_only_args(),
@@ -449,3 +458,115 @@ def _redact(arg: str) -> str:
         user = host_part.split(":", 1)[0]
         return f"{scheme}://{user}:***@{rest.split('@', 1)[1]}"
     return arg
+
+
+# ─── supervision ─────────────────────────────────────────────────────────────
+
+class CaptureSupervisor:
+    """Keeps a `CameraCapture` running, restarting it with backoff.
+
+    This exists because the `-reconnect*` family does NOT work for RTSP — those are
+    HTTP/TCP protocol options, and ffmpeg 8.0.1 refuses to start when they are passed
+    with an RTSP input ("Option reconnect not found"), so the process never ran at all.
+    Reconnection therefore has to live one level up: supervise the process and restart it.
+
+    That is also the camera-loss handling the design already required, so the broken flags
+    are replaced by something that genuinely works rather than merely removed.
+
+    Backoff is exponential and capped. It resets once a run has lasted `stable_after`
+    seconds, so an intermittent camera does not creep up to the maximum delay and stay
+    there, while a persistently dead one is retried at a rate that does not spin the CPU.
+    """
+
+    def __init__(
+        self,
+        make_capture,
+        *,
+        min_backoff: float = 1.0,
+        max_backoff: float = 30.0,
+        stable_after: float = 60.0,
+        on_event=None,
+    ):
+        self._make_capture = make_capture
+        self.min_backoff = min_backoff
+        self.max_backoff = max_backoff
+        self.stable_after = stable_after
+        self._on_event = on_event
+        self._stopping = False
+        self.capture: CameraCapture | None = None
+        self.restart_count = 0
+        self.last_error: str | None = None
+
+    def _emit(self, event: str, **fields) -> None:
+        if self._on_event is not None:
+            try:
+                self._on_event(event, fields)
+            except Exception:
+                logger.exception("capture supervisor on_event hook failed")
+
+    def stop(self) -> None:
+        """Ask the frame loop to end, and stop the current process."""
+        self._stopping = True
+        if self.capture is not None:
+            self.capture.stop()
+
+    def frames(self) -> Iterator[bytes]:
+        """Yield frames across restarts until `stop()` is called.
+
+        A caller consuming this generator sees an uninterrupted frame stream regardless of
+        how many times the camera drops; restarts surface through `on_event` and
+        `restart_count` so the worker can report them in its health payload rather than
+        hiding them.
+        """
+        backoff = self.min_backoff
+        while not self._stopping:
+            self.capture = self._make_capture()
+            started = time.time()
+            produced = 0
+            try:
+                self.capture.start()
+                self._emit("capture_started", pid=self.capture.pid)
+                for frame in self.capture.frames():
+                    produced += 1
+                    if produced == 1:
+                        # Only reset backoff once frames actually flow — a process that
+                        # starts and immediately dies must not reset it.
+                        backoff = self.min_backoff
+                    yield frame
+                    if self._stopping:
+                        break
+            except FfmpegNotAvailable:
+                raise                      # a missing binary is not something to retry
+            except Exception as exc:
+                self.last_error = str(exc)
+                logger.warning("Capture loop error: %s", exc)
+
+            if self._stopping:
+                break
+
+            # The process ended on its own — camera drop, network blip, or a bad command.
+            ran_for = time.time() - started
+            stderr = self.capture.drain_stderr() if self.capture else ""
+            self.last_error = stderr.strip() or self.last_error
+            self.capture.stop()
+            self.restart_count += 1
+            self._emit(
+                "capture_exited", ran_for=round(ran_for, 1), frames=produced,
+                stderr=stderr[-500:], restart_count=self.restart_count,
+            )
+            logger.warning(
+                "Capture exited after %.1fs having produced %d frame(s); "
+                "restarting in %.1fs (restart #%d). ffmpeg said: %s",
+                ran_for, produced, backoff, self.restart_count,
+                stderr.strip()[-300:] or "(nothing)",
+            )
+
+            if ran_for >= self.stable_after:
+                backoff = self.min_backoff
+
+            # Sleep in slices so stop() is responsive during a long backoff.
+            waited = 0.0
+            while waited < backoff and not self._stopping:
+                time.sleep(min(0.25, backoff - waited))
+                waited += 0.25
+            backoff = min(backoff * 2, self.max_backoff)

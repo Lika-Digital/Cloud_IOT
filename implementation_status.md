@@ -1,3 +1,54 @@
+# Implementation Status — Guard A.5 items 1-5 answered — STILL AWAITING NUC NUMBERS
+
+## 2026-09-26 (evening) — verified NUC state applied; architecture decision taken.
+
+NUC facts taken as given: Python 3.14.4, numpy 2.4.6, Pillow 12.2.0, no openvino/opencv,
+58 pkgs, freeze at ~/venv_freeze_2026-09-26.txt. Idle load 0.07, 1.3/14 Gi RAM, 397 G free,
+backend RSS 316.6 MB, uvicorn --workers 1, USE_ML_MODELS=false.
+
+- [DONE] **(1) Throwaway venv — YES, proven.** `app/__init__.py` and
+  `app/services/__init__.py` are both **0 bytes**; `yolo_openvino.py` imports only
+  stdlib at module level (numpy/PIL/openvino are lazy). Verified empirically in a venv
+  with ONLY numpy 2.1.2 + Pillow, fastapi/sqlalchemy/pydantic/openvino confirmed absent:
+  import OK, detector degrades to available=False, decode+NMS ran, alarm rule fired.
+  **No import or path forces the production venv.** `scripts/guard_measure.sh` (d91bef5)
+  already is the restructure. Defaults to `$HOME/guard-staging` not `/tmp` on purpose —
+  /tmp is tmpfs on many Ubuntu installs and the torch export needs ~4 GB, which would be
+  RAM on a 14 Gi box; `GUARD_STAGING=/tmp/...` overrides.
+- [DONE] **(2) Telemetry — three layers, documented.** Env var
+  `OPENVINO_TELEMETRY_OPT_OUT=1` (with a grep command to verify the real name on the box
+  rather than trusting mine); uninstall `openvino-telemetry` and re-run classmap/probe to
+  prove inference is unaffected; and the actual guarantee — per-unit
+  `IPAddressDeny=any` + `IPAddressAllow=localhost 192.168.1.0/24` in
+  `cloud-iot-guard.service`, making egress structurally impossible. Only available
+  because of the separate-process decision.
+- [DONE] **(3) numpy drift — cause + fix, committed SEPARATELY as `6a404b2`.**
+  numpy 2.1.2 predates Python 3.14 → no cp314 wheel → source build → the venv was rebuilt
+  by hand with relaxed pins and drifted; `upgrade.sh:204-208` only *warns* on pip failure,
+  so the pin failed silently every upgrade. Re-ran the suite on the real version:
+  **675 passed on numpy 2.4.6** (also 675 on 2.1.2 and 2.5.3). requirements.txt corrected
+  to `numpy>=2.1,<3`. **Flagged: every other pin is also a 3.12-era `==` and likely
+  drifted too** — diff command supplied, left as its own task.
+- [DONE] **(4) Architecture — separate process, recommended without reservation.**
+  `cloud-iot-guard.service`, own venv, MQTT (already localhost, already carries the spec's
+  guard topics) to the backend; backend stays the ONLY DB writer. Wins: "no model resident
+  while disarmed" becomes provable (process not running) where in-process RSS release is
+  not guaranteed; a native openvino segfault cannot kill uvicorn (--workers 1, no spare);
+  CPU watchdog gets kernel-enforced CPUQuota/systemctl stop; openvino never enters the
+  production venv so the A3 drift class cannot recur; per-unit egress block. Cost ~40
+  lines of unit/provisioning, near-zero IPC. **Consequence: B1 changes** — `app/guard/`
+  becomes a thin control/query layer; detection+ffmpeg+recording live in the worker. To be
+  restated for approval before any Stage B code.
+- [DONE] **(5) Recorded, not fixed** — TME 192.168.1.254: `values.xml` 404, `fresh.xml`
+  200 (consistent with the existing `test_tme_fresh_xml.py`). In project memory.
+- [DONE] `docs/guard_stage_a5_addendum.md` (NEW) — all five answers with evidence.
+- [VERIFIED] Full suite **675 passed** on numpy 2.4.6, the production version.
+- [BLOCKED — NUC] A.5 numbers still outstanding: classmap proof, day/far/night/control
+  clips → recall, false-alarms-per-hour, latency, person pixel height, inference ms, CPU
+  per inference. Run `guard_measure.sh` when the marina is quiet; **no production change
+  required.**
+- [NEXT] **STOP.** Stage B awaits approval of those numbers + the B1 restatement.
+
 # Implementation Status — Guard A.5 conditions applied — AWAITING NUC NUMBERS
 
 ## 2026-09-26 (later) — A.5 approved with conditions; all four addressed. Measurement still pending.

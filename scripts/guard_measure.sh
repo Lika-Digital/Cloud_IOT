@@ -200,9 +200,13 @@ tests)
   need_venv
   "${VENV}/bin/pip" install --quiet pytest || die "pytest install failed"
   cd "$REPO_DIR" || die "cd failed"
+  # --noconftest is REQUIRED: tests/backend/conftest.py builds the FastAPI test app
+  # and imports sqlalchemy/fastapi, which this venv deliberately does not have. The
+  # two guard test files need none of it — they exercise pure functions — and
+  # pytest.ini still supplies `pythonpath = backend`, so the app import resolves.
   "${VENV}/bin/python" -m pytest \
     tests/backend/test_yolo_multiclass.py tests/backend/test_guard_alarm_rule.py \
-    -q --no-header -p no:cacheprovider
+    -q --no-header --noconftest -p no:cacheprovider
   ;;
 
 clean)

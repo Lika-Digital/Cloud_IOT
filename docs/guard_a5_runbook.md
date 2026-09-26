@@ -382,3 +382,80 @@ decision, not a software one.
 **Q: Something went wrong mid-measurement. Safe to stop anywhere?**
 Yes. Every step is either read-only or confined to `~/guard-staging`, `~/guard-checkout`
 and `/tmp`. Stop, run Step 5, and report where you got to.
+
+---
+
+## 1 fps is the working assumption (settled 2026-09-26 from measured data)
+
+Measured on the NUC over 1200 frames: inference **91.0 ms wall / 390.1 ms CPU**, p95
+101.5 ms, no drift over 10 minutes. 390 ms CPU per inference means:
+
+| fps | CPU per wall-second | % of 4 cores | verdict |
+|---|---|---|---|
+| 1 | 390 ms | **9.8 %** | fits the <15 % budget |
+| 2 | 780 ms | 19.5 % | exceeds it |
+
+So **`GUARD_FPS=1`**. What that does to the alarm rule:
+
+| Rule | Samples in window | Min latency | Max latency |
+|---|---|---|---|
+| 1 fps, 3 s window | 4 | 1.0 s | 3.0 s |
+| **1 fps, 4 s window (recommended)** | **5** | **1.0 s** | **4.0 s** |
+| 2 fps, 3 s window (original spec) | 7 | 0.5 s | 3.0 s |
+
+Dropping to 1 fps costs samples, and samples are what the 2-of-N rule spends. P(alarm)
+for a given per-frame recall *r*:
+
+| recall r | 1 fps / 3 s | 1 fps / 4 s | 2 fps / 3 s |
+|---|---|---|---|
+| 0.9 | 0.996 | 1.000 | 1.000 |
+| 0.8 | 0.973 | 0.993 | 1.000 |
+| 0.7 | 0.916 | 0.969 | 0.996 |
+| 0.6 | 0.821 | 0.913 | 0.981 |
+| 0.5 | 0.688 | 0.812 | 0.938 |
+
+**Recommendation: `GUARD_FPS=1`, `GUARD_WINDOW_SECONDS=4`, `GUARD_FRAMES_REQUIRED=2`.**
+Widening 3 s → 4 s recovers most of what 1 fps costs (at r=0.6: 0.82 → 0.91) and max
+latency stays 4.0 s, inside the ≤5 s threshold in row 6. The false-alarm cost is
+negligible: with 0/1200 observed the pessimistic 95 % upper bound on per-frame FP is
+0.0025 (rule of three), which over a 5-sample window gives **0.056 false alarms/hour —
+about one every 18 hours**, and that is the worst case, not the measurement. The
+measurement was 0.00/hour.
+
+**This stays provisional until row 4 (frame recall) exists.** If recall comes back below
+~0.6, widening the window is not enough and the honest options are a bigger `imgsz`, a
+lower confidence threshold, or accepting 2 fps with a CPU budget above 15 %. The tables
+above are the decision aid for that conversation.
+
+### Also worth doing while you are there: thread cap
+
+91 ms wall against 390 ms CPU means OpenVINO uses ~4.3 threads — it saturates **all four
+cores** for those 91 ms. Average load is fine; the spike is what could make berth
+occupancy stutter. `--threads 1` keeps the same total CPU but spreads it over ~390 ms on
+ONE core, leaving three free. At 1 fps there is a whole second available, so it costs
+nothing. Measure both:
+
+```bash
+bash scripts/guard_measure.sh probe --clip /tmp/empty.mp4 --expect none --fps 1
+```
+```bash
+bash scripts/guard_measure.sh probe --clip /tmp/empty.mp4 --expect none --fps 1 --threads 1
+```
+Expect wall time to rise to ~300-400 ms and CPU per inference to stay ~390 ms. If CPU
+per inference drops too, even better — report both.
+
+**Q: The export printed a wall of Python 3.14 multiprocessing tracebacks. Broken?**
+No — and it is fixed as of `d6f2a1c`. Python 3.14 defaults to the **forkserver** start
+method, and ultralytics/torch spawn worker processes. A forkserver child re-imports
+`__main__`; when the program was passed with `python -c`, `__main__` is `<stdin>` and
+cannot be re-imported, so each worker printed a traceback before the export succeeded
+anyway. The export program is now written to a real file with an
+`if __name__ == "__main__":` guard, which is what forkserver needs. If you still see
+them, you are on an older clone — pull.
+
+**Q: `guard_measure.sh tests` failed importing sqlalchemy.**
+Fixed as of `d6f2a1c`: the command now passes `--noconftest`. `tests/backend/conftest.py`
+builds the FastAPI test app and imports sqlalchemy/fastapi, which the staging venv
+deliberately does not have; the two guard test files need none of it. `pytest.ini` still
+supplies `pythonpath = backend`, so the app import resolves. Running them by hand with
+`--noconftest` — as you did — is exactly equivalent.

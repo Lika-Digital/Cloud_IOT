@@ -293,6 +293,7 @@ def run_detection(
     save_annotated: str | None,
     *,
     fps: float = 2.0,
+    num_threads: int | None = None,
     frames_required: int = 2,
     window_seconds: float = 3.0,
     cooldown_seconds: float = 60.0,
@@ -300,7 +301,7 @@ def run_detection(
 ) -> int:
     from app.services.yolo_openvino import YoloOVDetector
 
-    det = YoloOVDetector(model_dir)
+    det = YoloOVDetector(model_dir, num_threads=num_threads)
     if not det.available:
         _fail(f"detector unavailable for model_dir={model_dir}. Check that "
               "requirements-vision.txt is installed and the IR exists.")
@@ -308,6 +309,7 @@ def run_detection(
     print(f"Classes    : {len(det.class_names)} (0={det.class_names.get(0)!r})")
     print(f"Zone crop  : {zone if zone else 'DISABLED (full frame)'}")
     print(f"Confidence : {conf}")
+    print(f"Threads    : {num_threads if num_threads else 'openvino default (all cores)'}")
     print(f"Frames     : {len(frame_paths)}\n")
 
     latencies: list[float] = []
@@ -567,6 +569,12 @@ def main() -> int:
                     help="clip time the person actually entered frame, for TRUE "
                          "end-to-end latency (without it only rule latency is reported)")
     ap.add_argument("--save-annotated", metavar="DIR", help="write boxed JPEGs of positive frames")
+    ap.add_argument("--threads", type=int, metavar="N",
+                    help="cap OpenVINO CPU threads. Measured on the NUC: default "
+                         "threading gives ~91 ms wall / ~390 ms CPU, i.e. all 4 cores "
+                         "saturated for 91 ms. --threads 1 keeps the same total CPU but "
+                         "spreads it over ~390 ms on ONE core, leaving 3 free for the "
+                         "backend. At 1 fps that is strictly better isolation.")
     ap.add_argument("--model-dir", default=DEFAULT_MODEL_DIR)
     args = ap.parse_args()
 
@@ -591,6 +599,7 @@ def main() -> int:
             _fail(f"{args.image} not found")
         return run_detection(args.model_dir, [args.image], zone, args.conf,
                             args.expect, args.save_annotated, fps=args.fps,
+                            num_threads=args.threads,
                             frames_required=args.frames_required,
                             window_seconds=args.window_seconds,
                             cooldown_seconds=args.cooldown_seconds,
@@ -605,6 +614,7 @@ def main() -> int:
             print(f"Extracted {len(frames)} frames at {args.fps} fps from {args.clip}\n")
             return run_detection(args.model_dir, frames, zone, args.conf,
                                 args.expect, args.save_annotated, fps=args.fps,
+                                num_threads=args.threads,
                                 frames_required=args.frames_required,
                                 window_seconds=args.window_seconds,
                                 cooldown_seconds=args.cooldown_seconds,

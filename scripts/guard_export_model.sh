@@ -40,7 +40,7 @@ die()   { echo -e "${RED}[fail]${NC} $*" >&2; exit 1; }
 # production, e.g. MODELS_DIR=$HOME/guard-staging/models (what guard_measure.sh does).
 MODELS_DIR="${MODELS_DIR:-/opt/cloud-iot/backend/models}"
 OUT_DIR="${MODELS_DIR}/yolov8n_openvino"
-WORK_DIR="/tmp/guard-yolo-export.$$"
+WORK_DIR="${GUARD_EXPORT_TMPDIR:-/tmp}/guard-yolo-export.$$"
 MIN_FREE_MB=4096
 DOCKER_IMAGE="python:3.12-slim"
 
@@ -67,39 +67,84 @@ fi
 
 # ── Pick a route ────────────────────────────────────────────────────────────
 PYV="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "?")"
+# /tmp on Ubuntu is frequently tmpfs (RAM). A 4 GB torch install there is 4 GB of RAM
+# on a 14 Gi box — the precise thing the Docker route exists to avoid. Detect it.
+TMP_FS="$(df -PT /tmp 2>/dev/null | awk 'NR==2{print $2}')"
+TMP_IS_RAM=0
+case "$TMP_FS" in tmpfs|ramfs) TMP_IS_RAM=1 ;; esac
+
+DOCKER_USABLE=0
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  DOCKER_USABLE=1
+fi
+
 if [ -z "$ROUTE" ]; then
-  if command -v docker >/dev/null 2>&1; then
+  if [ "$DOCKER_USABLE" = "1" ]; then
     ROUTE="docker"
-    info "Host Python is ${PYV}; Docker is available → using the container route."
-    info "(Avoids the question of whether torch ships a cp${PYV/./} wheel entirely.)"
+    info "Route auto-selected: DOCKER (docker present and daemon reachable)."
+    info "Host Python is ${PYV}; the container pins 3.12, so the torch cp${PYV/./} wheel"
+    info "question does not arise and nothing is installed on the host."
   else
     ROUTE="venv"
-    warn "Docker not found — falling back to the throwaway-venv route on Python ${PYV}."
-    case "$PYV" in
-      3.14|3.15|3.16)
-        warn "Python ${PYV} is new; torch may not have a wheel for it. The install uses"
-        warn "--only-binary so it will fail fast rather than compiling. If it fails,"
-        warn "export on another machine and use GUARD_IR_SRC=... instead." ;;
-    esac
+    if command -v docker >/dev/null 2>&1; then
+      warn "docker binary found but the daemon is NOT reachable as this user."
+      warn "Re-run with sudo to get the container route:  sudo bash $0 --docker"
+    else
+      warn "docker not found on PATH."
+    fi
+    info "Route auto-selected: VENV (throwaway /tmp venv)."
+  fi
+else
+  info "Route forced by argument: ${ROUTE}"
+  if [ "$ROUTE" = "docker" ] && [ "$DOCKER_USABLE" != "1" ]; then
+    die "--docker requested but the Docker daemon is not reachable (try sudo)."
   fi
 fi
+
+if [ "$ROUTE" = "venv" ] && [ "$TMP_IS_RAM" = "1" ]; then
+  echo ""
+  warn "/tmp is ${TMP_FS} — RAM-backed. The venv route would put ~4 GB of torch into RAM."
+  if [ "$DOCKER_USABLE" = "1" ]; then
+    die "Refusing. Docker IS usable here — re-run without --venv, or with --docker."
+  fi
+  warn "Docker is not usable, so there is no better route available."
+  warn "Set GUARD_EXPORT_TMPDIR=/var/tmp (disk-backed) to avoid RAM, or export on"
+  warn "another machine and pass GUARD_IR_SRC=... to guard_measure.sh."
+  if [ "${GUARD_ALLOW_TMPFS:-0}" != "1" ]; then
+    die "Refusing to fill RAM. Re-run with GUARD_ALLOW_TMPFS=1 only if you accept that."
+  fi
+  warn "GUARD_ALLOW_TMPFS=1 set — proceeding into RAM-backed /tmp."
+fi
+
 info "Route: $ROUTE   →   $OUT_DIR"
 
 # The export program, shared by both routes. Asserts the class map before export.
 EXPORT_PY='
-from ultralytics import YOLO
-import shutil, os, sys
-m = YOLO("yolov8n.pt")          # stock COCO weights, auto-downloaded
-names = m.names
-assert names[0] == "person", f"class 0 is {names[0]!r}, expected person"
-assert names[8] == "boat",   f"class 8 is {names[8]!r}, expected boat"
-print(f"[export] class map OK: {len(names)} classes, 0={names[0]!r}, 8={names[8]!r}")
-p = m.export(format="openvino", dynamic=False, half=False)
-dest = os.environ["EXPORT_DEST"]
-if os.path.exists(dest):
-    shutil.rmtree(dest)
-shutil.copytree(str(p), dest)
-print(f"[export] wrote {dest}")
+import os, shutil, sys
+
+
+def main() -> int:
+    from ultralytics import YOLO
+    m = YOLO("yolov8n.pt")          # stock COCO weights, auto-downloaded
+    names = m.names
+    assert names[0] == "person", f"class 0 is {names[0]!r}, expected person"
+    assert names[8] == "boat",   f"class 8 is {names[8]!r}, expected boat"
+    print(f"[export] class map OK: {len(names)} classes, 0={names[0]!r}, 8={names[8]!r}")
+    p = m.export(format="openvino", dynamic=False, half=False)
+    dest = os.environ["EXPORT_DEST"]
+    if os.path.exists(dest):
+        shutil.rmtree(dest)
+    shutil.copytree(str(p), dest)
+    print(f"[export] wrote {dest}")
+    return 0
+
+
+# Run as a FILE with this guard, never `python -c`. Python 3.14 defaults to the
+# forkserver start method, and torch/ultralytics spawn workers; a forkserver child
+# re-imports __main__, which for `-c` code is <stdin> and produces a wall of
+# alarming-but-harmless tracebacks before the export still succeeds.
+if __name__ == "__main__":
+    sys.exit(main())
 '
 
 install -d -m 0755 "$MODELS_DIR" || die "cannot create $MODELS_DIR"
@@ -127,15 +172,16 @@ if [ "$ROUTE" = "docker" ]; then
         --extra-index-url https://download.pytorch.org/whl/cpu \
         ultralytics openvino
       cd /tmp
-      python -c "$EXPORT_PY"
+      printf '%s' "$EXPORT_PY" > /tmp/guard_export.py
+      python /tmp/guard_export.py
     ' || die "container export failed. Re-run with --venv, or export on another machine and use GUARD_IR_SRC=..."
 
   [ -d "$OUT_DIR" ] || die "container reported success but $OUT_DIR is missing"
 
 # ── Route 2: throwaway venv ─────────────────────────────────────────────────
 else
-  FREE_MB=$(df -Pm /tmp | awk 'NR==2{print $4}')
-  info "Free space on /tmp: ${FREE_MB} MB (need >= ${MIN_FREE_MB} MB for torch)"
+  FREE_MB=$(df -Pm "$(dirname "$WORK_DIR")" | awk 'NR==2{print $4}')
+  info "Free space on $(dirname "$WORK_DIR"): ${FREE_MB} MB (need >= ${MIN_FREE_MB} MB for torch)"
   [ "${FREE_MB:-0}" -ge "$MIN_FREE_MB" ] || die "Not enough free space on /tmp (${FREE_MB} MB < ${MIN_FREE_MB} MB). Use --docker, or export elsewhere and use GUARD_IR_SRC=..."
 
   cleanup() {
@@ -169,7 +215,8 @@ else
 
   info "Exporting stock COCO yolov8n.pt → OpenVINO IR"
   cd "$WORK_DIR" || die "cd failed"
-  EXPORT_DEST="$OUT_DIR" "$PY" -c "$EXPORT_PY" || die "export failed"
+  printf '%s' "$EXPORT_PY" > "${WORK_DIR}/guard_export.py"
+  EXPORT_DEST="$OUT_DIR" "$PY" "${WORK_DIR}/guard_export.py" || die "export failed"
 fi
 
 # ── Permissions + verification ──────────────────────────────────────────────

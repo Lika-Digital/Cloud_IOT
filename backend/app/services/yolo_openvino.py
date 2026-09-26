@@ -358,7 +358,25 @@ class YoloOVDetector:
     `self.available` is set to False and `detect()` returns a safe no-op result.
     """
 
-    def __init__(self, model_dir: str):
+    def __init__(self, model_dir: str, num_threads: int | None = None):
+        """
+        Args:
+            model_dir: directory containing the `yolov8n_openvino` IR subdirectory.
+            num_threads: cap OpenVINO's CPU threads. `None` (default) leaves
+                OpenVINO to choose, which is the pre-existing berth-occupancy
+                behaviour and must not change.
+
+                Why Guard sets this to 1: measured on the marina NUC (Atom
+                x7425E, 4 cores), one inference costs ~91 ms wall but ~390 ms of
+                CPU — i.e. OpenVINO spreads it across ~4.3 threads and saturates
+                every core for those 91 ms. The *average* load at 1 fps is only
+                ~9.8 % of 4 cores, but the *peak* is 100 %, which is exactly the
+                kind of spike that can make berth occupancy stutter. Capping to
+                one thread keeps the same total CPU (~390 ms) but spreads it over
+                ~390 ms of wall time on ONE core, leaving three cores untouched.
+                At 1 fps there is a full second available, so the longer wall time
+                costs nothing and the isolation is far better.
+        """
         self.available = False
         self._compiled_model: Any = None
         self._input_layer: Any = None
@@ -366,6 +384,7 @@ class YoloOVDetector:
         self.class_names: dict[int, str] = {}
         self.model_path: str | None = None
         self.last_inference_ms: float | None = None
+        self.num_threads = num_threads
 
         model_path = os.path.join(model_dir, "yolov8n_openvino")
         if not os.path.isdir(model_path):
@@ -390,16 +409,36 @@ class YoloOVDetector:
             import openvino as ov  # type: ignore  # lazy import
             core = ov.Core()
             ov_model = core.read_model(xml_file)
-            self._compiled_model = core.compile_model(ov_model, "CPU")
+
+            # Thread cap is best-effort: an OpenVINO build that does not accept the
+            # property must not stop the model loading, so fall back silently to the
+            # default (which is the pre-existing behaviour anyway).
+            config: dict[str, Any] = {}
+            if self.num_threads is not None and self.num_threads > 0:
+                config["INFERENCE_NUM_THREADS"] = int(self.num_threads)
+            try:
+                self._compiled_model = core.compile_model(ov_model, "CPU", config) if config \
+                    else core.compile_model(ov_model, "CPU")
+            except Exception as cfg_exc:
+                if not config:
+                    raise
+                logger.warning(
+                    "YoloOVDetector: INFERENCE_NUM_THREADS=%s rejected (%s) — "
+                    "loading with OpenVINO defaults instead",
+                    self.num_threads, cfg_exc,
+                )
+                self._compiled_model = core.compile_model(ov_model, "CPU")
             self._input_layer = self._compiled_model.input(0)
             self._output_layer = self._compiled_model.output(0)
             self.class_names = load_class_names(model_path)
             self.model_path = xml_file
             self.available = True
             logger.info(
-                "YoloOVDetector: loaded %s (%d classes; class 0=%r, class 8=%r)",
+                "YoloOVDetector: loaded %s (%d classes; class 0=%r, class 8=%r; "
+                "threads=%s)",
                 xml_file, len(self.class_names),
                 self.class_names.get(0), self.class_names.get(8),
+                self.num_threads if self.num_threads else "openvino-default",
             )
         except ImportError:
             logger.debug("YoloOVDetector: openvino not available — inference disabled")

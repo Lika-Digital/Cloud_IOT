@@ -1,3 +1,48 @@
+# Implementation Status — Guard A.5 PARTIAL RESULTS IN — person clips pending
+
+## 2026-09-26 — control clip + timing measured on the NUC. 1 fps settled. Three fixes applied.
+
+**Measured (NUC, 1200 frames, camera unattended):** alarms 0, false alarms/hour 0.00,
+frame FP rate 0.000 (0/1200) → **hard gate PASS**. Inference mean 91.0 ms wall / p95 101.5 /
+max 162.1; **CPU 390.1 ms per inference**; implied 9.8 % of 4 cores at 1 fps; no drift over
+10 min. class 0=person, 8=boat, 80 classes, openvino 2026.4.0 → PASS. 49 logic tests on
+numpy 2.4.6 → PASS. Rows 3,4,5,6,12,13 (person clips) **still pending** — not at the marina.
+
+- [SETTLED] **1 fps is the working rate.** 390 ms CPU/inference → 9.8 % of 4 cores at 1 fps
+  vs 19.5 % at 2 fps, so 2 fps cannot meet the <15 % budget. **Recommended rule:
+  `GUARD_FPS=1`, `GUARD_WINDOW_SECONDS=4` (up from 3), `GUARD_FRAMES_REQUIRED=2`.** 1 fps/3 s
+  gives only 4 samples in the window; 4 s gives 5 and recovers most of the loss
+  (P(alarm) at r=0.6: 0.821 → 0.913). Latency min 1.0 s / max 4.0 s, inside the ≤5 s
+  threshold. False-alarm cost at the pessimistic 95 % bound for 0/1200 (p=0.0025, rule of
+  three): **0.056/hour ≈ one every 18 h**. All figures verified by replaying the real
+  `evaluate_alarm_rule` code, not hand-arithmetic. **Provisional until row 4 (recall) lands.**
+- [NEW] **Thread cap — from the wall-vs-CPU gap.** 91 ms wall / 390 ms CPU = ~4.3 threads,
+  i.e. guard saturates ALL 4 cores for 91 ms every second. Average is fine, the spike is
+  what could make berth occupancy stutter. `YoloOVDetector(num_threads=...)` added
+  (`INFERENCE_NUM_THREADS`, best-effort with silent fallback), plus `--threads` on the
+  probe. **Default stays None** so berth occupancy is unchanged. At 1 fps, 1 thread costs
+  nothing (390 ms wall out of 1000 ms) and leaves 3 cores free.
+- [FIXED] **(1) `guard_measure.sh tests`** — now passes `--noconftest`.
+  `tests/backend/conftest.py` builds the FastAPI test app and imports sqlalchemy/fastapi,
+  absent from the staging venv by design; the guard tests need none of it and `pytest.ini`
+  still gives `pythonpath = backend`. Equivalent to the manual run that gave 49 passed.
+- [EXPLAINED + HARDENED] **(2) Docker route not taken** — root cause: the clone was at
+  `da3716f` or earlier, which **had no Docker route at all** (added in `1ceb280`). Verified
+  by `git show da3716f:scripts/guard_export_model.sh | grep -c docker` → 0. Hardening added
+  anyway: the script now prints **why** a route was chosen, distinguishes "docker absent"
+  from "daemon unreachable (try sudo)", detects **tmpfs `/tmp` and REFUSES the venv route**
+  when Docker is usable (overridable via `GUARD_ALLOW_TMPFS=1`), and honours
+  `GUARD_EXPORT_TMPDIR=/var/tmp` for a disk-backed work dir.
+- [ALREADY FIXED] **(3) dangerous next-steps text** — same root cause; `1ceb280` replaced it
+  with `bash scripts/guard_measure.sh classmap`. Confirmed by diffing the two versions.
+- [FIXED] **(cosmetic) Python 3.14 forkserver tracebacks** — caused by `python -c`: 3.14
+  defaults to forkserver, whose children re-import `__main__`, which for `-c` is `<stdin>`.
+  The export program is now written to a real file with an `if __name__ == "__main__":`
+  guard. Embedded program compile-checked in CI-style before commit.
+- [VERIFIED] Full suite **675 passed** on numpy 2.4.6. `bash -n` clean on both scripts.
+- [NEXT] Person clips at the stern (rows 3,4,5,6,12,13) when someone can walk it, plus the
+  optional `--threads 1` comparison. Stage B still awaits those numbers + the B1 restatement.
+
 # Implementation Status — Guard A.5 runbook ready — AWAITING FIELD NUMBERS
 
 ## 2026-09-26 (late) — four corrections applied; runbook written; NO production change needed.

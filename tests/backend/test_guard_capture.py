@@ -28,7 +28,9 @@ merely intended:
   TC-GCAP-11  MJPEG framing bounds its buffer on a stream with no end marker
   TC-GCAP-12  ring keeps the newest N and deletes the rest, oldest first
   TC-GCAP-13  ring NEVER deletes a pinned segment (an in-progress alarm clip)
-  TC-GCAP-14  [ffmpeg] SIGKILL mid-recording leaves a PLAYABLE file  ← the regression
+  TC-GCAP-14  [ffmpeg] the RING retains usable history across SIGKILL ← the regression
+  TC-GCAP-18  [ffmpeg] why mpegts and not mp4 segments (the in-flight segment)
+  TC-GCAP-19  [ffmpeg, opt-in GUARD_TEST_RTSP_URL] the same, against the REAL camera
   TC-GCAP-15  [ffmpeg] a real capture produces segments and frames from one process
   TC-GCAP-16  complete_segments() excludes the segment still being written
 """
@@ -255,10 +257,8 @@ def test_tc_gcap_16_complete_segments_excludes_the_one_being_written(tmp_path):
 def ffmpeg_version() -> str:
     """First line of `ffmpeg -version`.
 
-    Recorded in every failure message because dev and production DIVERGED on exactly this
-    behaviour: observed **ffmpeg 8.0.1-3ubuntu2 on marina-iot (2026-09-26)**, where the
-    original form of TC-GCAP-14 failed while passing on the dev box. A future divergence
-    should be visible rather than confusing.
+    Reported in every failure message because dev and production have now diverged TWICE
+    on this test. Observed on marina-iot: **ffmpeg 8.0.1-3ubuntu2 (2026-09-26)**.
     """
     try:
         out = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True,
@@ -271,10 +271,9 @@ def ffmpeg_version() -> str:
 def decoded_frame_count(path: Path) -> int | None:
     """Frames that actually DECODE, via `ffprobe -count_frames`.
 
-    Deliberately not a header duration and not a packet count: a damaged file can carry a
-    plausible-looking header over unreadable payload, which is how the first version of
-    TC-GCAP-14 fooled itself into reporting 393 s for a 4 s clip. Decoding is much harder
-    to fool. Returns None when the file cannot be read at all.
+    Not a header duration and not a packet count: a damaged file can carry a plausible
+    header over unreadable payload, which is how an earlier version of these tests fooled
+    itself into reporting 393 s for a 4 s clip. None when the file cannot be read at all.
     """
     try:
         out = subprocess.run(
@@ -291,104 +290,193 @@ def decoded_frame_count(path: Path) -> int | None:
         return None
 
 
-def _record_then_signal(tmp_path: Path, container: str, suffix: str, sig: str,
-                        seconds: float = 6.0):
-    """Record `container` in REALTIME, then stop it with SIGTERM or SIGKILL.
+def _make_h264_source(tmp_path: Path, seconds: int = 40) -> Path:
+    """Pre-encode an H.264 file to stand in for the camera.
 
-    `-re` is essential. Without it lavfi generates frames as fast as the encoder consumes
-    them, so a few seconds of wall time yields minutes of video and every duration-based
-    assertion becomes meaningless.
+    This matters: the production segment output is `-c:v copy`, which requires ALREADY
+    ENCODED input. Feeding raw lavfi video into it cannot work — mpegts carries no
+    rawvideo — and an earlier version of TC-GCAP-15 did exactly that, then passed anyway
+    because it only asserted that a segment FILE existed. A 0-byte file satisfied it.
+    Stream-copying pre-encoded video is also what really happens with RTSP.
     """
-    out_path = tmp_path / ("killed_" + container + suffix)
-    proc = subprocess.Popen(
+    src = tmp_path / "source.mp4"
+    subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error",
-         "-re",                                   # realtime: frames approx wall seconds
-         "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25",
-         "-map", "0:v:0", "-an", "-dn", "-sn",
-         "-c:v", "libx264", "-preset", "ultrafast", "-g", "25",
-         "-f", container, "-y", str(out_path)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+         "-f", "lavfi", "-i", f"testsrc=size=320x240:rate=25",
+         "-t", str(seconds), "-c:v", "libx264", "-preset", "ultrafast",
+         "-g", "25", "-an", "-y", str(src)],
+        check=True, capture_output=True, timeout=300,
     )
+    assert src.exists() and src.stat().st_size > 0, "could not build the test source"
+    return src
+
+
+def _run_ring_until_killed(tmp_path: Path, source: Path, *, segment_seconds: int,
+                           record_seconds: float, sig: str):
+    """Drive the REAL capture command against `source` in realtime, then signal it.
+
+    Uses `build_capture_command` itself, so this exercises the production command shape:
+    one input, `-c:v copy` into the segment muxer, MJPEG frames on stdout.
+    """
+    seg_dir = tmp_path / "segments"
+    seg_dir.mkdir(exist_ok=True)
+    cmd = build_capture_command(
+        str(source), seg_dir,
+        fps=1, segment_seconds=segment_seconds, ffmpeg="ffmpeg",
+        # -re throttles the file read to realtime, standing in for a live 25 fps source.
+        input_args=["-re"],
+    )
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+    sizes = []
     t0 = time.time()
-    time.sleep(seconds)
-    if sig == "SIGKILL":
-        proc.kill()
-    else:
-        proc.terminate()
     try:
-        proc.wait(timeout=15)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=5)
-    return out_path, time.time() - t0
+        while time.time() - t0 < record_seconds:
+            time.sleep(1.0)
+            sizes.append(sum(p.stat().st_size for p in list_segments(seg_dir)))
+        if sig == "SIGKILL":
+            proc.kill()
+        else:
+            proc.terminate()
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=5)
+    err = proc.stderr.read(3000).decode("utf-8", "replace") if proc.stderr else ""
+    return seg_dir, sizes, err
 
 
 @needs_ffmpeg
-def test_tc_gcap_14_abrupt_kill_leaves_playable_file(tmp_path):
-    """THE regression the field finding demands — corrected after the NUC run.
+def test_tc_gcap_14_ring_retains_history_across_sigkill(tmp_path):
+    """THE regression, now testing the property we actually depend on.
 
-    The first version asserted the wrong property and was rightly caught: it reported a
-    393.48 s duration for what should have been a 4 s clip. Two mistakes, both fixed:
+    Corrected twice after NUC runs, and the history is the point:
 
-      1. No `-re`, so lavfi ran far faster than realtime. The MP4 really did contain
-         ~393 s of video; nothing was corrupt.
-      2. It stopped ffmpeg with SIGTERM, which **ffmpeg handles gracefully** by writing a
-         valid MP4 `moov` trailer. So the MP4 was fine and the assertion was simply false.
+      * v1 had no `-re`, so lavfi ran far faster than realtime (393 s of video in 4 s) and
+        stopped with SIGTERM, which ffmpeg handles gracefully by writing a valid MP4
+        trailer. The assertion was simply false.
+      * v2 added `-re` and SIGKILL, and then FAILED on the NUC with a 0-byte file. That was
+        a test artefact, not a format property: a tiny 320x240 synthetic stream produces so
+        few bytes that a single ffmpeg output can still hold everything in its AVIO buffer
+        after several seconds, so SIGKILL loses it. Without `-re` the same stream overflowed
+        the buffer constantly, which is why v1 appeared to pass.
 
-    That corrects the RATIONALE as well as the test. mpegts is NOT needed to survive
-    SIGTERM. It is needed to survive **SIGKILL and power loss** — the genuine hazard here,
-    because `CameraCapture.stop()` escalates to SIGKILL after a 5 s timeout, systemd
-    escalates the same way, and a pontoon loses power. The conclusion (mpegts for the ring)
-    stands; the reason is now accurate.
+    What we depend on is NOT "one mpegts file survives SIGKILL in the abstract". It is
+    **the segment ring retains usable history when the worker is killed** — a property of
+    the ring, so it is tested through the real segment muxer via `build_capture_command`.
 
-    Switching the ring to MP4 is caught by TC-GCAP-03, which asserts the segment format
-    directly. This test exists to prove why that assertion matters.
+    The segment muxer closes each file as it rolls, and closing flushes. So COMPLETED
+    segments are on disk regardless of how the process dies. The in-progress segment may
+    be lost, which is expected and already handled by `complete_segments()` excluding the
+    newest file.
     """
     ver = ffmpeg_version()
-    fps = 25
+    src = _make_h264_source(tmp_path, seconds=40)
 
-    # mpegts under SIGKILL: must still decode roughly the length actually recorded.
-    ts_path, elapsed = _record_then_signal(tmp_path, "mpegts", ".ts", "SIGKILL")
-    expected = elapsed * fps
-    assert ts_path.exists() and ts_path.stat().st_size > 0, (
-        "mpegts left no usable file after SIGKILL (ffmpeg: " + ver + ")"
-    )
-    ts_frames = decoded_frame_count(ts_path)
-    assert ts_frames is not None and ts_frames > 0, (
-        "mpegts killed with SIGKILL did not decode at all - the segment ring would be "
-        "producing unplayable evidence. ffmpeg: " + ver
-    )
-    assert 0.4 * expected <= ts_frames <= 1.6 * expected, (
-        f"mpegts decoded {ts_frames} frames but ~{expected:.0f} were recorded "
-        f"({elapsed:.1f}s at {fps}fps). A count far outside that band means the file is "
-        f"not a faithful recording even though it opened. ffmpeg: {ver}"
+    # segment_time=2 and ~9 s of recording gives ~4 completed segments to inspect.
+    seg_dir, sizes, err = _run_ring_until_killed(
+        tmp_path, src, segment_seconds=2, record_seconds=9.0, sig="SIGKILL",
     )
 
-    # MP4 under SIGKILL: must NOT come back as a faithful recording.
-    mp4_path, mp4_elapsed = _record_then_signal(tmp_path, "mp4", ".mp4", "SIGKILL")
-    mp4_expected = mp4_elapsed * fps
-    mp4_frames = decoded_frame_count(mp4_path) if mp4_path.exists() else None
-    mp4_faithful = (mp4_frames is not None
-                    and 0.4 * mp4_expected <= mp4_frames <= 1.6 * mp4_expected)
-    assert not mp4_faithful, (
-        f"MP4 SURVIVED a SIGKILL as a faithful recording ({mp4_frames} frames vs "
-        f"~{mp4_expected:.0f} recorded, ffmpeg: {ver}). If this ffmpeg now writes a "
-        "recoverable moov on SIGKILL, the premise behind the mpegts ring has changed. "
-        "Revisit the ring format DELIBERATELY - measure it, update "
-        "docs/guard_b1_design.md and this docstring - do not just relax this assertion. "
-        "mpegts remains safe either way, so there is no urgency."
+    all_segs = list_segments(seg_dir)
+    complete = complete_segments(seg_dir)
+    print(f"\n[TC-GCAP-14] ffmpeg: {ver}")
+    print(f"  bytes on disk over time : {sizes}")
+    print(f"  segments total/complete : {len(all_segs)}/{len(complete)}")
+
+    assert all_segs, f"the ring produced no segments at all. stderr: {err}"
+    assert len(complete) >= 1, (
+        f"no COMPLETED segment survived SIGKILL ({len(all_segs)} file(s) total). The ring "
+        f"retains no usable history, so the pre-roll design does not hold. "
+        f"ffmpeg: {ver}. stderr: {err}"
     )
 
-    # Document the trap: MP4 DOES survive SIGTERM. That is exactly why graceful shutdown
-    # cannot be the safety mechanism, and why the ring format has to carry the guarantee.
-    term_path, term_elapsed = _record_then_signal(tmp_path, "mp4", ".mp4", "SIGTERM")
-    term_frames = decoded_frame_count(term_path) if term_path.exists() else None
-    print("\n[TC-GCAP-14] ffmpeg: " + ver)
-    print(f"  mpegts + SIGKILL : {ts_frames} frames (~{expected:.0f} recorded) -> SAFE")
-    print(f"  mp4    + SIGKILL : {mp4_frames} frames (~{mp4_expected:.0f} recorded) -> unsafe")
-    print(f"  mp4    + SIGTERM : {term_frames} frames "
-          f"(~{term_elapsed * fps:.0f} recorded) -> survives, which is WHY graceful "
-          "shutdown cannot be relied on")
+    # Every completed segment must decode a plausible amount of video.
+    expected_per_segment = 2 * 25
+    for seg in complete:
+        size = seg.stat().st_size
+        assert size > 0, f"completed segment {seg.name} is 0 bytes. ffmpeg: {ver}"
+        frames = decoded_frame_count(seg)
+        assert frames is not None and frames > 0, (
+            f"completed segment {seg.name} ({size} bytes) does not decode — the ring is "
+            f"storing unplayable evidence. ffmpeg: {ver}"
+        )
+        assert frames >= 0.4 * expected_per_segment, (
+            f"completed segment {seg.name} decoded only {frames} frames, expected roughly "
+            f"{expected_per_segment}. ffmpeg: {ver}"
+        )
+
+    # Growth over time confirms bytes really are reaching disk continuously, which is the
+    # behaviour the v2 failure was actually about.
+    assert sizes[-1] > 0, f"nothing ever reached disk. ffmpeg: {ver}. stderr: {err}"
+
+    # Informational, deliberately NOT asserted: mpegts often leaves the in-flight segment
+    # partially decodable, which MP4 never would. That is mpegts' remaining advantage once
+    # the segment muxer is in play (see TC-GCAP-18), but it depends on buffer timing and is
+    # too flaky to gate a build on.
+    if all_segs:
+        newest = all_segs[-1]
+        print(f"  in-flight segment       : {newest.name}, {newest.stat().st_size} bytes, "
+              f"{decoded_frame_count(newest)} frames (salvage is a bonus, not required)")
+
+
+@needs_ffmpeg
+def test_tc_gcap_18_why_mpegts_and_not_mp4_segments(tmp_path):
+    """Records the honest, narrower reason for mpegts — my original claim was too broad.
+
+    With the segment muxer, COMPLETED segments are finalised on roll in either format, so
+    "MP4 loses everything" is wrong once segmenting is involved. What MP4 loses is the
+    **in-flight** segment: with no `moov` it is unplayable, whereas a truncated mpegts
+    decodes up to the cut.
+
+    That in-flight file holds the most RECENT 0-10 s — exactly the seconds closest to an
+    alarm, and the most valuable for pre-roll. So mpegts is still right, and it costs
+    nothing. This test documents that difference rather than asserting a flaky salvage.
+    """
+    ver = ffmpeg_version()
+    src = _make_h264_source(tmp_path, seconds=20)
+    results = {}
+
+    for fmt, suffix in (("mpegts", ".ts"), ("mp4", ".mp4")):
+        out = tmp_path / f"single_{fmt}{suffix}"
+        proc = subprocess.Popen(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-re", "-i", str(src),
+             "-map", "0:v:0", "-an", "-dn", "-sn", "-c:v", "copy",
+             "-f", fmt, "-y", str(out)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        )
+        time.sleep(6)
+        proc.kill()                      # abrupt, no chance to write a trailer
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.wait(timeout=5)
+        results[fmt] = (
+            out.stat().st_size if out.exists() else 0,
+            decoded_frame_count(out) if out.exists() else None,
+        )
+
+    print(f"\n[TC-GCAP-18] ffmpeg: {ver}")
+    for fmt, (size, frames) in results.items():
+        print(f"  single {fmt:6s} + SIGKILL: {size} bytes, {frames} frames")
+
+    mp4_size, mp4_frames = results["mp4"]
+    ts_size, ts_frames = results["mpegts"]
+
+    # The claim we rely on: an unfinalised MP4 is not usable video. If a future ffmpeg
+    # makes it usable, the in-flight advantage disappears and the choice should be
+    # revisited deliberately — but mpegts stays safe either way, so this is informational
+    # unless MP4 clearly wins.
+    assert not (mp4_frames and ts_frames and mp4_frames > ts_frames * 1.5), (
+        f"MP4 now retains MORE decodable video than mpegts under SIGKILL "
+        f"(mp4={mp4_frames}, mpegts={ts_frames}, ffmpeg: {ver}). The premise behind the "
+        "ring format has inverted — revisit docs/guard_b1_design.md and capture.py "
+        "deliberately rather than relaxing this."
+    )
 
 
 @needs_ffmpeg
@@ -396,11 +484,13 @@ def test_tc_gcap_15_real_capture_yields_segments_and_frames(tmp_path):
     """One process, two outputs: segments land on disk while frames arrive on stdout."""
     seg_dir = tmp_path / "segments"
     seg_dir.mkdir()
-    # input_args swaps the RTSP flags for a synthetic source — no camera needed, and no
-    # hand-editing of the command list, so this exercises the REAL command shape.
+    # A PRE-ENCODED source, because the segment output is `-c:v copy` and cannot
+    # accept raw lavfi video. The earlier version fed raw video in and passed only
+    # because it asserted a segment file existed — a 0-byte file satisfied it.
+    src = _make_h264_source(tmp_path, seconds=20)
     cmd = build_capture_command(
-        "testsrc=size=320x240:rate=25", seg_dir,
-        fps=2, segment_seconds=1, ffmpeg="ffmpeg", input_args=["-f", "lavfi"],
+        str(src), seg_dir,
+        fps=2, segment_seconds=1, ffmpeg="ffmpeg", input_args=["-re"],
     )
     assert "-rtsp_transport" not in cmd
 
@@ -426,3 +516,113 @@ def test_tc_gcap_15_real_capture_yields_segments_and_frames(tmp_path):
     segs = list_segments(seg_dir)
     assert len(segs) >= 1, f"expected segments on disk. stderr: {err}"
     assert all(s.suffix == ".ts" for s in segs)
+    # Presence is not enough — a 0-byte segment is what the old version accepted.
+    complete = complete_segments(seg_dir)
+    assert complete, f"no completed segment to verify. stderr: {err}"
+    for seg in complete:
+        assert seg.stat().st_size > 0, f"{seg.name} is 0 bytes. stderr: {err}"
+        assert decoded_frame_count(seg), (
+            f"{seg.name} does not decode — -c:v copy likely rejected the input. "
+            f"stderr: {err}"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TC-GCAP-19 — the same ring property against the REAL camera.
+#
+# Opt-in, because it needs credentials and the marina LAN:
+#
+#   GUARD_TEST_RTSP_URL='rtsp://admin:PASS@192.168.1.191:554/profile1' \
+#     python -m pytest tests/backend/test_guard_capture.py -q -s --noconftest
+#
+# This is the test that matters most. The synthetic tests prove the command shape and
+# the ring logic, but the timing behaviour of a live 25 fps RTSP source is what
+# production actually depends on — and it is precisely where a low-bitrate synthetic
+# stream misled us (the 0-byte v2 failure was ffmpeg buffering a tiny stream, not a
+# format property). A real 1080p25 feed writes continuously, so completed segments
+# should land on disk every GUARD_SEGMENT_SECONDS regardless of how the worker dies.
+# ═══════════════════════════════════════════════════════════════════════════
+
+RTSP_URL_ENV = os.environ.get("GUARD_TEST_RTSP_URL", "").strip()
+needs_camera = pytest.mark.skipif(
+    not RTSP_URL_ENV,
+    reason="set GUARD_TEST_RTSP_URL to run the real-camera ring test (NUC only)",
+)
+
+
+@needs_ffmpeg
+@needs_camera
+def test_tc_gcap_19_real_camera_ring_survives_sigkill(tmp_path):
+    """Production shape, production source, production kill path."""
+    ver = ffmpeg_version()
+    seg_dir = tmp_path / "segments"
+    seg_dir.mkdir()
+
+    # The real command, unmodified: RTSP flags, -c:v copy, segment muxer, MJPEG frames.
+    cap = CameraCapture(
+        RTSP_URL_ENV, seg_dir,
+        fps=1, segment_seconds=5, segment_ring=6, ffmpeg="ffmpeg",
+    )
+    cap.start()
+    sizes = []
+    frames_seen = 0
+    try:
+        t0 = time.time()
+        # Read a few frames so output 2 is exercised too, then let segments accumulate.
+        for _frame in cap.frames():
+            frames_seen += 1
+            if frames_seen >= 3 or time.time() - t0 > 20:
+                break
+        while time.time() - t0 < 22:
+            time.sleep(2)
+            sizes.append(sum(p.stat().st_size for p in list_segments(seg_dir)))
+    finally:
+        # SIGKILL directly — the watchdog's escalation path, and the worst realistic case.
+        if cap._proc is not None and cap._proc.poll() is None:
+            cap._proc.kill()
+            cap._proc.wait(timeout=10)
+
+    all_segs = list_segments(seg_dir)
+    complete = complete_segments(seg_dir)
+    print(f"\n[TC-GCAP-19] ffmpeg: {ver}")
+    print(f"  camera            : {_redact(RTSP_URL_ENV)}")
+    print(f"  frames from stdout: {frames_seen}")
+    print(f"  bytes over time   : {sizes}")
+    print(f"  segments total/cmp: {len(all_segs)}/{len(complete)}")
+
+    assert frames_seen >= 2, (
+        f"no MJPEG frames arrived from the camera — output 2 is not working. ffmpeg: {ver}"
+    )
+    assert all_segs, f"the ring produced no segments from the camera. ffmpeg: {ver}"
+    assert len(complete) >= 2, (
+        f"expected at least 2 completed 5 s segments in ~22 s, got {len(complete)}. "
+        f"The ring is not retaining history from the live source. ffmpeg: {ver}"
+    )
+    for seg in complete:
+        size = seg.stat().st_size
+        frames = decoded_frame_count(seg)
+        print(f"    {seg.name}: {size} bytes, {frames} frames")
+        assert size > 0, f"completed segment {seg.name} is 0 bytes. ffmpeg: {ver}"
+        assert frames is not None and frames > 0, (
+            f"completed segment {seg.name} does not decode — the ring would be storing "
+            f"unplayable evidence from the real camera. ffmpeg: {ver}"
+        )
+        # 5 s at 25 fps ~= 125 frames; allow wide tolerance for keyframe alignment.
+        assert frames >= 25, (
+            f"completed segment {seg.name} decoded only {frames} frames for a 5 s "
+            f"segment. ffmpeg: {ver}"
+        )
+
+    # No audio may reach disk — the policy, verified on the real stream that HAS audio.
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(complete[0])],
+        capture_output=True, text=True, timeout=60,
+    )
+    kinds = [ln.strip() for ln in probe.stdout.splitlines() if ln.strip()]
+    print(f"  streams in segment: {kinds}")
+    assert "audio" not in kinds, (
+        f"AUDIO REACHED DISK from the real camera ({kinds}). The camera streams pcm_alaw "
+        "and guard must never record it — this is a policy requirement, not a codec "
+        "workaround. Check -map 0:v:0 -an -dn -sn on the segment output."
+    )

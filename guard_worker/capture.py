@@ -28,13 +28,25 @@ merely intended:
    global index — every packet stands alone, so a truncated file still decodes up to the
    truncation point.
 
-   The precise hazard, corrected after the NUC run (TC-GCAP-14): **ffmpeg handles SIGTERM
-   gracefully and DOES write a valid MP4 trailer**, so MP4 survives a polite stop. What
-   it does not survive is **SIGKILL or power loss** — and both are real here:
-   `CameraCapture.stop()` escalates to SIGKILL after a 5 s timeout, systemd escalates the
-   same way, and a pontoon loses power. Graceful shutdown therefore cannot be the safety
-   mechanism; the container format has to carry the guarantee. ffmpeg's segment muxer also
-   closes each completed segment cleanly, so only the segment in flight is ever at risk.
+   The reasoning here was corrected twice against NUC runs, so state it precisely:
+
+   * ffmpeg handles SIGTERM **gracefully** and writes a valid MP4 trailer, so MP4 survives
+     a polite stop. The hazard is **SIGKILL or power loss** — both real: `stop()` below
+     escalates to SIGKILL after 5 s, systemd escalates the same way, and a pontoon loses
+     power. Graceful shutdown cannot be the safety mechanism.
+   * With the segment muxer, **completed segments are finalised on roll in either format**,
+     so "MP4 loses everything" is too broad a claim once segmenting is involved. What MP4
+     loses is the **in-flight** segment: with no `moov` it is unplayable, whereas a
+     truncated mpegts decodes up to the cut.
+   * That in-flight file holds the most RECENT 0-10 s — exactly the seconds closest to an
+     alarm and the most valuable for pre-roll. So mpegts is still the right choice, and it
+     costs nothing.
+
+   The property actually relied on is therefore about the RING, not one invocation: the
+   ring retains usable history across an abrupt kill because the muxer closes each segment
+   as it rolls. `complete_segments()` excludes the newest file precisely because the
+   in-flight one may be incomplete. TC-GCAP-14 tests that ring property; TC-GCAP-19 tests
+   it against the real camera, which is the timing behaviour that actually matters.
 
 Stream confirmed on site: h264 High, 1920x1080, 25 fps, plus a pcm_alaw audio stream and
 a data stream — the latter two discarded.

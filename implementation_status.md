@@ -1,3 +1,53 @@
+# Implementation Status — Guard Stage B step 1 DONE (capture) — step 2 next
+
+## 2026-09-26 — B1 approved with all six decisions. Concurrent-RTSP check PASSED on site.
+
+Field results folded in: the camera **accepts two simultaneous RTSP sessions** (confirmed
+twice; the mpegts run held 40 s / 16.4 MB while a second session grabbed a frame at t+8 s),
+so the two-session design stands and **`frame_buffer.py` stays untouched**. Stream is
+h264 High 1920x1080 25 fps + pcm_alaw audio + a data stream, the latter two discarded.
+
+### Step 1 — persistent ffmpeg + segment ring (DONE)
+- [DONE] `guard_worker/` (NEW package) — deliberately outside `backend/app/` so it never
+  imports FastAPI/SQLAlchemy. Backend stays the only DB writer.
+- [DONE] `guard_worker/capture.py` (NEW) — ONE persistent ffmpeg per camera, ONE RTSP
+  session, TWO outputs: `-c:v copy` → 10 s **mpegts** segments on disk (pre-roll ring), and
+  `-vf fps=N` → MJPEG frames on stdout. Stdlib only (no numpy/PIL/openvino), so it is
+  importable and testable anywhere including the staging venv.
+- [DECIDED — POLICY, NOT A WORKAROUND] **No audio, ever.** The camera streams pcm_alaw and
+  MP4 rejects it outright ("Could not find tag for codec pcm_alaw"), so without `-an`
+  recording produced nothing. But the reason it stays out is legal, not technical:
+  recording conversations on a pontoon is a separate question from video and must not enter
+  the system by accident. Enforced with FOUR layers on every output —
+  `-map 0:v:0 -an -dn -sn` — built by one shared function, and **TC-GCAP-01 asserts the
+  counts on every command shape** so a future edit cannot drop it silently. Must be stated
+  in the docs pass.
+- [DECIDED] **mpegts for the ring, never MP4.** An MP4 killed mid-write leaves a 0-byte file
+  with no moov atom; mpegts survives SIGTERM. This matters because the watchdog is *designed*
+  to stop the worker abruptly (SUSPENDED_CPU does exactly that), so evidence must survive it.
+- [DONE] Ring is **self-managed, not `-segment_wrap`** — monotonic `seg_%06d.ts` names plus
+  `prune_segments(keep, pinned=…)`, because an alarm clip under assembly must be able to
+  **pin** the segments it still needs. `-segment_wrap` would silently overwrite them.
+  `complete_segments()` excludes the newest file, which ffmpeg is still writing.
+- [DONE] `tests/backend/test_guard_capture.py` (NEW, 16 pass + 2 ffmpeg-gated).
+  **TC-GCAP-14 is the regression you asked for**: it kills ffmpeg mid-recording and asserts
+  the mpegts result still decodes via ffprobe — *and* asserts MP4 does NOT survive the same
+  treatment, so the format choice cannot be "simplified" away without a red test. Uses
+  `-f lavfi testsrc`, so it needs **no camera** — runnable on the NUC directly.
+- [FIXED — found by the tests] `CameraCapture` resolved ffmpeg from `PATH`; the unit runs
+  with `ProtectSystem=strict`, so the binary is now configurable and an absolute path can
+  come from config.
+- [IMPROVED — found while writing tests] added `input_args=` so a non-RTSP source can be
+  injected cleanly; TC-GCAP-15 previously hand-edited the command list, which meant it was
+  not exercising the real shape.
+- [DONE] `pytest.ini` — `pythonpath = backend .` so `guard_worker` is importable in tests.
+- [VERIFIED] Full suite **694 passed, 2 skipped** (the two ffmpeg-gated tests; they run on
+  the NUC where ffmpeg exists).
+- [OPEN — step 1 acceptance, NUC] run the two ffmpeg tests there:
+  `bash scripts/guard_measure.sh tests` will not pick them up (different module) — use
+  `pytest tests/backend/test_guard_capture.py --noconftest` with the staging venv.
+- [NEXT] Step 2 — detection + alarm rule on the shared pipeline.
+
 # Implementation Status — Guard B1 DESIGN SUBMITTED — awaiting approval, no code written
 
 ## 2026-09-26 — Stage B approved. B1 restatement written for sign-off BEFORE any implementation.

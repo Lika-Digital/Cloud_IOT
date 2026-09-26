@@ -116,8 +116,10 @@ It auto-detects numpy from the production venv and pins staging to match. Watch 
 The error tells you to re-run with `GUARD_NUMPY=<version>`. **Do not remove
 `--only-binary`** — a numpy source build on this box is exactly what we are avoiding.
 
-**NOTE:** first run downloads ~4 GB (ultralytics + CPU torch) into a throwaway `/tmp`
-venv to export the model, then deletes it. See the FAQ below to avoid that.
+**NOTE:** first run must produce the model IR. It now prefers a **Docker** export
+(`python:3.12-slim` container, nothing installed on the host) because the NUC runs
+Python 3.14 and torch may have no cp314 wheel. Expect a few minutes and ~2 GB of
+container layers, all removed with `--rm`. See the FAQ to skip it entirely.
 
 **2.5 — production genuinely untouched**
 
@@ -341,8 +343,11 @@ Three cases:
    ```
    The IR is only ~12 MB, so exporting on any 64-bit machine and copying it over is the
    lightest path.
-3. **First run, no IR** → yes, ~4 GB once. It goes to `/tmp`, is deleted after, and never
-   touches the production venv.
+3. **First run, no IR** → the export runs, and by default **inside Docker**
+   (`python:3.12-slim`), so nothing lands on the host and the Python-3.14 torch
+   wheel question never arises. Add `--venv` to use a throwaway `/tmp` venv instead;
+   that route now passes `--only-binary=:all:` so a missing wheel fails in seconds
+   rather than starting a multi-hour torch source build on this CPU.
 
 **Q: Why `$HOME/guard-staging` and not `/tmp`?**
 Ubuntu mounts `/tmp` as tmpfs on many installs. The 4 GB export would then be 4 GB of

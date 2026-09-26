@@ -55,6 +55,26 @@ _BOAT_CLASS_ID = COCO_BOAT_CLASS_ID
 _DEFAULT_INPUT_SIZE = 640
 _DEFAULT_IOU_THRESHOLD = 0.45
 
+# v3.41 — Guard runs inference SINGLE-THREADED. This is a default, not a tuning knob.
+#
+# Measured on the marina NUC (Atom x7425E, 4 cores), 600 s of real camera footage:
+#
+#                      OpenVINO default (≈4 threads)   INFERENCE_NUM_THREADS=1
+#   CPU per inference            390.1 ms                      273.3 ms
+#   wall per inference            91.0 ms                      239.1 ms
+#   CPU time / wall time            3.14 cores                    1.00 cores
+#   load at 1 fps                   9.8 % of 4 cores              6.8 % of 4 cores
+#
+# Single-threading does not merely SPREAD the work, it REDUCES it by 30 %: oneTBB
+# worker threads spin-wait for work, and on a 4-core box with no spare core that
+# busy-waiting costs more CPU than the parallelism buys. The CPU/wall ratio of
+# exactly 1.00 confirms one core is occupied and three are left for the backend —
+# which is what protects berth occupancy.
+#
+# It also buys back headroom: at 273.3 ms, 2 fps costs 13.7 % of 4 cores and still
+# fits the <15 % budget, where the 4-thread figure did not (19.5 %).
+GUARD_NUM_THREADS = 1
+
 # Fallback names, used ONLY if the IR ships no metadata.yaml. The authoritative
 # source is the model's own metadata — see `load_class_names()`.
 _COCO80_FALLBACK_NAMES: tuple[str, ...] = (
@@ -444,6 +464,24 @@ class YoloOVDetector:
             logger.debug("YoloOVDetector: openvino not available — inference disabled")
         except Exception as exc:
             logger.warning("YoloOVDetector: failed to load model: %s", exc)
+
+    @classmethod
+    def for_guard(
+        cls,
+        model_dir: str,
+        num_threads: int | None = GUARD_NUM_THREADS,
+    ) -> "YoloOVDetector":
+        """Construct the detector the way the Guard worker must always construct it.
+
+        Thread count is fixed at `compile_model` time, not per call, so it cannot be
+        chosen later by `detect_persons()`. This factory exists so the measured
+        single-thread default (see GUARD_NUM_THREADS) is applied by construction and
+        cannot be forgotten by a future caller.
+
+        Berth occupancy keeps using `YoloOVDetector(model_dir)` directly, which leaves
+        threading to OpenVINO exactly as before.
+        """
+        return cls(model_dir, num_threads=num_threads)
 
     def unload(self) -> None:
         """Release the compiled model so its memory can be reclaimed.

@@ -27,6 +27,13 @@ model; NUC-side proof of real detection is `scripts/guard_detect_probe.py`.
   TC-YMC-13  transposed and non-transposed raw layouts decode identically
   TC-YMC-14  empty / degenerate input is handled without raising
   TC-YMC-15  unknown select mode raises rather than silently returning nothing
+  TC-YMC-16  detect() defaults to boat-only, argmax, no NMS, no letterbox
+  TC-YMC-17  detect_persons() uses person class, per-class select, NMS, letterbox
+  TC-YMC-18  unload() releases the model and detect() goes inert
+  TC-YMC-19  unavailable detector returns None, distinct from 'nothing detected'
+  TC-YMC-20  Guard runs SINGLE-THREADED by construction (measured decision)
+  TC-YMC-21  berth-occupancy path leaves threading to OpenVINO, unchanged
+  TC-YMC-22  for_guard() still allows a deliberate thread override
 """
 from __future__ import annotations
 
@@ -480,3 +487,46 @@ def test_tc_ymc_19_detect_returns_none_when_unavailable():
     assert res["occupied"] is None
     assert res["confidence"] == 0.0
     assert res["detections"] == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TC-YMC-20..22 — Guard runs single-threaded, by construction
+#
+# Measured on the NUC over 600 s of real footage: INFERENCE_NUM_THREADS=1 costs
+# 273.3 ms CPU per inference versus 390.1 ms with OpenVINO's default ~4 threads.
+# Single-threading REDUCES total CPU by 30 % (oneTBB spin-wait on a box with no
+# spare core) and occupies exactly one core (CPU/wall = 1.00), leaving three for
+# the backend. It is a decision, not a tuning knob, so it is pinned here.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_tc_ymc_20_guard_default_is_single_threaded():
+    from app.services.yolo_openvino import GUARD_NUM_THREADS, YoloOVDetector
+
+    assert GUARD_NUM_THREADS == 1, (
+        "Guard must run single-threaded: measured 273.3 ms CPU/inference at 1 thread "
+        "vs 390.1 ms at OpenVINO's default, and exactly one core occupied"
+    )
+
+    # for_guard() applies it by construction — __init__ is not reached because the
+    # model directory does not exist, but the attribute must still be set.
+    det = YoloOVDetector.for_guard("/nonexistent/models")
+    assert det.num_threads == 1
+    assert det.available is False
+
+
+def test_tc_ymc_21_berth_path_threading_is_unchanged():
+    """The plain constructor must leave threading to OpenVINO, exactly as before —
+    berth occupancy behaviour must not move."""
+    from app.services.yolo_openvino import YoloOVDetector
+
+    det = YoloOVDetector("/nonexistent/models")
+    assert det.num_threads is None, "berth-occupancy path must not set a thread cap"
+
+
+def test_tc_ymc_22_for_guard_allows_explicit_override():
+    """Deliberate override stays possible (e.g. to re-measure), including 'let
+    OpenVINO decide' via None."""
+    from app.services.yolo_openvino import YoloOVDetector
+
+    assert YoloOVDetector.for_guard("/nonexistent", num_threads=2).num_threads == 2
+    assert YoloOVDetector.for_guard("/nonexistent", num_threads=None).num_threads is None

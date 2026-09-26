@@ -309,7 +309,8 @@ def run_detection(
     print(f"Classes    : {len(det.class_names)} (0={det.class_names.get(0)!r})")
     print(f"Zone crop  : {zone if zone else 'DISABLED (full frame)'}")
     print(f"Confidence : {conf}")
-    print(f"Threads    : {num_threads if num_threads else 'openvino default (all cores)'}")
+    print(f"Threads    : {num_threads if num_threads else 'openvino default (all cores)'}"
+          f"{'  <- Guard production setting' if num_threads == 1 else ''}")
     print(f"Frames     : {len(frame_paths)}\n")
 
     latencies: list[float] = []
@@ -569,14 +570,18 @@ def main() -> int:
                     help="clip time the person actually entered frame, for TRUE "
                          "end-to-end latency (without it only rule latency is reported)")
     ap.add_argument("--save-annotated", metavar="DIR", help="write boxed JPEGs of positive frames")
-    ap.add_argument("--threads", type=int, metavar="N",
-                    help="cap OpenVINO CPU threads. Measured on the NUC: default "
-                         "threading gives ~91 ms wall / ~390 ms CPU, i.e. all 4 cores "
-                         "saturated for 91 ms. --threads 1 keeps the same total CPU but "
-                         "spreads it over ~390 ms on ONE core, leaving 3 free for the "
-                         "backend. At 1 fps that is strictly better isolation.")
+    ap.add_argument("--threads", type=int, metavar="N", default=1,
+                    help="OpenVINO CPU threads. DEFAULT 1, matching the Guard worker. "
+                         "Measured on the NUC: 1 thread costs 273.3 ms CPU per inference "
+                         "vs 390.1 ms with OpenVINO's default ~4 threads - single "
+                         "threading REDUCES total CPU by 30%% (TBB spin-wait) and occupies "
+                         "exactly one core (CPU/wall = 1.00), leaving three for the "
+                         "backend. Pass --threads 0 to measure OpenVINO's default instead.")
     ap.add_argument("--model-dir", default=DEFAULT_MODEL_DIR)
     args = ap.parse_args()
+
+    # 0 means "let OpenVINO decide"; the detector treats None that way.
+    threads = None if (args.threads is not None and args.threads <= 0) else args.threads
 
     if args.classmap:
         return show_classmap(args.model_dir)
@@ -599,7 +604,7 @@ def main() -> int:
             _fail(f"{args.image} not found")
         return run_detection(args.model_dir, [args.image], zone, args.conf,
                             args.expect, args.save_annotated, fps=args.fps,
-                            num_threads=args.threads,
+                            num_threads=threads,
                             frames_required=args.frames_required,
                             window_seconds=args.window_seconds,
                             cooldown_seconds=args.cooldown_seconds,
@@ -614,7 +619,7 @@ def main() -> int:
             print(f"Extracted {len(frames)} frames at {args.fps} fps from {args.clip}\n")
             return run_detection(args.model_dir, frames, zone, args.conf,
                                 args.expect, args.save_annotated, fps=args.fps,
-                                num_threads=args.threads,
+                                num_threads=threads,
                                 frames_required=args.frames_required,
                                 window_seconds=args.window_seconds,
                                 cooldown_seconds=args.cooldown_seconds,

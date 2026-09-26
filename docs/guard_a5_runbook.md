@@ -459,3 +459,55 @@ builds the FastAPI test app and imports sqlalchemy/fastapi, which the staging ve
 deliberately does not have; the two guard test files need none of it. `pytest.ini` still
 supplies `pythonpath = backend`, so the app import resolves. Running them by hand with
 `--noconftest` — as you did — is exactly equivalent.
+
+---
+
+## SETTLED 2026-09-26 (second measurement): single-threaded, and 2 fps is back
+
+`--threads 1` measured on the same 600 s clip:
+
+| | 4 threads (OpenVINO default) | **1 thread** |
+|---|---|---|
+| CPU per inference | 390.1 ms | **273.3 ms** |
+| wall per inference | 91.0 ms | 239.1 ms |
+| CPU time / wall time | 3.14 cores | **1.00 cores** |
+| load @1 fps | 9.8 % of 4 cores | **6.8 %** |
+| false alarms | 0 | 0 |
+
+Single-threading **reduces** total CPU by 30 %, it does not merely spread it: oneTBB
+worker threads spin-wait for work, and on a 4-core box with no spare core that
+busy-waiting costs more than the parallelism buys. CPU/wall = 1.00 proves exactly one
+core is occupied, leaving three for the backend — which is what protects berth occupancy.
+
+(The two runs sampled at different rates — 1200 frames at 2 fps vs 600 at 1 fps — but
+per-inference cost is rate-independent, and amortising fixed startup over *fewer* frames
+would inflate the 1-thread number. So 30 % is a floor, not a ceiling.)
+
+**Row 10 moves to PASS: 273.3 ms < 300 ms.**
+
+**`--threads 1` is now the DEFAULT**, not an option — `GUARD_NUM_THREADS = 1`, applied by
+`YoloOVDetector.for_guard()` so it cannot be forgotten, and pinned by TC-YMC-20..22. The
+probe also defaults to `--threads 1` now; pass `--threads 0` to measure OpenVINO's default.
+
+### The fps decision reopens — in a good way
+
+| Rate (1 thread) | CPU/s | % of 4 cores | One-core duty | Verdict |
+|---|---|---|---|---|
+| 1 fps | 273 ms | **6.83 %** | 24 % | PASS, comfortable |
+| **2 fps** | 547 ms | **13.66 %** | 48 % | **PASS**, 1.3 pts of margin |
+| 3 fps | 820 ms | 20.5 % | 72 % | over budget |
+
+At 4 threads, 2 fps cost 19.5 % and was out. At 1 thread it costs 13.66 % and is back in,
+which restores the original spec rule and its extra samples:
+
+| Option | Samples in window | Max latency | CPU %4c | P(alarm) r=0.6 | r=0.5 |
+|---|---|---|---|---|---|
+| 1 fps / 4 s window | 5 | 4.0 s | 6.83 % | 0.913 | 0.812 |
+| **2 fps / 3 s window** (original spec) | **7** | **3.0 s** | 13.66 % | **0.981** | **0.938** |
+
+**Recommendation: keep `GUARD_FPS=1` + `GUARD_WINDOW_SECONDS=4` as the default** — 6.8 %
+leaves real headroom under the watchdog's 60 % limit, and 0.913 at r=0.6 is adequate.
+**Hold 2 fps / 3 s in reserve** as the documented answer if the person-clip recall comes
+back weak: it lifts P(alarm) to 0.981 at r=0.6 and 0.938 even at r=0.5, at 13.66 % which
+still fits. That is a much better position than before — the thread cap turned a hard
+constraint into a lever we can pull once row 4 exists.

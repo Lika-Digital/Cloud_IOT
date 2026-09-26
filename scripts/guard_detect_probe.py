@@ -17,7 +17,7 @@ MODES
 
   --record SECONDS
         Record a clip from the configured camera with `-c copy` (no re-encode,
-        ~0 % CPU) so you have a real-angle sample to test against.
+        ~0 % CPU) so you have a real-angle sample to test against. Daylight only.
 
   --image PATH
         Run detection on one still image.
@@ -36,12 +36,21 @@ MODES
         positive rate. NOTE: this is FRAME-level, not box-level — real precision
         needs per-frame box annotation, which this script does not invent.
 
+SCOPE
+  DAYLIGHT ONLY. Night operation is out of scope for Phase 1: this camera has no
+  IR illuminator and the sensor is poor, so after dark it is recorded as
+  unsupported on this hardware rather than measured and reported as a failure.
+
+  The camera views the STERN at ~10 m, where boarding happens — not a distant
+  berth. Geometry predicts ~150 px person height with the zone crop; the probe
+  flags a median far below that as a setup problem, not a model problem.
+
 EXAMPLES
     python3 scripts/guard_detect_probe.py --classmap
-    python3 scripts/guard_detect_probe.py --record 20 --out /tmp/day.mp4
-    python3 scripts/guard_detect_probe.py --clip /tmp/day.mp4 --expect person
+    python3 scripts/guard_detect_probe.py --record 30 --out /tmp/stern.mp4
+    python3 scripts/guard_detect_probe.py --clip /tmp/stern.mp4 --expect person
     python3 scripts/guard_detect_probe.py --clip /tmp/empty.mp4 --expect none
-    python3 scripts/guard_detect_probe.py --clip /tmp/day.mp4 --no-zone   # compare
+    python3 scripts/guard_detect_probe.py --clip /tmp/stern.mp4 --no-zone  # compare
 """
 from __future__ import annotations
 
@@ -397,9 +406,19 @@ def run_detection(
         print(f"  min / max             : {ph[0]:.0f} / {ph[-1]:.0f} px")
         print("  reference             : >=50 px reliable, 20-40 px marginal, "
               "<20 px effectively blind")
-        if statistics.median(ph) < 40:
-            print("  [!] median below 40 px — at or past the usable range for this "
-                  "camera position")
+        med = statistics.median(ph)
+        # This camera views the stern at ~10 m, where geometry predicts ~150 px
+        # with the zone crop. A median far below that means the crop, the zoom or
+        # the camera position is not what we think — a setup problem, not a model
+        # problem, so say so rather than quietly reporting a low number.
+        print("  expected here         : ~150 px (person at ~10 m, stern view, "
+              "with the zone crop)")
+        if med < 100:
+            print(f"  [!] median {med:.0f} px is FAR below the ~150 px expected at 10 m.")
+            print("      Suspect the crop/zone, camera framing or that the subject was")
+            print("      much further than 10 m — verify before trusting these numbers.")
+        elif med < 40:
+            print("  [!] median below 40 px — at or past usable range")
     elif expect == "person":
         print("\nPERSON PIXEL HEIGHT     : no detections, so no height measured")
 

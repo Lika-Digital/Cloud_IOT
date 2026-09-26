@@ -1,3 +1,44 @@
+# Implementation Status — Guard A.5 runbook ready — AWAITING FIELD NUMBERS
+
+## 2026-09-26 (late) — four corrections applied; runbook written; NO production change needed.
+
+- [FIXED] **(1) Staging numpy contradiction — my own bug, would have failed on the NUC.**
+  `guard_measure.sh` pinned `numpy==2.1.2` "to match production" while production is 2.4.6
+  and 2.1.2 has no cp314 wheel → source build on Python 3.14.4. My earlier proof ran on
+  Windows where 2.1.2 *does* have a wheel, so it never surfaced. Now the version is **read
+  from the production venv at runtime** (`resolve_numpy`, `GUARD_NUMPY` override) so it
+  cannot be hardcoded wrong again, and every install uses **`--only-binary=:all:`** so a
+  missing wheel fails instantly instead of compiling. Verified the fallback and override
+  paths. Also added `GUARD_IR_SRC` to import a pre-exported IR and skip torch entirely.
+- [DONE] **(2) Night removed — out of scope.** No IR illuminator, poor sensor → recorded as
+  **unsupported on this hardware** (procurement question, not software). Purged from the
+  probe docstring, the runbook, and the stale §5.5 command in the assessment (replaced with
+  DO-NOT-RUN). §2.4 marked superseded.
+- [DONE] **(3) Not a far berth — ~10 m stern view.** Renamed throughout. Probe now prints
+  the **~150 px expectation** for a person at 10 m with the zone crop and flags a median
+  **below 100 px** as a setup problem (crop/framing/distance), not a model problem. Added
+  the two partial-body cases: **upper body behind the stern rail** and **crouching**, both
+  graded NOTE rather than STOP since full-body boarding is the main case.
+- [DONE] **(4) torch question answered explicitly** — needed ONLY for the one-time IR
+  export, never for the measurement. Three cases documented (IR already staged → skipped
+  with an explicit log line; `GUARD_IR_SRC` → skipped; first run → ~4 GB once, in a
+  throwaway /tmp venv). Measurement venv is openvino + numpy + Pillow, ~200 MB.
+- [DONE] `docs/guard_a5_runbook.md` (NEW) — copy-paste, phone-first: step 0 baseline,
+  step 1 **separate checkout (no merge to main, no upgrade.sh, no `git pull` in
+  ~/Cloud_IOT)**, step 2 ordered checks each marked STOP or NOTE, step 3 physical
+  measurement with what to do and who must be present, step 4 **13 numeric thresholds**
+  (incl. CPU ms/inference ≤300 derived from the <15 %-of-4-cores budget at 2 fps, and
+  control-clip alarms = 0 as the hard gate), step 5 rollback + three independent
+  verifications that production is untouched.
+- [ANSWERED] **main/upgrade.sh not needed to measure.** Measurement reads nothing from
+  /opt except `pedestal.db` (mode=ro). Separate clone at `~/guard-checkout` keeps
+  `~/Cloud_IOT` intact (pulling there would break upgrade.sh change detection) and leaves
+  main at v3.40 until the numbers justify it.
+- [VERIFIED] 49 guard tests pass; `bash -n` clean on both scripts; numpy-resolution logic
+  exercised for both the override and the fallback path; probe help renders the new scope.
+- [NEXT] **STOP.** Run the runbook; report the step-4 table. Stage B still awaits approval
+  of those numbers plus the B1 restatement (separate-process consequence).
+
 # Implementation Status — Guard A.5 items 1-5 answered — STILL AWAITING NUC NUMBERS
 
 ## 2026-09-26 (evening) — verified NUC state applied; architecture decision taken.

@@ -209,12 +209,13 @@ So the crop is mandatory for person detection, not optional. **The unknowns are 
 lens VFOV and the actual camera-to-boat distance** — both need measuring (§5.6);
 everything above is parametric until then.
 
-### 2.4 Night performance [NUC-PENDING]
+### 2.4 Night performance — OUT OF SCOPE (decided 2026-09-26)
 
-I will not assert this model's IR specification from memory. The DCS-TF2283AI-DL is an
-outdoor camera and D-Link's outdoor DCS line generally ships IR LEDs, but range and
-whether IR cut-filter switching actually engages at this mounting position must be
-measured, not assumed. §5.5 grabs a snapshot after dark to settle it.
+**Superseded 2026-09-26: night is OUT OF SCOPE for Phase 1.** Confirmed on site that this
+camera has no IR illuminator and the sensor is poor, so after dark it is recorded as
+**unsupported on this hardware** — a procurement question (an IR or low-light camera),
+not a software one. No night clip is recorded and no night metric is reported. The
+original open question is left below for context only.
 
 What is already known and matters: at night an IR-illuminated scene is **monochrome**,
 and the identity half of the current pipeline is a **colour histogram**
@@ -372,6 +373,13 @@ measures it for real, and I would not sign up to criterion 5 before those number
 
 ## 5. NUC COMMANDS NEEDED TO CLOSE THIS ASSESSMENT
 
+> **SUPERSEDED 2026-09-26 — use `docs/guard_a5_runbook.md` instead.** That runbook is the
+> copy-paste, phone-friendly procedure with baseline, ordered STOP/NOTE checks, numeric
+> pass/fail thresholds and rollback, and it needs **no production change**. The block
+> below is kept for provenance. Two items in it are now settled and must NOT be run:
+> **§5.5 night — out of scope** (no IR, poor sensor); **§5.6 distance — known: ~10 m,
+> stern view.**
+
 I cannot reach the box from here. Please run this block and paste the output; I will
 fold the results into §1–§4 and mark the `[NUC-PENDING]` items resolved.
 
@@ -395,16 +403,15 @@ for p in profile1 profile2 profile3; do
     "rtsp://admin:PASSWORD@192.168.1.191:554/$p" 2>&1 | head -6
 done
 
-# ── 5.5 night usability (run after dark; is it IR/monochrome and usable?) ───
-timeout 20 ffmpeg -y -rtsp_transport tcp -i "rtsp://admin:PASSWORD@192.168.1.191:554/profile1" \
-  -vframes 1 /tmp/night_test.jpg 2>/dev/null && ls -l /tmp/night_test.jpg
-#   then view it: does it show IR illumination, and is a person-sized object visible?
+# ── 5.5 night usability — DO NOT RUN. Night is OUT OF SCOPE: this camera has no
+#     IR illuminator and the sensor is poor, so night is recorded as unsupported on
+#     this hardware — a procurement question (IR/low-light camera), not software.
 
-# ── 5.6 geometry for the §2.3 estimate ─────────────────────────────────────
-#   Not a command — two measurements, please:
-#     a) camera → moored boat distance, in metres (tape or a rough pace count)
-#     b) lens FOV from the camera's web UI / label, or: photograph a 1 m ruler at a
-#        known distance and report its pixel width
+# ── 5.6 geometry — SETTLED, no action. Distance is ~10 m and the camera views the
+#     STERN (where boarding happens), not a distant berth. At 10 m with the zone crop
+#     the geometry predicts ~150 px person height; the probe now prints that
+#     expectation and flags a median below 100 px as a setup problem. Measured for
+#     real in runbook step 3.1.
 
 # ── 5.7 is the ML path installed, and what is the REAL class map + latency? ──
 cd /opt/cloud-iot/backend

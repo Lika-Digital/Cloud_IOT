@@ -445,7 +445,7 @@ Expect wall time to rise to ~300-400 ms and CPU per inference to stay ~390 ms. I
 per inference drops too, even better — report both.
 
 **Q: The export printed a wall of Python 3.14 multiprocessing tracebacks. Broken?**
-No — and it is fixed as of `d6f2a1c`. Python 3.14 defaults to the **forkserver** start
+No — and it is fixed as of `451623d`. Python 3.14 defaults to the **forkserver** start
 method, and ultralytics/torch spawn worker processes. A forkserver child re-imports
 `__main__`; when the program was passed with `python -c`, `__main__` is `<stdin>` and
 cannot be re-imported, so each worker printed a traceback before the export succeeded
@@ -454,7 +454,7 @@ anyway. The export program is now written to a real file with an
 them, you are on an older clone — pull.
 
 **Q: `guard_measure.sh tests` failed importing sqlalchemy.**
-Fixed as of `d6f2a1c`: the command now passes `--noconftest`. `tests/backend/conftest.py`
+Fixed as of `451623d`: the command now passes `--noconftest`. `tests/backend/conftest.py`
 builds the FastAPI test app and imports sqlalchemy/fastapi, which the staging venv
 deliberately does not have; the two guard test files need none of it. `pytest.ini` still
 supplies `pythonpath = backend`, so the app import resolves. Running them by hand with

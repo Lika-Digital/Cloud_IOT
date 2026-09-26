@@ -1,3 +1,50 @@
+# Implementation Status — Guard B1 DESIGN SUBMITTED — awaiting approval, no code written
+
+## 2026-09-26 — Stage B approved. B1 restatement written for sign-off BEFORE any implementation.
+
+Settings locked: GUARD_FPS=1, GUARD_WINDOW_SECONDS=4, GUARD_FRAMES_REQUIRED=2, threads=1
+fixed at compile_model time. 2 fps / 3 s is the documented reserve, reachable by runtime
+config only — no switch built for it. A.5 rows 3,4,5,6,12,13 remain pending, not blocking.
+
+- [DONE] `docs/guard_b1_design.md` (NEW) — the B1 restatement: process split, the systemd
+  unit verbatim, full MQTT contract (8 topics with direction/retain/payload), single-DB-writer
+  confirmation, REST surface, the complete arm/disarm chain with timeouts, and how a false
+  ARMED is made impossible. **No implementation code.**
+- [DESIGN] **CPUQuota=60 % IS the acceptance budget, kernel-enforced** — 60 % of one core =
+  15 % of this 4-core box. Measured need 27.3 % of one core at 1 fps, 47.8 % at 2 fps, so
+  both fit under a ceiling the kernel applies rather than one we promise to respect.
+- [DESIGN] **False ARMED is impossible three independent ways:** MQTT Last Will overwrites
+  the retained `guard/state` with UNAVAILABLE; a 15 s heartbeat gap trips it; and
+  `worker_seen_at` is in-memory and deliberately NOT persisted, so a stale retained ARMED
+  cannot survive a backend restart as truth. Direct application of the v3.40 lesson.
+  `guard/cmd` is deliberately NOT retained — a replayed command could arm a restarting
+  worker with nobody asking, which is the v3.40 failure shape exactly.
+- [CORRECTION to the brief] The pedestals do **not** use Last Will — `mqtt_client.py` sets no
+  `will_set`; cabinet liveness is the 15 s `opta/status` heartbeat + `_comm_loss_watchdog`.
+  Guard will use **both** LWT and a heartbeat, because LWT only fires on a broker-detected
+  disconnect and not at all if the process wedges with its socket open.
+- [DESIGN] Single writer holds on both sides: backend is the **only DB writer** (worker never
+  opens a DB, publishes instead); the worker is the **only file writer** under
+  `/var/lib/marina-guard/` and owns retention, backend reads only.
+- [DESIGN] Probe and worker share `app/guard/pipeline.py` + `app/guard/alarm_rule.py`, with a
+  hard constraint that those two modules import stdlib+numpy+PIL ONLY — that is what keeps
+  the probe runnable from the staging venv (proven in A1). A test will assert it.
+- [OPEN — 6 DECISIONS] §10 of the design: dedicated `guard` user; LIMITED_VISIBILITY as a
+  health flag not a state; five extra REST endpoints forced by requirements 1-3; frame-saving
+  budget (logging every detection is cheap, saving every frame is 600 MB/day — proposal caps
+  it at ~430 MB); `guard_detections` retention 30 d; and notifications built NOT AT ALL
+  rather than built-but-disabled.
+- [DONE] `docs/guard_docs_pass_scope.md` (NEW) — **documentation is deferred to LAST**, per
+  the agreed sequence B1 → Stage B → UI v2 → deploy → docs. Written once, not per piece.
+  Scope checklist captured now so nothing is lost, including the measured-numbers table with
+  its measurement date. One MD source of truth, PDF exported from it, reusing the existing
+  `scripts/generate_*.py` + reportlab pattern.
+- [BACKLOG — separate work, NOT inside guard/UI v2] requirements.txt drift audit (only numpy
+  fixed so far); TME 192.168.1.254 returning 404 on `values.xml` while `fresh.xml` returns 200.
+- [NEXT] **STOP for B1 approval + the six decisions.** Then build in the given order:
+  ffmpeg/segments → detection+rule → recording/retention → watchdog → MQTT/REST/persistence
+  → dashboard. `main` only after the acceptance criteria are measured on the NUC.
+
 # Implementation Status — Guard A.5 PARTIAL RESULTS IN — person clips pending
 
 ## 2026-09-26 — control clip + timing measured on the NUC. 1 fps settled. Three fixes applied.

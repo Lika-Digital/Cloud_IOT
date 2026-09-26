@@ -35,6 +35,9 @@ merely intended:
   TC-GCAP-21  -nostdin is always present, and precedes -i
   TC-GCAP-22  supervisor restarts with backoff and REPORTS why
   TC-GCAP-23  supervisor does not retry a missing ffmpeg binary
+  TC-GCAP-24  timestamp options present (fixes the segment-muxer deprecation)
+  TC-GCAP-25  stderr is drained continuously (deadlock guard), bounded, classified
+  TC-GCAP-26  [ffmpeg] no deprecation warnings on a synthetic run
   TC-GCAP-15  [ffmpeg] a real capture produces segments and frames from one process
   TC-GCAP-16  complete_segments() excludes the segment still being written
 """
@@ -611,6 +614,31 @@ def test_tc_gcap_19_real_camera_ring_survives_sigkill(tmp_path):
     if not still_running:
         print(f"\n[TC-GCAP-19] ffmpeg exited during the run: {stderr_tail.strip()[-600:]}")
 
+    # Whatever ffmpeg said during a HEALTHY run must be surfaced, not discarded. The
+    # original version only looked at stderr on failure, so the segment muxer's
+    # "Timestamps are unset in a packet ... deprecated and will stop working" notice was
+    # visible only to someone running the command by hand — a notice nobody sees.
+    said = cap.recent_stderr()
+    if said:
+        print(f"  ffmpeg stderr ({len(said)} line(s)):")
+        for line in said[-20:]:
+            print(f"    {line}")
+    else:
+        print("  ffmpeg stderr: (silent)")
+
+    # ffmpeg here comes from apt, so a deprecation today is broken segmenting after a
+    # routine system upgrade. Fail on it while the cause is still known.
+    deprecations = cap.deprecation_warnings()
+    assert not deprecations, (
+        "ffmpeg emitted DEPRECATION warning(s) during a passing run:\n  "
+        + "\n  ".join(deprecations)
+        + f"\nffmpeg: {ver}\nThese become breakage after an apt upgrade, so they are "
+        "fixed now rather than discovered when the ring silently stops recording. "
+        "-use_wallclock_as_timestamps 1 and -avoid_negative_ts make_zero were added for "
+        "the 'Timestamps are unset in a packet' case; if this is a NEW notice, read it and "
+        "fix the cause rather than relaxing this assertion."
+    )
+
     all_segs = list_segments(seg_dir)
     complete = complete_segments(seg_dir)
     print(f"\n[TC-GCAP-19] ffmpeg: {ver}")
@@ -643,12 +671,24 @@ def test_tc_gcap_19_real_camera_ring_survives_sigkill(tmp_path):
         )
 
     # No audio may reach disk — the policy, verified on the real stream that HAS audio.
+    #
+    # Count DISTINCT stream indexes, not codec_type rows. For mpegts, ffprobe lists the
+    # same stream twice — once inside the program and once at file level — so the first
+    # version of this check reported ['video', 'video'] for a single h264 stream and I
+    # wrongly read it as duplication. Asking for index alongside codec_type makes the
+    # distinction visible instead of guessable.
     probe = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
-         "-of", "default=noprint_wrappers=1:nokey=1", str(complete[0])],
+        ["ffprobe", "-v", "error", "-show_entries", "stream=index,codec_type",
+         "-of", "csv=p=0", str(complete[0])],
         capture_output=True, text=True, timeout=60,
     )
-    kinds = [ln.strip() for ln in probe.stdout.splitlines() if ln.strip()]
+    streams = {}
+    for line in probe.stdout.splitlines():
+        parts = [p.strip() for p in line.split(",") if p.strip()]
+        if len(parts) >= 2 and parts[0].isdigit():
+            streams[int(parts[0])] = parts[1]      # index -> codec_type, deduplicated
+    kinds = sorted(streams.values())
+    print(f"  streams in segment: {streams} -> {kinds}")
     print(f"  streams in segment: {kinds}")
     assert "audio" not in kinds, (
         f"AUDIO REACHED DISK from the real camera ({kinds}). The camera streams pcm_alaw "
@@ -667,15 +707,18 @@ def test_tc_gcap_19_real_camera_ring_survives_sigkill(tmp_path):
     # Diagnose with:
     #   ffprobe -v error -show_entries stream=index,codec_type,codec_name -of csv SEG.ts
     #   ffprobe -v error -show_streams -of default=noprint_wrappers=1 SEG.ts
-    video_streams = [k for k in kinds if k == "video"]
-    assert len(video_streams) == 1, (
-        f"expected exactly ONE video stream in a segment, found {len(video_streams)} "
-        f"({kinds}). -map 0:v:0 admits a single stream, so either the muxer emits a "
-        f"duplicate or the source announces two. Diagnose with:\n"
+    # Confirmed on the NUC: exactly one h264 stream at index 0. The earlier
+    # ['video','video'] was ffprobe listing it in two contexts, not a duplication — so
+    # concat needs no explicit stream map in step 3.
+    video_indexes = [i for i, kind in streams.items() if kind == "video"]
+    assert len(video_indexes) == 1, (
+        f"expected exactly ONE video stream index in a segment, found {video_indexes} "
+        f"({streams}). -map 0:v:0 admits a single stream, so either the muxer emits a "
+        "duplicate or the source announces two. Diagnose with:\n"
         f"  ffprobe -v error -show_entries stream=index,codec_type,codec_name -of csv "
         f"{complete[0]}\n"
-        "Resolve before step 3 (recording assembly): concatenating two-video-track "
-        "segments produces a clip browsers handle badly."
+        "This matters for recording assembly: concatenating two-video-track segments "
+        "produces a clip browsers handle badly."
     )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -804,4 +847,93 @@ def test_tc_gcap_23_supervisor_does_not_retry_a_missing_binary():
     sup = CaptureSupervisor(make, min_backoff=0.01)
     with pytest.raises(FfmpegNotAvailable):
         next(iter(sup.frames()))
+
+def test_tc_gcap_24_timestamp_options_present(tmp_path):
+    """Guards the fix for ffmpeg's segment-muxer deprecation notice.
+
+    On ffmpeg 8.0.1 with an RTSP source, `-c:v copy` into the segment muxer produced:
+        "Timestamps are unset in a packet for stream 0. This is deprecated and will stop
+         working in the future."
+    It worked, but ffmpeg announced it as going away — and ffmpeg comes from apt here, so a
+    routine system upgrade could turn the warning into broken segmenting with no change on
+    our side.
+
+    -use_wallclock_as_timestamps stamps every demuxed packet, which is the remedy for an
+    RTSP source that omits timestamps: unlike +genpts it guarantees a value on every packet,
+    and being a demuxer option it still applies under -c:v copy.
+    """
+    cmd = build_capture_command(URL, tmp_path, fps=1, segment_seconds=10, ffmpeg="ffmpeg")
+
+    i = cmd.index("-use_wallclock_as_timestamps")
+    assert cmd[i + 1] == "1"
+    assert i < cmd.index("-i"), "must be an INPUT option, before -i, to affect demuxing"
+
+    j = cmd.index("-avoid_negative_ts")
+    assert cmd[j + 1] == "make_zero"
+    assert j > cmd.index("-i"), "must be an OUTPUT option"
+
+    # Both are generic (AVFormatContext / muxer) options, not protocol-specific — unlike
+    # -reconnect, which is why TC-GCAP-20 exists.
+    assert "-fflags" in cmd and cmd[cmd.index("-fflags") + 1] == "+genpts"
+
+
+def test_tc_gcap_25_stderr_is_drained_continuously(tmp_path):
+    """stderr must be read WHILE the process runs, not only after it exits.
+
+    This is a deadlock guard, not a logging nicety: stderr is a pipe with a ~64 KB kernel
+    buffer, so if nobody reads it a chatty ffmpeg eventually blocks on write and capture
+    freezes silently after days, with no error anywhere. The original implementation read
+    the pipe only on exit, which is exactly that bug.
+    """
+    cap = CameraCapture(URL, tmp_path, ffmpeg="ffmpeg", stderr_lines=5)
+
+    # Callable before start, and empty rather than raising.
+    assert cap.recent_stderr() == []
+    assert cap.deprecation_warnings() == []
+    assert cap.drain_stderr() == ""
+
+    # Simulate the drain thread's output to prove the buffer is bounded and classified.
+    for n in range(8):
+        cap._stderr_lines.append(f"line {n}")
+    cap._stderr_lines.append("Timestamps are unset in a packet: deprecated")
+    assert len(cap.recent_stderr()) <= 5, "the buffer must be bounded (runs for days)"
+    assert cap.deprecation_warnings() == ["Timestamps are unset in a packet: deprecated"]
+    assert "deprecated" in cap.drain_stderr()
+    assert cap.recent_stderr(limit=2) == cap.recent_stderr()[-2:]
+
+
+@needs_ffmpeg
+def test_tc_gcap_26_no_deprecations_on_a_synthetic_run(tmp_path):
+    """Catch deprecations on every ffmpeg-capable box, not just the NUC.
+
+    Weaker than TC-GCAP-19 (a file source is not RTSP, and the timestamp notice was
+    RTSP-specific), but it costs seconds and would catch a broadly-triggered deprecation
+    without waiting for a camera run.
+    """
+    src = _make_h264_source(tmp_path, seconds=12)
+    seg_dir = tmp_path / "segments"
+    seg_dir.mkdir()
+    cap = CameraCapture(
+        str(src), seg_dir, fps=1, segment_seconds=2, ffmpeg="ffmpeg",
+    )
+    # A file source needs -re instead of the RTSP flags; everything else is production.
+    cap.command = lambda: build_capture_command(  # type: ignore[method-assign]
+        str(src), seg_dir, fps=1, segment_seconds=2, ffmpeg="ffmpeg",
+        input_args=["-re"],
+    )
+    cap.start()
+    try:
+        time.sleep(7)
+    finally:
+        cap.stop()
+
+    said = cap.recent_stderr()
+    print(f"\n[TC-GCAP-26] ffmpeg: {ffmpeg_version()}")
+    for line in said[-20:]:
+        print(f"    {line}")
+    assert not cap.deprecation_warnings(), (
+        "ffmpeg emitted deprecation warning(s) on a synthetic run:\n  "
+        + "\n  ".join(cap.deprecation_warnings())
+    )
+    assert complete_segments(seg_dir), "the synthetic run produced no completed segments"
 

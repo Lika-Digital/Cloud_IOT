@@ -60,7 +60,9 @@ import logging
 import os
 import shutil
 import subprocess
+import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Iterator
 
@@ -153,6 +155,20 @@ def build_capture_command(
         # CaptureSupervisor below. TC-GCAP-20 guards against them being re-added.
         *(input_args if input_args is not None else [
             "-rtsp_transport", rtsp_transport,
+            # Timestamps. The segment muxer emitted, on ffmpeg 8.0.1 with an RTSP source:
+            #   "Timestamps are unset in a packet for stream 0. This is deprecated and
+            #    will stop working in the future."
+            # It worked, but ffmpeg announced it as going away — and ffmpeg here comes from
+            # apt, so a routine system upgrade could turn that warning into broken
+            # segmenting with no code change on our side. Fixed now, while the reason is
+            # known, rather than discovered when the ring silently stops recording.
+            #
+            # -use_wallclock_as_timestamps stamps every demuxed packet with wallclock time,
+            # which is the standard remedy for an RTSP source that omits them; unlike
+            # +genpts it guarantees a value on every packet, and being a demuxer option it
+            # still applies under -c:v copy. Kept alongside +genpts rather than instead of
+            # it, since they act at different points.
+            "-use_wallclock_as_timestamps", "1",
             "-fflags", "+genpts",
         ]),
         "-i", str(stream_url),
@@ -164,6 +180,10 @@ def build_capture_command(
         "-segment_time", str(int(segment_seconds)),
         "-segment_format", SEGMENT_FORMAT,
         "-reset_timestamps", "1",
+        # With wallclock timestamps the raw values are epoch-scale; make_zero shifts each
+        # segment to start at zero so a segment is sane when played on its own and the
+        # muxer never sees a negative timestamp.
+        "-avoid_negative_ts", "make_zero",
         # Monotonic names, NOT -segment_wrap: the ring is pruned by this module so a
         # segment an in-progress event still needs can be pinned against deletion.
         # -segment_wrap would silently overwrite it.
@@ -340,6 +360,7 @@ class CameraCapture:
         rtsp_transport: str = "tcp",
         jpeg_quality: int = 3,
         ffmpeg: str | None = None,
+        stderr_lines: int = 200,
     ):
         self.stream_url = stream_url
         self.segment_dir = Path(segment_dir)
@@ -354,6 +375,11 @@ class CameraCapture:
         self.ffmpeg = ffmpeg
         self._proc: subprocess.Popen | None = None
         self.started_at: float | None = None
+        # Bounded ring of ffmpeg's own stderr lines. Bounded because this process runs for
+        # days and we will not hold an unbounded log in memory.
+        self._stderr_lines: deque[str] = deque(maxlen=stderr_lines)
+        self._stderr_thread: threading.Thread | None = None
+        self._stderr_lock = threading.Lock()
 
     # ── lifecycle ──
 
@@ -387,6 +413,47 @@ class CameraCapture:
             bufsize=0,
         )
         self.started_at = time.time()
+        self._start_stderr_drain()
+
+    def _start_stderr_drain(self) -> None:
+        """Continuously read ffmpeg's stderr on a daemon thread.
+
+        This is NOT just for nicer logs — it prevents a deadlock. stderr is a pipe with a
+        finite kernel buffer (~64 KB). If nobody reads it, a chatty ffmpeg eventually fills
+        it and BLOCKS on write, which would freeze capture silently after days of running,
+        with no error anywhere. Reading it only on exit (as this class originally did) is
+        exactly the shape of that bug.
+
+        It also means anything ffmpeg says during a HEALTHY run reaches journald and
+        `recent_stderr()`, instead of being discarded — a deprecation notice that only
+        appears when someone runs the command by hand is a notice nobody sees.
+        """
+        proc = self._proc
+        if proc is None or proc.stderr is None:
+            return
+
+        def _drain() -> None:
+            try:
+                for raw in iter(proc.stderr.readline, b""):
+                    line = raw.decode("utf-8", "replace").rstrip()
+                    if not line:
+                        continue
+                    with self._stderr_lock:
+                        self._stderr_lines.append(line)
+                    # ffmpeg already runs at -loglevel warning, so anything it emits is
+                    # worth surfacing. Deprecations get flagged harder: they are the ones
+                    # that become breakage after an apt upgrade.
+                    if "deprecat" in line.lower():
+                        logger.warning("ffmpeg DEPRECATION: %s", line)
+                    else:
+                        logger.warning("ffmpeg: %s", line)
+            except Exception:
+                pass          # the pipe closing on exit is normal, not an error
+
+        self._stderr_thread = threading.Thread(
+            target=_drain, name="guard-ffmpeg-stderr", daemon=True,
+        )
+        self._stderr_thread.start()
 
     def stop(self, timeout: float = 5.0) -> int | None:
         """Terminate gracefully, then kill.
@@ -411,6 +478,11 @@ class CameraCapture:
                 except subprocess.TimeoutExpired:
                     logger.error("ffmpeg pid %s would not die", self._proc.pid)
         rc = self._proc.returncode
+        # Let the drain thread finish reading what ffmpeg wrote on its way out, so the exit
+        # reason is captured before the pipe is closed underneath it.
+        if self._stderr_thread is not None:
+            self._stderr_thread.join(timeout=2.0)
+            self._stderr_thread = None
         for pipe in (self._proc.stdout, self._proc.stderr):
             try:
                 if pipe is not None:
@@ -437,15 +509,31 @@ class CameraCapture:
     def complete_segments(self) -> list[Path]:
         return complete_segments(self.segment_dir)
 
+    def recent_stderr(self, limit: int | None = None) -> list[str]:
+        """The most recent ffmpeg stderr lines, collected by the drain thread.
+
+        Safe to call at any time, including while the process is running — unlike the
+        original implementation, which read the pipe directly and was only usable after
+        exit.
+        """
+        with self._stderr_lock:
+            lines = list(self._stderr_lines)
+        return lines[-limit:] if limit else lines
+
+    def deprecation_warnings(self) -> list[str]:
+        """Just the deprecation notices.
+
+        These are the ones that matter operationally: ffmpeg comes from apt on the NUC, so
+        a notice today is broken segmenting after a routine system upgrade. Tests assert
+        this is empty so a deprecation cannot sit unnoticed in a passing run.
+        """
+        return [ln for ln in self.recent_stderr() if "deprecat" in ln.lower()]
+
     def drain_stderr(self, limit: int = 4000) -> str:
-        """Non-blocking-ish read of whatever ffmpeg complained about, for logging on
-        unexpected exit. Only safe to call after the process has exited."""
-        if self._proc is None or self._proc.stderr is None:
-            return ""
-        try:
-            return self._proc.stderr.read(limit).decode("utf-8", "replace")
-        except Exception:
-            return ""
+        """Collected stderr as one string. Kept for existing callers (the supervisor logs
+        it on unexpected exit)."""
+        text = "\n".join(self.recent_stderr())
+        return text[-limit:] if limit else text
 
 
 def _redact(arg: str) -> str:

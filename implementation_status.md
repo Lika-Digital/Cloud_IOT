@@ -1,3 +1,59 @@
+# Implementation Status — Guard A.5 conditions applied — AWAITING NUC NUMBERS
+
+## 2026-09-26 (later) — A.5 approved with conditions; all four addressed. Measurement still pending.
+
+Conditions accepted: (1) requirements-vision.txt stays separate until guard is proven in
+production; (2) NMS enabled on the person path, boat path left bit-identical; (3) opencv
+dropped; (4) frame-level recall + control-clip FP rate accepted, plus the event-level
+metric below.
+
+### Added before measuring (A/B/C/D)
+- [DONE] **A — event-level metric.** `evaluate_alarm_rule()` in
+  `scripts/guard_detect_probe.py`: pure replay of the real rule (>=N detections in a
+  rolling W-second window, then cooldown). The probe now reports alarms raised, **false
+  alarms per hour** on the control clip, rule latency, and true end-to-end latency when
+  `--person-enters-at` is given. Kept pure so Stage B PROMOTES it instead of
+  reimplementing it. Warns when a FP rate is extrapolated from a clip under 10 min.
+- [DONE] `tests/backend/test_guard_alarm_rule.py` (NEW, 10 cases TC-GAR-01..10) — loaded
+  via importlib since `scripts/` is not a package. Covers 2-in-window, lone detection,
+  wider-than-window, cooldown collapsing a 20 s loiter into ONE alarm, re-arm after
+  cooldown, frames_required=3, latency from first detection, empty input, sparse
+  flicker rejection, and rolling-vs-bucketed window.
+- [DONE] **B — distance check.** Probe measures **person pixel height** from the detected
+  bbox against the real crop dimensions (median/min/max) and flags a median under 40 px
+  as at/past usable range. Prints the crop size fed to the model. Record at the FAR berth.
+- [DONE] **C — night clip** promoted to required in the run sheet; if the camera is
+  unusable after dark that is to be reported as a product decision, not a failure.
+- [DONE] **D — numpy pin.** Installed the pinned `numpy==2.1.2` on the dev box (it does
+  have a 32-bit wheel) and re-ran everything: **675 passed**. The pin does NOT need to
+  move; earlier results on 2.5.3 are superseded.
+
+### Measurement needs NO production change (answers the safety question)
+- [DONE] `scripts/guard_measure.sh` (NEW) — runs the entire measurement in isolation:
+  venv at `$HOME/guard-staging/venv` (openvino + numpy==2.1.2 + Pillow), IR at
+  `$HOME/guard-staging/models`. **Nothing under /opt/cloud-iot is written, the production
+  venv is untouched, USE_ML_MODELS stays false.** Only read-only shared access:
+  pedestal.db opened `mode=ro` for the camera URL, plus the RTSP stream.
+  Subcommands: `setup | classmap | record | probe | tests | clean`.
+  `tests` runs the decode + alarm-rule suites on numpy 2.1.2 inside that venv.
+- [DONE] `scripts/guard_export_model.sh` — `MODELS_DIR` now overridable so the export can
+  land in staging; chown/`/opt` checks apply only when targeting the production tree.
+- [DONE] `scripts/guard_baseline.sh` (NEW) — the before/after/rollback procedure, kept for
+  the eventual *deliberate* production install (Stage B), not needed for measuring.
+  `before` saves pip freeze + 60 s CPU average + RAM + backend RSS + service states +
+  USE_ML_MODELS + live API/MQTT health to `/var/backups/guard-baseline/`; `after` diffs
+  all of it; `rollback` uninstalls openvino, restores the freeze, restarts and verifies.
+- [FIXED] two defects in that script while writing it: dead `paste` no-op, and a
+  `diff|grep|sed` pipeline whose exit status could never trigger its "none" fallback.
+
+- [VERIFIED] Full suite **675 passed** (665 + 10) on numpy 2.1.2. Shell scripts pass
+  `bash -n`. Probe compiles and fails cleanly with a clear message when the IR is absent.
+- [BLOCKED — NUC] Still cannot run on the box from here. Needs `guard_measure.sh setup`
+  then the classmap + day/far/night/control clips. **Recall, false-alarms-per-hour,
+  latency, person pixel height, inference ms and CPU per inference must come from that
+  run.** Run when the marina is not busy.
+- [NEXT] **STOP.** Report numbers; Stage B awaits approval.
+
 # Implementation Status — Guard Phase 1 — STAGE A.5 (detector) — AWAITING NUMBERS
 
 ## 2026-09-26 — Stage A accepted. A.5 code complete; NUC proof outstanding.

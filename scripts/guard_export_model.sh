@@ -24,14 +24,18 @@ ok()    { echo -e "${GREEN}[ ok ]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[warn]${NC} $*"; }
 die()   { echo -e "${RED}[fail]${NC} $*" >&2; exit 1; }
 
-MODELS_DIR="/opt/cloud-iot/backend/models"
+# Where the IR lands. Override to keep the measurement run entirely out of
+# production, e.g. MODELS_DIR=$HOME/guard-staging/models (what guard_measure.sh does).
+MODELS_DIR="${MODELS_DIR:-/opt/cloud-iot/backend/models}"
 OUT_DIR="${MODELS_DIR}/yolov8n_openvino"
 WORK_DIR="/tmp/guard-yolo-export.$$"
 MIN_FREE_MB=4096
 FORCE=0
 [ "${1:-}" = "--force" ] && FORCE=1
 
-[ -d /opt/cloud-iot ] || die "/opt/cloud-iot not found — run this on the NUC."
+case "$MODELS_DIR" in
+  /opt/cloud-iot/*) [ -d /opt/cloud-iot ] || die "/opt/cloud-iot not found — run this on the NUC (or set MODELS_DIR to a staging path)." ;;
+esac
 
 # ── Already done? ───────────────────────────────────────────────────────────
 if [ -d "$OUT_DIR" ] && ls "$OUT_DIR"/*.xml >/dev/null 2>&1 && [ $FORCE -eq 0 ]; then
@@ -92,7 +96,9 @@ rm -rf "$OUT_DIR"
 cp -r "$SRC" "$OUT_DIR" || die "copy to $OUT_DIR failed"
 
 # Backend runs as the cloud-iot user; make sure it can read the IR.
-chown -R cloud-iot:cloud-iot "$OUT_DIR" 2>/dev/null || warn "chown skipped (not root?)"
+case "$OUT_DIR" in
+  /opt/cloud-iot/*) chown -R cloud-iot:cloud-iot "$OUT_DIR" 2>/dev/null || warn "chown skipped (not root?)" ;;
+esac
 chmod -R a+rX "$OUT_DIR"
 
 ok "IR installed at $OUT_DIR"
@@ -102,6 +108,7 @@ info "Class map recorded in the IR metadata:"
 grep -o 'names:.\{0,120\}' "${OUT_DIR}/metadata.yaml" 2>/dev/null || warn "metadata.yaml not found"
 echo ""
 ok "Done. Next steps:"
+echo "     (staging run? use scripts/guard_measure.sh — it needs NO production changes)"
 echo "     1. /opt/cloud-iot/backend/.venv/bin/pip install -r /opt/cloud-iot/backend/requirements-vision.txt"
 echo "     2. add USE_ML_MODELS=true to /opt/cloud-iot/backend/.env"
 echo "     3. python3 scripts/guard_detect_probe.py --classmap      # verify"

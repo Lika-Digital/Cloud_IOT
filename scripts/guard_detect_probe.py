@@ -120,6 +120,66 @@ def _redact(url: str) -> str:
     return url
 
 
+# ─── the real alarm rule (pure; Stage B must reuse this logic) ───────────────
+#
+# Frame-level recall can look excellent and still produce a false alarm every ten
+# minutes, so this is the number the marina actually feels. The rule mirrors the
+# Stage B spec: a person seen in >= `frames_required` inferences inside a rolling
+# `window_seconds`, then a cooldown before another alarm can fire.
+#
+# Kept as a pure function over (timestamp, detected) pairs so it is unit-testable
+# without a model — see tests/backend/test_guard_alarm_rule.py. Stage B should
+# promote this into app/guard/ rather than reimplementing it.
+
+def evaluate_alarm_rule(
+    samples: list[tuple[float, bool]],
+    *,
+    frames_required: int = 2,
+    window_seconds: float = 3.0,
+    cooldown_seconds: float = 60.0,
+) -> list[dict]:
+    """Replay detections through the alarm rule.
+
+    Args:
+        samples: (timestamp_seconds, person_detected) in chronological order.
+        frames_required: positives needed inside the window to alarm.
+        window_seconds: rolling window length.
+        cooldown_seconds: after an alarm, suppress further alarms this long.
+
+    Returns:
+        One dict per alarm: {t, first_positive_t, latency_s, positives_in_window}.
+    """
+    alarms: list[dict] = []
+    window: list[float] = []
+    cooldown_until: float | None = None
+    first_positive_t: float | None = None
+
+    for t, detected in samples:
+        if not detected:
+            continue
+        if first_positive_t is None:
+            first_positive_t = t
+
+        window.append(t)
+        window = [w for w in window if t - w <= window_seconds]
+
+        if cooldown_until is not None and t < cooldown_until:
+            continue   # motion still observed, but no new alarm during cooldown
+
+        if len(window) >= frames_required:
+            alarms.append({
+                "t": t,
+                "first_positive_t": first_positive_t,
+                "latency_s": t - first_positive_t,
+                "positives_in_window": len(window),
+            })
+            cooldown_until = t + cooldown_seconds
+            window = []
+            first_positive_t = None
+
+    return alarms
+
+
 def crop_jpeg(data: bytes, zone: tuple[float, float, float, float] | None) -> bytes:
     """Crop to a fractional zone. Mirrors berths.py:445-460 so the probe measures
     the same geometry production will feed the model."""
@@ -222,6 +282,12 @@ def run_detection(
     conf: float,
     expect: str | None,
     save_annotated: str | None,
+    *,
+    fps: float = 2.0,
+    frames_required: int = 2,
+    window_seconds: float = 3.0,
+    cooldown_seconds: float = 60.0,
+    person_enters_at: float | None = None,
 ) -> int:
     from app.services.yolo_openvino import YoloOVDetector
 
@@ -238,12 +304,20 @@ def run_detection(
     latencies: list[float] = []
     hits = 0
     per_frame: list[dict] = []
+    samples: list[tuple[float, bool]] = []
+    person_px_heights: list[float] = []
+    crop_dims: tuple[int, int] | None = None
     cpu_t0, wall_t0 = time.process_time(), time.perf_counter()
 
     for idx, path in enumerate(frame_paths):
         with open(path, "rb") as fh:
             raw = fh.read()
         crop = crop_jpeg(raw, zone)
+        if crop_dims is None:
+            import io as _io
+            from PIL import Image as _Image
+            crop_dims = _Image.open(_io.BytesIO(crop)).size
+            print(f"  (crop fed to the model: {crop_dims[0]}x{crop_dims[1]} px)")
         res = det.detect_persons(crop, conf_threshold=conf)
 
         if res["occupied"] is None:
@@ -252,10 +326,25 @@ def run_detection(
             latencies.append(res["inference_ms"])
         found = bool(res["detections"])
         hits += int(found)
+        t_frame = idx / fps if fps > 0 else float(idx)
+        samples.append((t_frame, found))
+
+        # Person pixel height in the ACTUAL crop — the distance-check number.
+        # bbox_xyxy is normalised to the crop, so multiply by the crop height.
+        px_h = 0.0
+        if found and crop_dims:
+            px_h = max(
+                (d["bbox_xyxy"][3] - d["bbox_xyxy"][1]) * crop_dims[1]
+                for d in res["detections"]
+            )
+            person_px_heights.append(px_h)
+
         per_frame.append({
             "frame": os.path.basename(path),
+            "t_s": round(t_frame, 3),
             "persons": len(res["detections"]),
             "max_conf": round(res["confidence"], 4),
+            "px_height": round(px_h, 1),
             "inference_ms": round(res["inference_ms"] or 0.0, 1),
             "boxes": [
                 {"conf": round(d["confidence"], 3),
@@ -264,9 +353,9 @@ def run_detection(
             ],
         })
         mark = "PERSON" if found else "      "
-        print(f"  [{idx + 1:4d}/{len(frame_paths)}] {mark} "
+        print(f"  [{idx + 1:4d}/{len(frame_paths)}] t={t_frame:6.1f}s {mark} "
               f"n={len(res['detections'])} conf={res['confidence']:.3f} "
-              f"{res['inference_ms']:.0f} ms")
+              f"h={px_h:5.0f}px {res['inference_ms']:.0f} ms")
 
         if save_annotated and found:
             _annotate(crop, res["detections"], os.path.join(save_annotated, os.path.basename(path)))
@@ -300,6 +389,36 @@ def run_detection(
     except Exception:
         pass
 
+    # ── B: distance check — measured, not estimated ──────────────────────────
+    if person_px_heights:
+        ph = sorted(person_px_heights)
+        print(f"\nPERSON PIXEL HEIGHT (in the {crop_dims[0]}x{crop_dims[1]} crop)")
+        print(f"  median                : {statistics.median(ph):.0f} px")
+        print(f"  min / max             : {ph[0]:.0f} / {ph[-1]:.0f} px")
+        print("  reference             : >=50 px reliable, 20-40 px marginal, "
+              "<20 px effectively blind")
+        if statistics.median(ph) < 40:
+            print("  [!] median below 40 px — at or past the usable range for this "
+                  "camera position")
+    elif expect == "person":
+        print("\nPERSON PIXEL HEIGHT     : no detections, so no height measured")
+
+    # ── A: event-level metric — what the marina actually feels ───────────────
+    duration_s = (n / fps) if fps > 0 else float(n)
+    alarms = evaluate_alarm_rule(
+        samples, frames_required=frames_required,
+        window_seconds=window_seconds, cooldown_seconds=cooldown_seconds,
+    )
+    print(f"\nALARM RULE  (>= {frames_required} detections within {window_seconds:g} s "
+          f"at {fps:g} fps, {cooldown_seconds:g} s cooldown)")
+    print(f"  clip duration         : {duration_s:.1f} s")
+    print(f"  alarms raised         : {len(alarms)}")
+    for i, a in enumerate(alarms, 1):
+        print(f"    #{i}: fired at t={a['t']:.1f}s "
+              f"(first detection t={a['first_positive_t']:.1f}s, "
+              f"rule latency {a['latency_s']:.1f}s, "
+              f"{a['positives_in_window']} in window)")
+
     exit_code = 0
     if expect == "person":
         recall = hits / n
@@ -307,27 +426,70 @@ def run_detection(
         print(f"Frame-level RECALL      : {recall:.3f}  ({hits}/{n})")
         print("Frame-level PRECISION   : not computable — needs per-frame box "
               "annotation, which this script does not fabricate.")
-        print(f"VERDICT: {'PASS' if recall >= 0.80 else 'REVIEW'} "
-              f"(>=0.80 recall suggested for a 2-of-3-inference alarm rule)")
-        exit_code = 0 if recall >= 0.80 else 2
+
+        # End-to-end latency needs to know when the person actually walked in.
+        if alarms:
+            if person_enters_at is not None:
+                e2e = alarms[0]["t"] - person_enters_at
+                print(f"\nEND-TO-END LATENCY      : {e2e:.1f} s "
+                      f"(person entered t={person_enters_at:.1f}s → "
+                      f"alarm t={alarms[0]['t']:.1f}s)")
+                if e2e < 0:
+                    print("  [!] negative — alarm fired BEFORE the stated entry time; "
+                          "check --person-enters-at or suspect a false positive")
+            else:
+                print(f"\nRULE LATENCY            : {alarms[0]['latency_s']:.1f} s "
+                      "(first detection → alarm)")
+                print("  End-to-end latency needs --person-enters-at SECONDS "
+                      "(when the person actually entered frame).")
+
+        alarm_ok = len(alarms) == 1
+        print(f"\nVERDICT: recall {'PASS' if recall >= 0.80 else 'REVIEW'} "
+              f"(>=0.80 suggested) · alarms {'PASS' if alarm_ok else 'REVIEW'} "
+              f"(expected exactly 1, got {len(alarms)})")
+        if len(alarms) > 1:
+            print("  [!] more than one alarm on a single-intrusion clip — the cooldown "
+                  "is too short or the person left and re-entered the zone.")
+        exit_code = 0 if (recall >= 0.80 and alarm_ok) else 2
+
     elif expect == "none":
         fpr = hits / n
+        per_hour = len(alarms) * 3600.0 / duration_s if duration_s > 0 else 0.0
         print(f"\nGround truth            : NO person in any of {n} frames")
-        print(f"False-positive rate     : {fpr:.3f}  ({hits}/{n})")
-        print(f"VERDICT: {'PASS' if fpr <= 0.05 else 'REVIEW'} (<=0.05 suggested)")
-        exit_code = 0 if fpr <= 0.05 else 2
+        print(f"Frame-level FP rate     : {fpr:.3f}  ({hits}/{n})")
+        print(f"FALSE ALARMS            : {len(alarms)} in {duration_s:.1f} s")
+        print(f"FALSE ALARMS PER HOUR   : {per_hour:.2f}   <-- the number that matters")
+        if duration_s < 600:
+            print(f"  [!] extrapolated from only {duration_s:.0f} s. One false alarm in a "
+                  f"short clip reads as {per_hour:.1f}/h; record >=10 min for a "
+                  "trustworthy rate.")
+        ok = len(alarms) == 0 and fpr <= 0.05
+        print(f"\nVERDICT: {'PASS' if ok else 'REVIEW'} "
+              f"(expected 0 alarms and <=0.05 frame FP rate)")
+        exit_code = 0 if ok else 2
     else:
-        print("\n(no --expect given → no precision/recall computed)")
+        print("\n(no --expect given → no recall / false-alarm rate computed)")
 
     out_json = "/tmp/guard_probe_results.json"
     try:
         with open(out_json, "w", encoding="utf-8") as fh:
             json.dump({
                 "model": det.model_path,
-                "zone": zone, "conf": conf, "frames": n,
+                "zone": zone, "conf": conf, "fps": fps, "frames": n,
+                "crop_px": list(crop_dims) if crop_dims else None,
                 "frames_with_person": hits,
+                "duration_s": duration_s,
                 "inference_ms_mean": statistics.fmean(latencies) if latencies else None,
                 "cpu_ms_per_frame": 1000.0 * cpu_used / n,
+                "person_px_height_median": (
+                    statistics.median(person_px_heights) if person_px_heights else None
+                ),
+                "alarm_rule": {
+                    "frames_required": frames_required,
+                    "window_seconds": window_seconds,
+                    "cooldown_seconds": cooldown_seconds,
+                },
+                "alarms": alarms,
                 "per_frame": per_frame,
             }, fh, indent=2)
         print(f"\nDetail written to {out_json}")
@@ -376,6 +538,15 @@ def main() -> int:
     ap.add_argument("--no-zone", action="store_true", help="disable the crop (full frame)")
     ap.add_argument("--conf", type=float, default=0.5, help="confidence threshold (default 0.5)")
     ap.add_argument("--expect", choices=["person", "none"], help="ground truth for the sample")
+    ap.add_argument("--frames-required", type=int, default=2,
+                    help="detections needed inside the window to alarm (default 2)")
+    ap.add_argument("--window-seconds", type=float, default=3.0,
+                    help="rolling alarm window in seconds (default 3)")
+    ap.add_argument("--cooldown-seconds", type=float, default=60.0,
+                    help="suppress further alarms this long after one fires (default 60)")
+    ap.add_argument("--person-enters-at", type=float, metavar="SECONDS",
+                    help="clip time the person actually entered frame, for TRUE "
+                         "end-to-end latency (without it only rule latency is reported)")
     ap.add_argument("--save-annotated", metavar="DIR", help="write boxed JPEGs of positive frames")
     ap.add_argument("--model-dir", default=DEFAULT_MODEL_DIR)
     args = ap.parse_args()
@@ -400,7 +571,11 @@ def main() -> int:
         if not os.path.exists(args.image):
             _fail(f"{args.image} not found")
         return run_detection(args.model_dir, [args.image], zone, args.conf,
-                            args.expect, args.save_annotated)
+                            args.expect, args.save_annotated, fps=args.fps,
+                            frames_required=args.frames_required,
+                            window_seconds=args.window_seconds,
+                            cooldown_seconds=args.cooldown_seconds,
+                            person_enters_at=args.person_enters_at)
 
     if args.clip:
         if not os.path.exists(args.clip):
@@ -410,7 +585,11 @@ def main() -> int:
             frames = _frames_from_clip(args.clip, args.fps, tmpdir)
             print(f"Extracted {len(frames)} frames at {args.fps} fps from {args.clip}\n")
             return run_detection(args.model_dir, frames, zone, args.conf,
-                                args.expect, args.save_annotated)
+                                args.expect, args.save_annotated, fps=args.fps,
+                                frames_required=args.frames_required,
+                                window_seconds=args.window_seconds,
+                                cooldown_seconds=args.cooldown_seconds,
+                                person_enters_at=args.person_enters_at)
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 

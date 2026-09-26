@@ -34,10 +34,26 @@ Use a **separate throwaway clone** instead. `upgrade.sh` and `main` stay untouch
 
 ---
 
-## STEP 0 — Baseline (5 min, do this before anything else)
+## STEP 0 — Get the code, then baseline (7 min, before anything else)
+
+The clone comes first because `guard_baseline.sh` ships with this work — it does not
+exist in whatever `~/Cloud_IOT` is currently checked out at.
 
 ```bash
-sudo bash ~/Cloud_IOT/scripts/guard_baseline.sh before
+git clone --branch develop --single-branch \
+  https://github.com/Lika-Digital/Cloud_IOT.git ~/guard-checkout
+```
+
+```bash
+cd ~/guard-checkout && git log --oneline -1
+```
+
+**STOP if:** the clone fails, or the commit is older than `1ceb280`.
+
+Now the baseline, run from the fresh checkout:
+
+```bash
+sudo bash ~/guard-checkout/scripts/guard_baseline.sh before
 ```
 
 Takes ~70 s (it samples CPU for 60 s). Saves pip freeze, CPU average, RAM, backend RSS,
@@ -54,21 +70,21 @@ cpu_avg_pct = ______    mem_used_mb = ______    backend_rss_mb = ______
 
 ---
 
-## STEP 1 — Separate checkout (2 min)
+## STEP 1 — Confirm what you did NOT do (30 s)
+
+The checkout happened in step 0. This step is the deliberate absence of a deploy.
 
 ```bash
-git clone --branch develop --single-branch \
-  https://github.com/Lika-Digital/Cloud_IOT.git ~/guard-checkout
+cd ~/Cloud_IOT && git status --short --untracked-files=no && git log --oneline -1
 ```
+
+**STOP if** `~/Cloud_IOT` shows unexpected modifications — it must be exactly as
+`upgrade.sh` left it. You have not pulled it, not merged to `main`, and not run
+`upgrade.sh`. Everything below runs from `~/guard-checkout`.
 
 ```bash
-cd ~/guard-checkout && git log --oneline -1
+cd ~/guard-checkout
 ```
-
-**STOP if:** the clone fails, or the commit shown is older than `9ab6fdf`.
-
-**NOTE:** `~/Cloud_IOT` is deliberately untouched. Everything below runs from
-`~/guard-checkout`.
 
 ---
 
@@ -276,8 +292,11 @@ Because nothing entered production, rollback is deletion.
 ```bash
 cd ~/guard-checkout && bash scripts/guard_measure.sh clean
 ```
+Run the verification below **before** deleting the checkout — the baseline script
+lives inside it.
+
 ```bash
-rm -rf ~/guard-checkout
+# rm -rf ~/guard-checkout   # <- do this LAST, after step 5 verification
 rm -f /tmp/stern.mp4 /tmp/partial.mp4 /tmp/crouch.mp4 /tmp/empty.mp4
 rm -rf /tmp/boxes_stern /tmp/guard_probe_results.json
 ```
@@ -288,7 +307,7 @@ the per-frame detail.
 ### Verify the rollback worked
 
 ```bash
-sudo bash ~/Cloud_IOT/scripts/guard_baseline.sh after
+sudo bash ~/guard-checkout/scripts/guard_baseline.sh after
 ```
 
 Expect, in the BEFORE vs AFTER block:
@@ -322,7 +341,7 @@ models dir should be **absent** (or unchanged), and disk back to roughly Step 0.
 
 **Finally, confirm the marina still works** — open the dashboard through the tunnel,
 check a pedestal loads, and run one berth analyse. If anything looks off, say so
-immediately; `guard_baseline.sh rollback` exists but should not be needed, because
+immediately; `~/guard-checkout/scripts/guard_baseline.sh rollback` exists but should not be needed, because
 nothing was installed to roll back.
 
 ---

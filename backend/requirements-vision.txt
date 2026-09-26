@@ -1,0 +1,36 @@
+# Vision / Guard runtime dependencies — NUC only, installed EXPLICITLY.
+#
+# ─── Why this is a separate file and not in requirements.txt ──────────────────
+# `nuc_image/upgrade.sh:204-208` pip-installs requirements.txt into the PRODUCTION
+# venv on every upgrade where that file changed, and only *warns* on failure
+# (`|| warn "pip install had errors"`). That is the exact path that crash-looped
+# the Python 3.14 venv when deploying v3.19. Adding openvino there would put a
+# ~40 MB native wheel with numpy ABI constraints on the critical upgrade path of a
+# system whose hard requirement is "must keep running".
+#
+# So Guard's dependency is opt-in and installed once, by hand:
+#
+#     /opt/cloud-iot/backend/.venv/bin/pip install -r requirements-vision.txt
+#
+# Then set USE_ML_MODELS=true in backend/.env and restart the backend. Until both
+# are done, `cv_services.py` leaves inference disabled and every caller falls back
+# to the classical Laplacian path — i.e. installing this file changes nothing on
+# its own.
+#
+# ─── Version note ────────────────────────────────────────────────────────────
+# Unpinned deliberately: the NUC fleet spans Ubuntu 24.04 (Python 3.12) and 26.04
+# (Python 3.14), and a hard pin that lacks a wheel for one of them fails the
+# install. Record the resolved version in the Guard report after installing.
+# If pip resolves a version whose numpy requirement conflicts with the pinned
+# numpy==2.1.2 in requirements.txt, STOP and report rather than letting pip
+# upgrade numpy underneath the running backend.
+openvino
+
+# NOT required, deliberately:
+#   opencv-python-headless — MOG2 was dropped from Phase 1 (decision 2: run the
+#     detector directly at 2-4 fps on the cropped zone). Frame decode is ffmpeg's
+#     job and cropping is Pillow's, so OpenCV has no remaining role. Do not add it
+#     back without a measurement that demands it.
+#   ultralytics / torch — needed only to EXPORT the IR, never at runtime. The
+#     export runs in a throwaway venv via scripts/guard_export_model.sh so ~2 GB of
+#     build-time dependencies never touch the production venv.

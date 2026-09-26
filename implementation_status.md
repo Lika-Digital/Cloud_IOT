@@ -1,3 +1,94 @@
+# Implementation Status — Guard Phase 1 — STAGE A.5 (detector) — AWAITING NUMBERS
+
+## 2026-09-26 — Stage A accepted. A.5 code complete; NUC proof outstanding.
+
+Approved decisions carried in: (1) one persistent ffmpeg per camera, 10 s segment ring
+x6 + 2-4 fps frames, replacing the per-poll spawn; (2) **MOG2 dropped** — detector runs
+directly on the cropped zone; (3) pre-roll from the disk segment ring, not RAM;
+(4) `camera_id` is its own entity referencing pedestal/berth; (5) `MARINA_ID` added to
+config, not derived; (6) CPU budget defined by the resource watchdog. Zone crop stays
+before the 640 resize (mandatory — it is what gives ~25-30 m range vs ~15 m).
+
+### A.5 — detector rewrite (code done, tests green on dev)
+- [DONE] `backend/app/services/yolo_openvino.py` — rewritten. Multi-class decode,
+  per-class thresholds, class-aware NMS, optional letterbox, `unload()` for Stage B's
+  "no model resident while disarmed", class map read from the IR's own `metadata.yaml`
+  (falls back to COCO-80). Decode/NMS/letterbox extracted as **pure functions** so they
+  are testable without openvino. Vectorised the 8400-row Python loop (same results).
+- [DONE] **Berth behaviour preserved by construction.** Legacy defaults reproduce the
+  pre-rewrite path bit-for-bit: `classes={8}`, `select="argmax"`, `apply_nms=False`,
+  `letterbox=False`, distorting 640x640 resize. Guard opts in via `detect_persons()`
+  (`classes={0}`, per-class select, NMS on, letterbox on).
+- [DONE] `tests/backend/test_yolo_multiclass.py` (NEW, 39 cases incl. parametrised).
+  TC-YMC-01 re-implements the pre-rewrite loop verbatim and fuzzes 18 seed/threshold
+  combinations for exact equality. TC-YMC-16..19 drive the real `detect()` through a
+  **fake compiled model**, so the berth contract is locked without openvino present.
+- [FIXED — found by those tests] layout auto-detect (`shape[1] < shape[2]`) mis-oriented
+  tensors with fewer anchors than channels → added explicit `layout=` override.
+- [FIXED — found by those tests] degenerate shapes (0 anchors / no class columns) raised
+  out of `argmax` → now return `[]`.
+- [FIXED — found by those tests] converting box coords to float64 **before** dividing
+  changed every coordinate by ~3e-9 vs the old float32 division. Now divides in the
+  tensor dtype and widens after, restoring bit-exactness.
+- [DONE] `backend/requirements-vision.txt` (NEW) — `openvino` only. Deliberately NOT in
+  `requirements.txt`: `upgrade.sh:204-208` pip-installs that file into the production
+  venv on every change and only *warns* on failure — the path that crash-looped the 3.14
+  venv on the v3.19 deploy. **opencv NOT required** (MOG2 dropped per decision 2).
+- [DONE] `scripts/guard_export_model.sh` (NEW) — exports stock COCO yolov8n to IR inside
+  a **throwaway /tmp venv** (ultralytics+torch never touch the production venv), asserts
+  class 0=person / 8=boat before exporting, 4 GB free-space precheck, idempotent.
+- [DONE] `scripts/guard_detect_probe.py` (NEW) — proof + benchmark. `--classmap` prints
+  the on-disk class map and IR shapes; `--record` grabs a real-angle clip with `-c copy`;
+  `--clip/--image` report per-frame detections, inference ms (mean/median/p95), CPU
+  ms/frame and implied load; `--expect person|none` gives frame-level recall / FP rate;
+  `--save-annotated` writes boxed JPEGs. Reads the RTSP URL read-only from pedestal.db
+  and redacts the password.
+- [VERIFIED] Full suite **665 passed** (626 + 39). Disabled-path `detect()` still returns
+  `occupied=None` so `berths.py` keeps falling back to Laplacian. `berths.py` imports OK.
+- [NOTE] numpy was absent from the dev venv; installed 2.5.3 locally to run these tests
+  (requirements pins 2.1.2 — dev venv only, requirements.txt untouched). Re-ran the full
+  suite afterwards: no path changed behaviour now that numpy imports.
+- [BLOCKED — NUC] Cannot run on the box from here. Needs: export the IR, install
+  requirements-vision.txt, set USE_ML_MODELS=true, then `--classmap` + a day clip and
+  (if possible) a night clip. **Precision/recall, inference ms and measured CPU per
+  inference must come from that run — not from this machine.**
+- [NEXT] **STOP.** Report the A.5 numbers and await approval before Stage B.
+
+# Implementation Status — Guard Phase 1 (person detection) — STAGE A ONLY
+
+## 2026-09-26 — Stage A assessment delivered, AWAITING APPROVAL before any implementation
+
+Read-only feasibility assessment for dashboard-toggled person detection + alarm + short
+recording. **No implementation code written — Stage B is gated on explicit approval.**
+
+- [DONE] `docs/guard_phase1_assessment.md` (NEW) — full Stage A answer: model identity,
+  gaps, recording capability, verdict, NUC command block, spec contradictions.
+- [VERDICT] **PARTIAL.** The stock COCO YOLOv8n weights already contain `person`
+  (class 0) — no retraining needed. The plumbing is what is missing.
+- [KEY FINDING] `USE_ML_MODELS` defaults **false** (`config.py:88`), openvino is not in
+  requirements, `ml_worker` is not running on the NUC → berth occupancy currently runs on
+  **Laplacian variance + colour histogram**, no neural net at all.
+- [KEY FINDING] `yolo_openvino.py:15` hard-codes `_BOAT_CLASS_ID = 8` and uses `argmax`
+  (one class per anchor) → persons discarded even if the filter is widened. No NMS.
+- [KEY FINDING] **No MOG2 / BackgroundSubtractor / frame differencing anywhere** in the
+  repo (grep-verified). The spec's motion pre-filter is new work, not reuse.
+- [KEY FINDING] **No capture thread exists.** `frame_buffer.py` polls at **0.1 fps**
+  (10 s sleep) and each poll spawns a fresh ffmpeg→RTSP connection. "2 of 3 consecutive
+  frames" would mean 20–30 s latency; a 60 s recording is impossible from that source.
+- [KEY FINDING] No `cv2.VideoWriter` anywhere; OpenCV not installed. Recommended:
+  one persistent ffmpeg per guarded camera with `tee` → detection pipe + `-c copy`
+  segment ring (gives pre-roll free at ~0% CPU, one RTSP connection total).
+- [KEY FINDING] Zone crop is a **free digital zoom** (crop happens before the 640
+  resize): person @20 m ≈ 79 px cropped vs 47 px full-frame → reliable to ~25–30 m
+  with the crop, ~15 m without. Crop is mandatory for person detection.
+- [OPEN — NUC] §5 command block pending: ffmpeg presence, disk free, VAAPI, stream
+  profiles, night/IR snapshot, camera distance + lens FOV, real IR class map, baseline CPU.
+- [OPEN — DECISIONS] §6 contradictions raised for approval: (6.1) no capture thread to
+  reuse; (6.2) MOG2 does not exist + slow-mover mitigation; (6.3) pre-roll via disk
+  segments not RAM; (6.4) `camera_id` == `pedestal_id`; (6.5) MQTT topic has no stored
+  `marina_id`; (6.6) define "CPU under 15%" (one core vs four).
+- [NEXT] **STOP.** Await approval + §5 output before Stage B.
+
 # Implementation Status — Plugged-aware Activate + 3 socket modes (v3.29)
 
 ## 2026-06-18 — "citaj plugged polje... tri moda upravljanja auto/active/stop... posalji dijagnozu kad se aktivira smart. dakle 1,2,3"

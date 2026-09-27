@@ -166,6 +166,25 @@ def test_tc_gcap_06_concat_command_is_copy_and_audio_free(tmp_path):
                                   ffmpeg="ffmpeg")
     assert "-t" not in no_cap
 
+    # EXPLICIT output format, and it must precede the output path.
+    #
+    # ffmpeg infers the format from the filename extension, and the atomic temporary ends
+    # in `.part`, so inference fails outright: "Unable to choose an output format for
+    # '...mp4.part'". That is how TC-GREC-20 failed on the NUC. Stated rather than
+    # inferred, deliberately — relying on extension inference is what broke.
+    part_out = tmp_path / "2026-09-27T14-32-07Z.mp4.part"
+    cmd_part = build_concat_command(["a.ts"], tmp_path / "l.txt", part_out,
+                                    max_seconds=60, ffmpeg="ffmpeg")
+    fmt_positions = [i for i, a in enumerate(cmd_part)
+                     if a == "-f" and cmd_part[i + 1] == "mp4"]
+    assert fmt_positions, (
+        "the concat command must state -f mp4 EXPLICITLY. Without it ffmpeg tries to infer "
+        "the format from the filename, and the atomic .part temporary has no usable "
+         "extension, so the muxer fails to initialise and no clip is ever written."
+    )
+    assert fmt_positions[-1] < len(cmd_part) - 1, "-f must precede the output path"
+    assert cmd_part[-1] == str(part_out)
+
 
 def test_tc_gcap_07_concat_list_escaping(tmp_path):
     lst = tmp_path / "list.txt"

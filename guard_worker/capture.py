@@ -239,6 +239,7 @@ def build_concat_command(
     out_path: str | os.PathLike[str],
     *,
     max_seconds: int | None = None,
+    out_format: str = "mp4",
     loglevel: str = "warning",
     ffmpeg: str | None = None,
 ) -> list[str]:
@@ -248,6 +249,18 @@ def build_concat_command(
     assembly then leaves a stray `.part` for the startup sweep rather than a
     truncated file under a real evidence name. `+faststart` also makes the result
     tolerable to a truncating reader.
+
+    `-f mp4` is passed EXPLICITLY and is not optional. ffmpeg infers the output format
+    from the filename extension, and the atomic temporary ends in `.part`, so inference
+    fails outright:
+
+        Unable to choose an output format for '...mp4.part'; use a standard extension
+        for the filename or specify the format manually.
+
+    The alternative would be naming the temporary `.part.mp4` to keep inference working —
+    rejected deliberately. Relying on extension inference is what broke here, so the format
+    is stated rather than encoded in a filename; and a `.part` suffix keeps the temporary
+    obviously incomplete to the startup sweep and to anyone reading the directory.
     """
     cmd = [
         ffmpeg or _require_ffmpeg(),
@@ -261,7 +274,8 @@ def build_concat_command(
     ]
     if max_seconds is not None:
         cmd += ["-t", str(int(max_seconds))]
-    cmd += ["-y", str(out_path)]
+    # Explicit format — see the docstring. Must precede the output path.
+    cmd += ["-f", out_format, "-y", str(out_path)]
     return cmd
 
 

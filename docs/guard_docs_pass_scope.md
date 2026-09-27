@@ -168,7 +168,37 @@ precondition**, with the segment ring always running so pre-roll exists.
 Also records camera-replacement spec items: packet timestamping, AI classification over
 ONVIF, IR illuminator, concurrent RTSP sessions.
 
-### Standing rule to write down (earned the hard way)
+### Standing rule to write down (earned the hard way, four times)
+
+**For anything touching the camera or ffmpeg: a dev-box run proves NOTHING. Only a NUC run
+counts, and a step is not done until it is green there.**
+
+And the sharper form, because it is the part that actually misled: **on the dev box these
+tests SKIP, they do not pass.** There is no ffmpeg installed, so every ffmpeg-gated test
+reports `skipped`. A summary line like *"760 passed, 6 skipped"* reads as reassuring while
+saying nothing at all about the six that matter most — and those six are exactly the ones
+that failed every time. **Count the skips and name them; a skip is an unanswered question,
+not a pass.**
+
+Four consecutive failures, all invisible on the dev box:
+
+| # | What broke | Dev box | Real NUC / camera |
+|---|---|---|---|
+| 1 | `-reconnect` on an RTSP input | harmless on lavfi/file | **fatal** — ffmpeg 8.0.1 refuses to start; 0 frames, 0 segments, 0 bytes |
+| 2 | rawvideo into `-c:v copy` | failed **silently**, left a 0-byte segment that satisfied a weak `file exists` assertion | n/a |
+| 3 | mpegts + SIGKILL | 0 bytes — a tiny synthetic stream stayed inside ffmpeg's AVIO buffer | fine: a 1080p25 feed writes continuously |
+| 4 | `.part` temporary + format inference | never exercised (test skipped) | **fatal** — "Unable to choose an output format for '...mp4.part'", no clip written |
+
+Consequences to state in the Testing/Operations section:
+
+- **`TC-GCAP-19` (opt-in `GUARD_TEST_RTSP_URL`) and every `[ffmpeg]` test are REQUIRED
+  gates**, not optional extras.
+- Prefer **stating** things over letting ffmpeg infer them. Both #1 and #4 came from
+  inference — protocol-option validity and format-from-extension. `-f mp4` is passed
+  explicitly for exactly this reason, and an assertion pins it.
+- When a synthetic test and the real camera disagree, **the camera is right** and the
+  synthetic test is measuring the wrong thing.
+### Earlier form of the same rule
 
 **For anything touching the camera: a synthetic test proves the SHAPE, only the real
 stream proves it WORKS.** Three consecutive failures on the capture module all came from

@@ -125,6 +125,32 @@ does have container-level timing — but the packets themselves arrive unstamped
 camera is ever replaced, **packet timestamping is a requirement to check**, along with an
 IR illuminator for night coverage.
 
+### Watchdog design decisions that MUST be documented, not just coded
+
+Both look like unnecessary complication to someone simplifying later, so the reason goes in
+the docs and not only in a comment:
+
+**1. The sustained-quiet clock RESTARTS on any CPU rise.**
+Resuming requires the 60 s average to stay below `GUARD_CPU_RESUME` for an unbroken
+`GUARD_RESUME_AFTER`. If the clock merely accumulated quiet time instead, a box flapping
+around the limit would eventually resume on an accumulation of unrelated quiet moments —
+and then immediately re-suspend. The restart is what makes "recovered" mean recovered.
+Pinned by TC-GWD-05.
+
+**2. Manual re-arm clears the CPU WINDOW, not just the auto-resume budget.**
+The window holds samples from the overload guard just recovered from. Keeping them would
+re-suspend the freshly re-armed guard on its first tick, making the operator's re-arm look
+broken. Clearing the budget too is deliberate: a human has looked at it, so the machine gets
+its allowance back. Pinned by TC-GWD-08.
+
+### REQUIRED: the NUC gate, for future contributors
+
+State plainly in the Testing section: **a green local run is not clearance.** ffmpeg on the
+dev box is 9.0.2 while the NUC runs 8.0.1, so behaviour can differ in either direction — and
+the accepted timestamp deprecation is exactly the kind of thing that could. Local ffmpeg
+catches structural mistakes early; only the NUC run certifies. Every `[ffmpeg]` test and
+`TC-GCAP-19` are required gates.
+
 ### REQUIRED: post-upgrade checklist, as a named operator task
 
 This must appear in the Operations section as a **checklist item someone will read**, not

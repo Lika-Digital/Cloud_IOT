@@ -189,6 +189,24 @@ Four consecutive failures, all invisible on the dev box:
 | 3 | mpegts + SIGKILL | 0 bytes — a tiny synthetic stream stayed inside ffmpeg's AVIO buffer | fine: a 1080p25 feed writes continuously |
 | 4 | `.part` temporary + format inference | never exercised (test skipped) | **fatal** — "Unable to choose an output format for '...mp4.part'", no clip written |
 
+**Update 2026-09-27: ffmpeg is now installed on the dev box, which closes half the gap —
+but only half.** Local skips dropped from 6 to 1 (only the camera-gated `TC-GCAP-19`
+remains unanswerable locally). Of the four failures above, a local ffmpeg would have caught
+**#2 and #4** — both structural, neither needing a camera. **#1 and #3 still required the
+real stream.**
+
+**And there is now a VERSION SKEW to keep in mind:**
+
+| Box | ffmpeg |
+|---|---|
+| dev | **9.0.2** (Gyan full build, via winget) |
+| marina-iot NUC | **8.0.1-3ubuntu2** (apt) |
+
+So a local pass can now disagree with the NUC in the *other* direction: ffmpeg 9 may have
+changed a default or removed a behaviour 8 still has. The accepted timestamp deprecation is
+exactly the kind of thing that could differ. **The NUC run stays a required gate** — local
+ffmpeg catches structural mistakes early, it does not certify anything.
+
 Consequences to state in the Testing/Operations section:
 
 - **`TC-GCAP-19` (opt-in `GUARD_TEST_RTSP_URL`) and every `[ffmpeg]` test are REQUIRED

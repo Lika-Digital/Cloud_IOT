@@ -71,6 +71,7 @@ def setup_test_databases():
         from app.models import meter_load_alarm  # noqa — v3.11
         from app.models import nfc_tag, nfc_pending_session  # noqa — v3.26
         from app.models import energy_interval  # noqa — v3.35
+        from app.guard import models as guard_models  # noqa — v3.42 guard tables
         from app.auth import models, customer_models, contract_models, berth_models  # noqa
 
         Base.metadata.drop_all(bind=test_engine)

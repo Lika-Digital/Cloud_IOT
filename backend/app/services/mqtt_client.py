@@ -8,6 +8,17 @@ from .mqtt_handlers import handle_message
 
 logger = logging.getLogger(__name__)
 
+def _guard_topics() -> list[str]:
+    """Guard worker -> backend topics. Built from settings.marina_id, which is explicit and
+    never derived from the cabinet id. `cmd` is absent on purpose: the backend publishes it
+    and must not consume its own commands."""
+    try:
+        from ..guard.service import subscription_patterns
+        return subscription_patterns()
+    except Exception:          # guard package unavailable -> MQTT still works
+        return []
+
+
 TOPICS = [
     # Legacy pedestal/... schema (test tool, simulator)
     "pedestal/+/socket/+/status",
@@ -40,7 +51,7 @@ TOPICS = [
     # per-socket meter telemetry every 5 s.
     "opta/config/hardware",
     "opta/meters/+/telemetry",
-]
+] + _guard_topics()
 
 
 class MQTTService:

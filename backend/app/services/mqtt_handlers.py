@@ -380,6 +380,13 @@ async def handle_message(topic: str, payload: str, *, retained: bool = False):
     Defaults to False so direct callers (tests, simulator) are unaffected.
     """
     try:
+        # ── Guard (marina/{MARINA_ID}/camera/{id}/guard/...) ─────────────────
+        # Checked first and returned early: guard has its own module and must not fall
+        # through the cabinet regexes below.
+        if "/guard/" in topic:
+            from ..guard.service import handle_guard_message
+            await handle_guard_message(topic, payload, retained=retained)
+            return
         # ── Opta firmware (cabinetId in payload) ─────────────────────────────
         if OPTA_STATUS_RE.match(topic):
             await _handle_opta_status(payload, retained=retained)

@@ -47,6 +47,7 @@ from .routers import settings as settings_router
 from .routers import config_backup as config_backup_router
 from .routers import usage_history as usage_history_router  # v3.31 — usage history + monthly reports
 from .routers import data_export as data_export_router  # v3.37 — DB backup + usage export downloads
+from .guard.router import router as guard_router  # v3.42 — camera person detection
 from .auth.user_database import init_user_db, UserSessionLocal
 from .auth.models import User
 from .auth.customer_models import BillingConfig
@@ -456,6 +457,22 @@ async def _close_sessions_on_comm_loss(pedestal_id: int) -> None:
         )
 
 
+async def _guard_ack_watchdog():
+    """Every 5 s: turn an unanswered guard command into "Guard unavailable".
+
+    Without this the UI would sit on ARMING forever when the worker is down, which reads as
+    "probably fine, still starting" rather than "not running". The desired state is left
+    alone, so guard arms when the worker returns — only what the UI is TOLD changes.
+    """
+    from .guard.service import check_overdue_acks
+    while True:
+        await asyncio.sleep(5)
+        try:
+            await check_overdue_acks()
+        except Exception as e:
+            logger.warning(f"Guard ack watchdog error: {e}")
+
+
 async def _comm_loss_watchdog():
     """
     Every 30 s: check each known pedestal against its last-heartbeat timestamp.
@@ -736,6 +753,7 @@ async def lifespan(app: FastAPI):
     watchdog_task        = asyncio.create_task(_pending_session_watchdog())
     socket_pending_task  = asyncio.create_task(_socket_pending_watchdog())
     comm_loss_task       = asyncio.create_task(_comm_loss_watchdog())
+    guard_ack_task       = asyncio.create_task(_guard_ack_watchdog())
     berth_task           = asyncio.create_task(run_berth_analysis())
     camera_task          = asyncio.create_task(_camera_health_check())
     frame_buffer_task    = asyncio.create_task(run_frame_buffer())
@@ -759,6 +777,7 @@ async def lifespan(app: FastAPI):
     watchdog_task.cancel()
     socket_pending_task.cancel()
     comm_loss_task.cancel()
+    guard_ack_task.cancel()
     berth_task.cancel()
     camera_task.cancel()
     frame_buffer_task.cancel()
@@ -850,6 +869,7 @@ app.include_router(breakers_router.router)       # v3.8 — internal breaker adm
 app.include_router(meter_load_router.router)    # v3.11 — internal load monitoring routes
 app.include_router(usage_history_router.router) # v3.31 — usage history + monthly reports
 app.include_router(data_export_router.router)   # v3.37 — DB backup + usage export downloads
+app.include_router(guard_router)
 app.include_router(ext_pedestal_router.router)   # must be before gateway catch-all
 app.include_router(ext_breaker_router.router)    # v3.8 — must be before gateway catch-all
 app.include_router(ext_meter_load_router.router) # v3.11 — must be before gateway catch-all

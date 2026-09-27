@@ -39,6 +39,23 @@ INTERNAL_EVENTS = {
     "session_ended",
 }
 
+# v3.42 — Guard events. These are NOT internal: UI v2 will consume every one of them.
+#
+# Step 6 (the guard admin screen) was cancelled and merged into UI v2, so step 5 ships the
+# complete contract while the frontend handlers arrive later. Marking these INTERNAL would be
+# a lie that never gets corrected — the drift guard would stay green even after UI v2 shipped
+# without handlers. This separate list records the real state: declared, awaiting a consumer.
+#
+# test_pending_frontend_events_are_not_yet_handled() below FAILS once a handler appears, so
+# the entry has to be deleted then. That is what stops this list becoming a graveyard.
+PENDING_FRONTEND_EVENTS = {
+    "guard_state_changed",
+    "guard_health",
+    "guard_alarm",
+    "guard_recording_ready",
+    "guard_retention_state_changed",
+}
+
 
 def _scan_backend_events() -> set[str]:
     """Return every string literal used as `"event": "<name>"` in ws broadcasts."""
@@ -93,11 +110,12 @@ def test_every_backend_event_is_handled_or_internal() -> None:
     """A backend broadcast must either match a frontend case OR be in INTERNAL_EVENTS."""
     backend_events = _scan_backend_events()
     frontend_cases = _scan_frontend_cases()
-    orphans = backend_events - frontend_cases - INTERNAL_EVENTS
+    orphans = backend_events - frontend_cases - INTERNAL_EVENTS - PENDING_FRONTEND_EVENTS
     assert not orphans, (
         f"Backend broadcasts these events but no frontend handler and not marked internal: {orphans}. "
         f"Either add a `case '<name>':` in frontend/src/hooks/useWebSocket.ts "
-        f"or add the event to INTERNAL_EVENTS in this test."
+        f"or add it to INTERNAL_EVENTS (never consumed by the UI) or "
+        f"PENDING_FRONTEND_EVENTS (a consumer is coming) in this test."
     )
 
 
@@ -120,4 +138,21 @@ def test_external_catalog_only_contains_broadcast_events() -> None:
     assert not phantom, (
         f"api_catalog.EVENT_CATALOG advertises events that backend never broadcasts: {phantom}. "
         f"Remove from catalog or add a `ws_manager.broadcast({{'event': '<name>', ...}})` call."
+    )
+
+
+def test_pending_frontend_events_are_not_yet_handled() -> None:
+    """PENDING_FRONTEND_EVENTS must stay honest.
+
+    Once UI v2 adds a `case 'guard_alarm':` the event is no longer pending, and leaving it
+    listed would quietly exempt it from the drift guard forever. So this fails the moment a
+    handler exists, forcing the entry to be removed — which is the whole reason guard events
+    are not lumped into INTERNAL_EVENTS.
+    """
+    frontend_cases = _scan_frontend_cases()
+    now_handled = PENDING_FRONTEND_EVENTS & frontend_cases
+    assert not now_handled, (
+        f"These events now HAVE frontend handlers: {sorted(now_handled)}. Remove them from "
+        f"PENDING_FRONTEND_EVENTS so the drift guard covers them again — leaving them listed "
+        f"exempts them permanently."
     )

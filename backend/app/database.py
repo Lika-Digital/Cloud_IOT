@@ -61,6 +61,7 @@ def init_db():
     from .models import nfc_tag  # noqa: F401 — v3.26
     from .models import nfc_pending_session  # noqa: F401 — v3.26
     from .models import energy_interval  # noqa: F401 — v3.35
+    from .guard import models as guard_models  # noqa: F401 — v3.42 guard tables
     Base.metadata.create_all(bind=engine)
     _migrate_schema()
 

@@ -88,6 +88,33 @@ class Settings(BaseSettings):
     # latency via the logged "inference_ms" values.
     use_ml_models: bool = False
 
+    # ── Guard (camera person detection) ────────────────────────────────────────
+    # MARINA_ID is set explicitly, NOT derived from the cabinet id. It appears in every
+    # guard MQTT topic, and deriving it from a naming convention (MAR_{id}_...) would mean a
+    # cabinet renamed at installation silently moved guard's topics.
+    marina_id: str = "KRK"
+
+    # Detection thresholds live in the guard_config DB row, not here: they must be tunable
+    # at runtime without a redeploy because guard's accuracy is unproven. Only deployment
+    # facts belong in config.
+    guard_storage_path: str = "/var/lib/marina-guard/recordings"
+    guard_record_seconds: int = 60
+    guard_segment_seconds: int = 10
+    guard_segment_ring: int = 6
+    guard_preroll_seconds: int = 6
+    guard_retention_days: int = 14
+    guard_max_gb: float = 20.0
+    guard_max_frames_gb: float = 2.0
+    guard_detection_retention_days: int = 30
+    guard_frame_min_interval_s: float = 10.0
+    # Worker liveness. ack_timeout is what turns silence into "Guard unavailable" instead of
+    # a false ARMED; heartbeat_timeout catches a worker that wedged with its socket open.
+    guard_ack_timeout_s: float = 5.0
+    guard_heartbeat_timeout_s: float = 15.0
+    # Phase 1 ships NO notification path at all — not built-and-disabled. The dashboard and
+    # MQTT are the only outputs, so there is nothing to switch on by accident.
+    guard_notify_enabled: bool = False
+
     # Default admin credentials for first-run seeding — override via env vars
     default_admin_email: str = "admin@iot-dashboard.local"
     default_admin_password: Optional[str] = None

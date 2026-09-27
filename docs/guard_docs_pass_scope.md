@@ -81,6 +81,50 @@ mpegts to survive **SIGKILL and power loss**, not SIGTERM — state that correct
 docs, and state that guard records **no audio, by policy** (pontoon conversations are a
 separate legal question from video), enforced by `-map 0:v:0 -an -dn -sn` on every output.
 
+### Known limitation to document: the accepted ffmpeg timestamp deprecation
+
+**What the notice is.** On every copy-mux from this camera, ffmpeg 8.0.1 emits:
+
+```
+[segment @ 0x...] Timestamps are unset in a packet for stream 0.
+This is deprecated and will stop working in the future.
+```
+
+**Why we accept it.** Diagnosed 2026-09-27 with `scripts/guard_diagnose_timestamps.py`
+across 12 variants against the real stream: **eleven variants using `-c:v copy` emit it,
+including one with no segment muxer at all.** So it is not the segment muxer and not
+`-reset_timestamps` — this camera sends packets without timestamps, `-c:v copy` passes
+them through untouched, and ffmpeg 8 reports it on every copy mux. No input option can fix
+it, because copy never restamps. `-use_wallclock_as_timestamps` was tried and does not help.
+
+The only thing that silences it is **re-encoding**, and re-encoding 1080p25 continuously
+costs an order of magnitude more than the 273 ms per inference the detector was carefully
+measured against — it would break the <15 %-of-4-cores target outright. **Trading the
+entire CPU budget to silence a warning is the wrong trade.**
+
+**What breaks if a future ffmpeg enforces it.** Segmenting stops, so the ring retains no
+history and an alarm would have no video. This is why `SegmentHealth` exists and why step
+4's watchdog reports `UNAVAILABLE` when segments stop being produced — the failure is loud,
+not silent. Worth having anyway: a full disk, a permissions change or a camera that stops
+delivering keyframes stall the ring identically.
+
+**The fix at that point** is a camera that stamps its packets, or re-encoding with the CPU
+cost accepted and the budget revisited.
+
+**Re-check after ANY ffmpeg upgrade** — one command, exit 0 means capture still works:
+
+```bash
+python3 scripts/guard_diagnose_timestamps.py --url <rtsp> --verify
+```
+
+Add that to the post-upgrade checklist. Pinned version at time of decision:
+**ffmpeg 8.0.1-3ubuntu2**.
+
+**Camera-replacement spec item:** the demuxer reports video `start 0.074267`, so the camera
+does have container-level timing — but the packets themselves arrive unstamped. If this
+camera is ever replaced, **packet timestamping is a requirement to check**, along with an
+IR illuminator for night coverage.
+
 ### Standing rule to write down (earned the hard way)
 
 **For anything touching the camera: a synthetic test proves the SHAPE, only the real

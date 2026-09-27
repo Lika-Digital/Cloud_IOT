@@ -221,12 +221,18 @@ def main() -> int:
     ap.add_argument("--url", required=True, help="RTSP URL of the real camera")
     ap.add_argument("--seconds", type=int, default=12, help="run length per variant")
     ap.add_argument("--only", help="comma-separated variant prefixes, e.g. A,F,J")
+    ap.add_argument("--verify", action="store_true",
+                    help="run ONLY the production command and answer pass/fail. Use this "
+                         "after any ffmpeg upgrade: exit 0 means capture still works.")
     args = ap.parse_args()
 
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg or not shutil.which("ffprobe"):
         print("[FAIL] ffmpeg/ffprobe not on PATH", file=sys.stderr)
         return 1
+
+    if args.verify:
+        return verify(ffmpeg, args.url, args.seconds)
 
     ver = subprocess.run([ffmpeg, "-version"], capture_output=True, text=True,
                          timeout=30).stdout.splitlines()[0]
@@ -296,3 +302,126 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+# ─── --verify: the post-ffmpeg-upgrade checklist item ────────────────────────
+#
+# Condition 4 of the accept-and-document decision. The "Timestamps are unset" notice is
+# accepted on ffmpeg 8.0.1, but a future ffmpeg could ENFORCE it and stop segmenting. This
+# turns that risk from a surprise into one command:
+#
+#     python3 scripts/guard_diagnose_timestamps.py --url <rtsp> --verify
+#
+# Exit 0 = the production command still works. Exit 1 = it does not; read the output.
+# Run it after every `apt upgrade` that touches ffmpeg.
+
+def verify(ffmpeg: str, url: str, seconds: int) -> int:
+    """Run the PRODUCTION command and answer: does this still work?"""
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from guard_worker.capture import (
+        ACCEPTED_DEPRECATIONS,
+        build_capture_command,
+        complete_segments,
+        list_segments,
+    )
+
+    ver = subprocess.run([ffmpeg, "-version"], capture_output=True, text=True,
+                         timeout=30).stdout.splitlines()[0]
+    print("=" * 78)
+    print("Guard post-upgrade verification")
+    print("=" * 78)
+    print(f"ffmpeg : {ver}")
+    print(f"camera : {redact(url)}\n")
+
+    workdir = tempfile.mkdtemp(prefix="guard_verify_")
+    seg_dir = os.path.join(workdir, "segments")
+    os.makedirs(seg_dir, exist_ok=True)
+    failures: list[str] = []
+    try:
+        # The real command, unmodified, plus a duration bound.
+        cmd = build_capture_command(url, seg_dir, fps=1, segment_seconds=4, ffmpeg=ffmpeg)
+        cmd = [*cmd[:cmd.index("-i")], "-t", str(seconds), *cmd[cmd.index("-i"):]]
+        print("Running the production capture command for "
+              f"{seconds}s:\n  {' '.join(redact(a) for a in cmd)}\n")
+
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=seconds + 40)
+        err = proc.stderr or ""
+
+        # 1. Segments must exist and be complete.
+        segs = list_segments(seg_dir)
+        complete = complete_segments(seg_dir)
+        print(f"segments produced : {len(segs)} ({len(complete)} complete)")
+        if len(complete) < 1:
+            failures.append(
+                f"NO completed segments in {seconds}s — segmenting has STOPPED. This is the "
+                "failure the accepted deprecation warned about. The ring retains no "
+                "history, so an alarm would have no video."
+            )
+
+        # 2. A completed segment must decode.
+        if complete:
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
+                 "-show_entries", "stream=nb_read_frames",
+                 "-of", "default=noprint_wrappers=1:nokey=1", str(complete[0])],
+                capture_output=True, text=True, timeout=120,
+            )
+            got = probe.stdout.strip().splitlines()
+            frames = int(got[0]) if got and got[0].strip().isdigit() else 0
+            print(f"first segment     : {complete[0].name}, {frames} frames decoded")
+            if frames < 25:
+                failures.append(
+                    f"a completed segment decoded only {frames} frames — segments exist but "
+                    "are not usable video."
+                )
+
+        # 3. No audio, ever — re-checked because it is a policy, not a codec detail.
+        if complete:
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "stream=index,codec_type",
+                 "-of", "csv=p=0", str(complete[0])],
+                capture_output=True, text=True, timeout=60,
+            )
+            kinds = {}
+            for line in probe.stdout.splitlines():
+                parts = [p.strip() for p in line.split(",") if p.strip()]
+                if len(parts) >= 2 and parts[0].isdigit():
+                    kinds[int(parts[0])] = parts[1]
+            print(f"streams in segment: {kinds}")
+            if "audio" in kinds.values():
+                failures.append(f"AUDIO reached disk ({kinds}) — policy violation.")
+
+        # 4. Deprecations: the known one is fine, anything new is not.
+        notices = [ln for ln in err.splitlines() if "deprecat" in ln.lower()]
+        accepted = [n for n in notices
+                    if any(a in n.lower() for a in ACCEPTED_DEPRECATIONS)]
+        unexpected = [n for n in notices if n not in accepted]
+        print(f"deprecations      : {len(notices)} "
+              f"({len(accepted)} accepted, {len(unexpected)} unexpected)")
+        for n in accepted:
+            print(f"  [accepted] {n.strip()}")
+        for n in unexpected:
+            print(f"  [NEW]      {n.strip()}")
+        if unexpected:
+            failures.append(
+                f"{len(unexpected)} NEW deprecation notice(s) — read them; the accepted "
+                "allowlist deliberately covers only the known camera-timestamp case."
+            )
+        if not accepted and notices == []:
+            print("  (the accepted timestamp notice is GONE — this ffmpeg or camera may "
+                  "now stamp packets. Good news; consider removing the allowlist entry.)")
+
+        print()
+        if failures:
+            print("RESULT: FAIL")
+            for f in failures:
+                print(f"  - {f}")
+            print("\nThe fix at this point is a camera that stamps its packets, or "
+                  "re-encoding\nwith the CPU cost accepted (re-encoding 1080p25 "
+                  "continuously breaks the\n<15 %-of-4-cores budget — measure it with "
+                  "variant L before choosing).")
+            return 1
+        print("RESULT: PASS — the production capture command still works on this ffmpeg.")
+        return 0
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)

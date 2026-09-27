@@ -83,6 +83,39 @@ _EOI = b"\xff\xd9"
 _MAX_FRAME_BYTES = 8 * 1024 * 1024
 _READ_CHUNK = 64 * 1024
 
+# ── Accepted deprecation notices ────────────────────────────────────────────────
+#
+# ffmpeg 8.0.1 emits, on every copy-mux from this camera:
+#
+#   [segment @ ...] Timestamps are unset in a packet for stream 0. This is deprecated
+#   and will stop working in the future.
+#
+# DIAGNOSED 2026-09-27 across 12 variants against the real stream
+# (scripts/guard_diagnose_timestamps.py): ELEVEN variants using `-c:v copy` emit it,
+# INCLUDING one with no segment muxer at all. So it is not the segment muxer and not
+# `-reset_timestamps`: this camera sends packets without timestamps, `-c:v copy` passes
+# them through untouched, and ffmpeg 8 reports it on every copy mux. No input option fixes
+# it — `-use_wallclock_as_timestamps` cannot help because copy never restamps.
+#
+# ACCEPTED DELIBERATELY. The only alternative that silences it is re-encoding, and
+# re-encoding 1080p25 continuously costs an order of magnitude more than the 273 ms per
+# inference the detector was budgeted at — it would break the <15 %-of-4-cores target
+# outright. Trading the entire CPU budget to silence a warning is the wrong trade.
+#
+# What breaks if a future ffmpeg ENFORCES this: segmenting stops, so the ring stops
+# retaining history. That is why `SegmentHealth` below exists and why step 4's watchdog
+# must report UNAVAILABLE when segments stop being produced — the failure has to be loud.
+# Re-check after any ffmpeg upgrade with:
+#     python3 scripts/guard_diagnose_timestamps.py --url <rtsp> --verify
+#
+# The fix at that point is a camera that stamps its packets, or re-encoding with the CPU
+# cost accepted. For the record: the demuxer reports video start 0.074267, so the camera
+# has SOME container-level timing, but the packets themselves arrive unstamped. If this
+# camera is ever replaced, packet timestamping is a spec item to check.
+ACCEPTED_DEPRECATIONS = (
+    "timestamps are unset in a packet",
+)
+
 
 class FfmpegNotAvailable(RuntimeError):
     """ffmpeg is not on PATH. It is absent from the NUC installer, so this is a real
@@ -443,8 +476,16 @@ class CameraCapture:
                     # ffmpeg already runs at -loglevel warning, so anything it emits is
                     # worth surfacing. Deprecations get flagged harder: they are the ones
                     # that become breakage after an apt upgrade.
-                    if "deprecat" in line.lower():
-                        logger.warning("ffmpeg DEPRECATION: %s", line)
+                    low = line.lower()
+                    if "deprecat" in low:
+                        if any(a in low for a in ACCEPTED_DEPRECATIONS):
+                            # Known and accepted — see ACCEPTED_DEPRECATIONS. Logged at
+                            # debug so it does not drown journald on every restart, but
+                            # still retained in the buffer and still reported by
+                            # deprecation_warnings() for the record.
+                            logger.debug("ffmpeg (accepted deprecation): %s", line)
+                        else:
+                            logger.warning("ffmpeg UNEXPECTED DEPRECATION: %s", line)
                     else:
                         logger.warning("ffmpeg: %s", line)
             except Exception:
@@ -521,13 +562,21 @@ class CameraCapture:
         return lines[-limit:] if limit else lines
 
     def deprecation_warnings(self) -> list[str]:
-        """Just the deprecation notices.
-
-        These are the ones that matter operationally: ffmpeg comes from apt on the NUC, so
-        a notice today is broken segmenting after a routine system upgrade. Tests assert
-        this is empty so a deprecation cannot sit unnoticed in a passing run.
-        """
+        """ALL deprecation notices, accepted ones included, for the record."""
         return [ln for ln in self.recent_stderr() if "deprecat" in ln.lower()]
+
+    def unexpected_deprecations(self) -> list[str]:
+        """Deprecations that are NOT on the accepted allowlist.
+
+        This is what tests assert is empty. The allowlist is scoped to exact known text
+        (see ACCEPTED_DEPRECATIONS) precisely so the mechanism keeps working: disabling the
+        check wholesale would have hidden the next, genuinely new notice — and this
+        mechanism is what surfaced the current one instead of it sitting in a passing run.
+        """
+        return [
+            ln for ln in self.deprecation_warnings()
+            if not any(a in ln.lower() for a in ACCEPTED_DEPRECATIONS)
+        ]
 
     def drain_stderr(self, limit: int = 4000) -> str:
         """Collected stderr as one string. Kept for existing callers (the supervisor logs
@@ -658,3 +707,86 @@ class CaptureSupervisor:
                 time.sleep(min(0.25, backoff - waited))
                 waited += 0.25
             backoff = min(backoff * 2, self.max_backoff)
+
+# ─── segment health ──────────────────────────────────────────────────────────
+
+class SegmentHealth:
+    """Is the ring actually producing segments?
+
+    REQUIRED by step 4's watchdog, not an optional mitigation. The accepted
+    "Timestamps are unset" deprecation (see ACCEPTED_DEPRECATIONS) means a future ffmpeg
+    could stop segmenting altogether. Without this check that failure is SILENT: the
+    process keeps running, frames keep arriving on stdout, the dashboard keeps showing
+    ARMED — and no history is being retained, so an alarm would have no video. With it,
+    guard reports UNAVAILABLE and says why.
+
+    It is worth having regardless of the deprecation: a full disk, a permissions change or
+    a camera that stops delivering keyframes would all stall the ring the same way.
+
+    Detects a stall from two independent signals, because either alone has a blind spot:
+      * no NEW segment file has appeared, and
+      * total bytes on disk have not grown
+    A segment mid-write grows without a new file appearing, so bytes alone would look
+    healthy during a stall that began after the last roll; file count alone would look
+    stalled during a long segment. Both must be static to call it stalled.
+    """
+
+    def __init__(
+        self,
+        segment_dir: str | os.PathLike[str],
+        *,
+        segment_seconds: int = 10,
+        stall_after: float | None = None,
+    ):
+        self.segment_dir = Path(segment_dir)
+        self.segment_seconds = segment_seconds
+        # Default to 3 segment periods: long enough that one slow roll is not a stall,
+        # short enough that a real stall is caught inside a minute at 10 s segments.
+        self.stall_after = stall_after if stall_after is not None \
+            else max(30.0, 3.0 * segment_seconds)
+        self._last_change_at: float | None = None
+        self._last_names: frozenset[str] = frozenset()
+        self._last_bytes: int = -1
+
+    def sample(self, now: float | None = None) -> dict:
+        """Record the current state. Call periodically (the watchdog ticks at 5 s)."""
+        now = now if now is not None else time.time()
+        segs = list_segments(self.segment_dir)
+        names = frozenset(p.name for p in segs)
+        total = 0
+        for p in segs:
+            try:
+                total += p.stat().st_size
+            except OSError:
+                pass
+
+        changed = (names != self._last_names) or (total != self._last_bytes)
+        if changed or self._last_change_at is None:
+            self._last_change_at = now
+        self._last_names, self._last_bytes = names, total
+
+        return {
+            "segments": len(segs),
+            "bytes": total,
+            "changed": changed,
+            "seconds_since_change": 0.0 if changed else now - self._last_change_at,
+        }
+
+    def is_stalled(self, now: float | None = None) -> bool:
+        now = now if now is not None else time.time()
+        if self._last_change_at is None:
+            return False          # never sampled — unknown is not stalled
+        return (now - self._last_change_at) > self.stall_after
+
+    def stall_reason(self, now: float | None = None) -> str | None:
+        if not self.is_stalled(now):
+            return None
+        now = now if now is not None else time.time()
+        stalled_for = now - (self._last_change_at or now)
+        return (
+            f"no new segment and no byte growth for {stalled_for:.0f}s "
+            f"(threshold {self.stall_after:.0f}s, {len(self._last_names)} segment(s), "
+            f"{self._last_bytes} bytes). The ring is retaining no history, so an alarm "
+            f"would have no video."
+        )
+

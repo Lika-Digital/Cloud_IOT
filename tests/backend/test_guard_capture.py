@@ -37,7 +37,13 @@ merely intended:
   TC-GCAP-23  supervisor does not retry a missing ffmpeg binary
   TC-GCAP-24  timestamp options present (fixes the segment-muxer deprecation)
   TC-GCAP-25  stderr is drained continuously (deadlock guard), bounded, classified
-  TC-GCAP-26  [ffmpeg] no deprecation warnings on a synthetic run
+  TC-GCAP-26  [ffmpeg] no UNEXPECTED deprecation warnings on a synthetic run
+  TC-GCAP-27  the accepted camera-timestamp deprecation is scoped, not disabled
+  TC-GCAP-28  SegmentHealth detects a stall (required by step 4's watchdog)
+  TC-GCAP-29  ...and needs BOTH file count and bytes static to call it one
+  TC-GCAP-30  stall threshold scales with segment time, with a 30 s floor
+
+(TC-GCAP-15/16 appear lower in the file for historical reasons; 17 was never used.)
   TC-GCAP-15  [ffmpeg] a real capture produces segments and frames from one process
   TC-GCAP-16  complete_segments() excludes the segment still being written
 """
@@ -626,17 +632,29 @@ def test_tc_gcap_19_real_camera_ring_survives_sigkill(tmp_path):
     else:
         print("  ffmpeg stderr: (silent)")
 
-    # ffmpeg here comes from apt, so a deprecation today is broken segmenting after a
-    # routine system upgrade. Fail on it while the cause is still known.
-    deprecations = cap.deprecation_warnings()
-    assert not deprecations, (
-        "ffmpeg emitted DEPRECATION warning(s) during a passing run:\n  "
-        + "\n  ".join(deprecations)
-        + f"\nffmpeg: {ver}\nThese become breakage after an apt upgrade, so they are "
-        "fixed now rather than discovered when the ring silently stops recording. "
-        "-use_wallclock_as_timestamps 1 and -avoid_negative_ts make_zero were added for "
-        "the 'Timestamps are unset in a packet' case; if this is a NEW notice, read it and "
-        "fix the cause rather than relaxing this assertion."
+    # Deprecations: the camera-timestamp notice is KNOWN and ACCEPTED (diagnosed across 12
+    # variants on 2026-09-27 — eleven with -c:v copy emit it, including one with no segment
+    # muxer, so it is the camera sending unstamped packets and copy passing them through;
+    # no input option can fix it, and re-encoding would break the CPU budget). It is
+    # allowlisted by exact text in ACCEPTED_DEPRECATIONS.
+    #
+    # The check is SCOPED, not disabled: any OTHER deprecation still fails. Disabling it
+    # wholesale would hide the next genuinely new notice, and this mechanism is precisely
+    # what surfaced the current one instead of it sitting unseen in a passing run.
+    from guard_worker.capture import ACCEPTED_DEPRECATIONS
+
+    accepted = [d for d in cap.deprecation_warnings()
+                if any(a in d.lower() for a in ACCEPTED_DEPRECATIONS)]
+    if accepted:
+        print(f"  accepted deprecation(s) ({len(accepted)}): known camera-timestamp case")
+    unexpected = cap.unexpected_deprecations()
+    assert not unexpected, (
+        "ffmpeg emitted UNEXPECTED deprecation warning(s) during a passing run:\n  "
+        + "\n  ".join(unexpected)
+        + f"\nffmpeg: {ver}\nThe accepted allowlist covers only the known "
+        "camera-timestamp notice. Read these, find the cause, and fix it or add it to "
+        "ACCEPTED_DEPRECATIONS with the reason recorded — do not widen the allowlist "
+        "blindly."
     )
 
     all_segs = list_segments(seg_dir)
@@ -937,3 +955,105 @@ def test_tc_gcap_26_no_deprecations_on_a_synthetic_run(tmp_path):
     )
     assert complete_segments(seg_dir), "the synthetic run produced no completed segments"
 
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TC-GCAP-27..30 — the accepted deprecation, and the segment-health primitive
+# that step 4's watchdog REQUIRES
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_tc_gcap_27_accepted_deprecation_is_scoped_not_disabled(tmp_path):
+    """The camera-timestamp notice is allowlisted by exact text; anything else still fails.
+
+    Diagnosed 2026-09-27 across 12 variants: eleven using `-c:v copy` emit it, INCLUDING
+    one with no segment muxer — so it is the camera sending unstamped packets, copy passing
+    them through untouched, and no input option can change that. Accepted because the only
+    alternative is re-encoding 1080p25 continuously, which would break the
+    <15 %-of-4-cores budget the detector was carefully measured against.
+    """
+    from guard_worker.capture import ACCEPTED_DEPRECATIONS
+
+    cap = CameraCapture(URL, tmp_path, ffmpeg="ffmpeg")
+    known = ("[segment @ 0x55] Timestamps are unset in a packet for stream 0. "
+             "This is deprecated and will stop working in the future.")
+    novel = "[out#0/mp4] The frobnicator option is deprecated and will be removed"
+
+    cap._stderr_lines.append(known)
+    assert cap.deprecation_warnings() == [known], "all notices are kept for the record"
+    assert cap.unexpected_deprecations() == [], "the known one must not fail a run"
+
+    cap._stderr_lines.append(novel)
+    assert len(cap.deprecation_warnings()) == 2
+    assert cap.unexpected_deprecations() == [novel], (
+        "a NEW deprecation must still be reported — the allowlist is scoped, not a "
+        "blanket disable, because this mechanism is what surfaced the current notice"
+    )
+
+    assert ACCEPTED_DEPRECATIONS == ("timestamps are unset in a packet",), (
+        "the allowlist must stay narrow; widening it needs a recorded reason"
+    )
+
+
+def test_tc_gcap_28_segment_health_detects_a_stall(tmp_path):
+    """REQUIRED by step 4. Without it, a future ffmpeg that stops segmenting fails
+    SILENTLY: the process keeps running, frames keep arriving, the dashboard still says
+    ARMED — and no history is retained, so an alarm would have no video."""
+    from guard_worker.capture import SegmentHealth
+
+    health = SegmentHealth(tmp_path, segment_seconds=10)
+    assert health.stall_after == 30.0, "default is 3 segment periods"
+
+    # Never sampled: unknown is not the same as stalled.
+    assert health.is_stalled(now=1_000.0) is False
+    assert health.stall_reason(now=1_000.0) is None
+
+    s = health.sample(now=1_000.0)
+    assert s == {"segments": 0, "bytes": 0, "changed": True, "seconds_since_change": 0.0}
+
+    # Nothing appears. Inside the threshold this is not yet a stall.
+    health.sample(now=1_020.0)
+    assert health.is_stalled(now=1_020.0) is False
+    # Past it, it is.
+    assert health.is_stalled(now=1_045.0) is True
+    reason = health.stall_reason(now=1_045.0)
+    assert reason and "no new segment and no byte growth" in reason
+    assert "no video" in reason, "the reason must say what the operator loses"
+
+    # A new segment clears it.
+    _make_segments(tmp_path, 1)
+    assert health.sample(now=1_046.0)["changed"] is True
+    assert health.is_stalled(now=1_050.0) is False
+
+
+def test_tc_gcap_29_segment_health_needs_both_signals_static(tmp_path):
+    """Growth in the CURRENT segment counts as healthy even with no new file.
+
+    A 10 s segment being written produces no new filename for 10 s. If health looked only
+    at file count it would call that a stall; if it looked only at bytes it would miss a
+    stall that began right after a roll. Both must be static.
+    """
+    from guard_worker.capture import SegmentHealth
+
+    seg = tmp_path / "seg_000000.ts"
+    seg.write_bytes(b"x" * 100)
+    health = SegmentHealth(tmp_path, segment_seconds=10)
+    health.sample(now=2_000.0)
+
+    # Same file, more bytes -> healthy, no new filename involved.
+    seg.write_bytes(b"x" * 5_000)
+    assert health.sample(now=2_005.0)["changed"] is True
+    assert health.is_stalled(now=2_030.0) is False
+
+    # Now nothing changes at all.
+    health.sample(now=2_040.0)
+    assert health.is_stalled(now=2_080.0) is True
+
+
+def test_tc_gcap_30_segment_health_stall_threshold_scales(tmp_path):
+    """A 30 s floor protects short segment times from false stalls."""
+    from guard_worker.capture import SegmentHealth
+
+    assert SegmentHealth(tmp_path, segment_seconds=2).stall_after == 30.0    # floor
+    assert SegmentHealth(tmp_path, segment_seconds=20).stall_after == 60.0   # 3x
+    assert SegmentHealth(tmp_path, segment_seconds=10,
+                         stall_after=12.0).stall_after == 12.0               # explicit

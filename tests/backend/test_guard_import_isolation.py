@@ -20,7 +20,7 @@ installed in the test environment.
   TC-GIS-01  the shared modules import no forbidden top-level module
   TC-GIS-02  ...nor via `from X import ...`
   TC-GIS-03  the shared modules do not import from the wider app package
-  TC-GIS-04  guard_worker.capture is stdlib-only (it must run before numpy is needed)
+  TC-GIS-04  guard_worker capture AND recorder are stdlib-only (they retain evidence)
   TC-GIS-05  heavy imports in the shared modules are function-local, not module-level
   TC-GIS-06  the modules really do import with only numpy+PIL available
 """
@@ -38,7 +38,13 @@ SHARED_MODULES = [
     REPO / "backend" / "app" / "guard" / "pipeline.py",
     REPO / "backend" / "app" / "guard" / "alarm_rule.py",
 ]
-WORKER_CAPTURE = REPO / "guard_worker" / "capture.py"
+# Every worker-side module must be stdlib-only: capture and recording have to keep
+# working even if the detection stack has a dependency problem, because they are what
+# retains evidence.
+WORKER_STDLIB_ONLY = [
+    REPO / "guard_worker" / "capture.py",
+    REPO / "guard_worker" / "recorder.py",
+]
 
 # Absent from the staging venv. A top-level import of any of these breaks the probe.
 FORBIDDEN = {
@@ -112,17 +118,18 @@ def test_tc_gis_03_no_wider_app_imports_at_module_level(path):
     )
 
 
-def test_tc_gis_04_worker_capture_is_stdlib_only():
-    """`guard_worker/capture.py` runs ffmpeg and hands out JPEG bytes. It must not need
-    numpy or PIL at all — capture has to work before anything is decoded, and keeping it
-    stdlib-only means a detection dependency problem cannot stop the segment ring (and the
-    evidence it records) from working."""
-    imports = _all_imports(WORKER_CAPTURE)
+@pytest.mark.parametrize("path", WORKER_STDLIB_ONLY, ids=lambda p: p.name)
+def test_tc_gis_04_worker_modules_are_stdlib_only(path):
+    """`capture.py` runs ffmpeg and hands out JPEG bytes; `recorder.py` assembles clips and
+    enforces retention. Neither needs numpy or PIL, and keeping them stdlib-only means a
+    detection dependency problem cannot stop the segment ring or the recording path — which
+    are precisely what retain evidence when something else is broken."""
+    imports = _all_imports(path)
     not_allowed = (imports & FORBIDDEN) | (imports & HEAVY_BUT_ALLOWED_IN_FUNCTIONS)
     assert not not_allowed, (
-        f"guard_worker/capture.py imports {sorted(not_allowed)}. Capture is deliberately "
-        f"stdlib-only so the segment ring keeps recording evidence even if the detection "
-        f"stack has a problem."
+        f"guard_worker/{path.name} imports {sorted(not_allowed)}. Worker-side modules are "
+        f"deliberately stdlib-only so capture and recording keep working even if the "
+        f"detection stack has a problem."
     )
 
 

@@ -233,3 +233,59 @@ for ERP.**
 | 3 — ERP path | **DIVERGES** — no pedestal name is sent, two unrelated paths, four indistinguishable/missing error cases, and ERP runs with admin authority rather than UI-equivalent rules |
 
 Nothing has been changed. One consolidated plan on request.
+
+---
+
+## ADDENDUM — the real end-to-end flow, and the agreed target (2026-09-27)
+
+Recorded before step 5 so it is not re-derived. **Decisions are the user's; this is the
+target for the consolidated access-control change, NOT yet planned or built.**
+
+### How it actually works today, end to end
+
+1. The user scans the NFC tag with the mobile app.
+2. The mobile app sends the tag id to **ERP**.
+3. **ERP** holds its own mapping tag id → pedestal → socket, and resolves it.
+4. ERP sends the pedestal a command to activate that socket.
+5. The pedestal replies. **Nothing plugged in → "socket idle", refused.** Plug detected →
+   confirmed, ERP tells the app, charging starts.
+
+The mobile app and ERP already work this way. **Our side is what needs finishing.** This
+means the audit's "Path B" (gateway → `/api/controls/.../socket/{name}/cmd`) is the REAL
+activation path, and raises a question for the plan: **is `/api/nfc/scan` used by this flow
+at all, or is it a second integration shape?** To be answered in the plan, not assumed.
+
+### Agreed target: double-bookkeeping, deliberately
+
+ERP sends **both** the tag id **and** the socket it resolved. The pedestal keeps its own
+tag → socket mapping and **checks the two agree before acting**.
+
+Two independent records of the same mapping mean a disagreement exposes an error that is
+otherwise invisible: a tag stuck on the wrong socket, two labels swapped at installation, or
+a wrong socket number typed into ERP. Without the check the pedestal switches the wrong
+socket and **the customer pays for a neighbour's power**.
+
+The cost is maintaining the mapping twice, so mismatches are handled deliberately rather
+than failing hard everywhere:
+
+| Case | Behaviour |
+|---|---|
+| tag and socket **agree** | act |
+| tag and socket **disagree** | **refuse, and raise an ALARM** — not a quiet error. Physical installation and configuration have diverged and someone must look. |
+| pedestal has **no mapping** for that tag | **act on ERP's instruction**, but log that it could not be verified. **Do not block** — an incomplete local mapping must not stop a paying customer charging. |
+
+The mismatch case joins the distinct error responses already identified, so ERP and the app
+can tell the user something true.
+
+### Open question for the plan
+
+Whether `/api/nfc/scan` should also carry the pedestal, or whether it is a separate concern
+from the ERP activation path and should be left alone.
+
+### Also settled for the plan
+
+- **NFC endpoints are NOT in the ERP catalog at all** (`grep nfc api_catalog.py` → no
+  matches), so they are not proxyable through the gateway today. Tightening Rule 1 to admin
+  therefore does **not** leave the allowlist as the only barrier for NFC — ERP has no NFC
+  path whatsoever. The allowlist-is-the-access-surface point still holds for every endpoint
+  that IS on it, and still needs documenting in the ERP guide.

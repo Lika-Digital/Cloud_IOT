@@ -125,6 +125,49 @@ does have container-level timing — but the packets themselves arrive unstamped
 camera is ever replaced, **packet timestamping is a requirement to check**, along with an
 IR illuminator for night coverage.
 
+### REQUIRED: post-upgrade checklist, as a named operator task
+
+This must appear in the Operations section as a **checklist item someone will read**, not
+as a script that happens to exist. The person who runs `apt upgrade` is not going to be
+reading `capture.py`.
+
+> **After any system upgrade that touches ffmpeg, run:**
+> ```bash
+> python3 ~/Cloud_IOT/scripts/guard_diagnose_timestamps.py \
+>     --url 'rtsp://admin:PASS@192.168.1.191:554/profile1' --verify
+> ```
+> **Exit 0 = guard capture still works. Non-zero = read the output before trusting guard.**
+
+It checks four things against the real camera: segments are still being produced, a
+completed segment still decodes, no audio reached disk, and no *new* deprecation appeared.
+
+Why it matters: guard accepts a known ffmpeg deprecation (unstamped packets from this
+camera — see the known-limitations section). If a future ffmpeg **enforces** it, segmenting
+stops and the ring retains no history, so an alarm would have no video. The runtime
+watchdog reports that as `UNAVAILABLE`, but this command catches it at upgrade time instead
+of at alarm time.
+
+Put it in the same list as any other post-upgrade verification, alongside
+`systemctl status cloud-iot-guard`.
+
+### Camera capabilities and future options
+
+Carry `docs/guard_camera_capabilities.md` into the final docs under a heading of that
+name. It records the ONVIF investigation of 2026-09-27: the camera exposes Events and
+Analytics with working rule topics (`ObjectsInside`, `LineDetector/Crossed`,
+`CellMotionDetector/Motion`, `MotionAlarm`, plus `GlobalSceneChange`/`ImageTooBlurry` as
+possible tamper signals) but **no person/object classification topic** — its own AI
+detection is only on an undocumented vendor protocol on port 8080.
+
+Not used in Phase 1, deliberately: `ObjectsInside` would be a trigger rather than a
+detection, guard is not always armed, 6.8 % of 4 cores is already inside budget, and a
+trigger would confound the first accuracy measurements. Revisit after a week of production
+data. The design sketch for that day is in the file — **trigger as accelerator, never as
+precondition**, with the segment ring always running so pre-roll exists.
+
+Also records camera-replacement spec items: packet timestamping, AI classification over
+ONVIF, IR illuminator, concurrent RTSP sessions.
+
 ### Standing rule to write down (earned the hard way)
 
 **For anything touching the camera: a synthetic test proves the SHAPE, only the real
@@ -151,7 +194,13 @@ future camera-facing change. State this in the Operations/Testing section.
    diff <(sed 's/#.*//;/^[[:space:]]*$/d' /opt/cloud-iot/backend/requirements.txt | sort) \
         <(sort ~/venv_freeze_2026-09-26.txt)
    ```
-2. **TME sensor 404.** `192.168.1.254` returns HTTP 404 on `values.xml` while `fresh.xml`
+2. **Split the pre-push gate — before retrying pushes becomes a habit.** The gate runs the
+   full suite on every push and already brushes 10 minutes; one push appeared to fail while
+   having actually succeeded, which is exactly the confusion to avoid. It will get worse as
+   the suite grows. Proposal: fast tests on every push; full suite + the ffmpeg-gated and
+   camera-gated tests on demand or before a merge to `main`. Not urgent, but note it now.
+
+3. **TME sensor 404.** `192.168.1.254` returns HTTP 404 on `values.xml` while `fresh.xml`
    returns 200. Consistent with `tests/backend/test_tme_fresh_xml.py` (fresh.xml is the
    supported path), so likely a dead code path or a stale fallback URL to remove. Observed
    2026-09-26, not investigated.

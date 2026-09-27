@@ -277,3 +277,51 @@ def test_tc_gpl_14_pipeline_feeds_the_alarm_rule():
     assert len(fired) == 1, "exactly one alarm"
     assert fired[0][0] == 3.0
     assert fired[0][1]["latency_s"] == pytest.approx(1.0), "from the first ALARM-band frame"
+
+
+def test_tc_gpl_15_detection_is_callable_on_demand():
+    """Detection must be invokable for a SINGLE frame, not only from a polling loop.
+
+    This is the one property the ONVIF investigation asked us to keep true (see
+    docs/guard_camera_capabilities.md). The camera exposes rule topics like
+    RuleEngine/FieldDetector/ObjectsInside over ONVIF, which could one day RAISE the
+    detection rate briefly instead of polling at a fixed 1 fps — as an accelerator, never
+    as a precondition, since a missed camera event must not mean guard never looks.
+
+    Nothing is being built for that now: no ONVIF client, no configuration, no speculative
+    abstraction. This test is the entire cost of keeping the option cheap, by ensuring a
+    future refactor cannot bury the detection step inside a capture loop.
+    """
+    cfg = PipelineConfig()
+    frame = _jpeg(640, 480)
+
+    # One call, no prior state, no loop, no shared object to set up.
+    result = process_frame(FakeDetector(0.82), frame, cfg)
+    assert isinstance(result, FrameResult)
+    assert result.band == BAND_ALARM
+    assert result.confidence == pytest.approx(0.82)
+
+    # Repeated single-shot calls are independent: process_frame holds no state between
+    # invocations, so an event-driven caller gets the same answer as a polling one.
+    again = process_frame(FakeDetector(0.82), frame, cfg)
+    assert (again.band, again.confidence) == (result.band, result.confidence)
+
+    # And the alarm decision is single-shot too, so a burst of event-driven frames can be
+    # fed through the same rule without reshaping it.
+    state = AlarmState()
+    assert state.observe(0.0, True) is None
+    assert state.observe(0.5, True) is not None
+
+    # process_frame must be a plain module-level callable — not a method on a running
+    # capture loop, which is what would make the later change large.
+    import inspect
+
+    from app.guard import pipeline as pipeline_module
+
+    assert inspect.isfunction(pipeline_module.process_frame)
+    params = list(inspect.signature(process_frame).parameters)
+    assert params == ["detector", "jpeg", "cfg"], (
+        "process_frame's signature is the on-demand contract: a detector, ONE frame, and "
+        "config. If it grows a queue, a loop or a capture handle, event-driven triggering "
+        "stops being a small change."
+    )

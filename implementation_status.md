@@ -1,3 +1,62 @@
+# Implementation Status - Guard INTEGRATION proven on a real broker (2 defects found)
+
+## 2026-09-28 - the second assembly gap: the two halves had never spoken
+
+The smoke suite drove the real worker against a FAKE broker. The API suite drove the real
+backend against a FAKE worker. Neither had ever seen the other, so every field name that
+matched did so because it was read, not because a broker carried it. Same shape as the
+missing entrypoint: components green, assembly unproven.
+
+### Built
+- [DONE] `tests/backend/test_guard_integration.py` (NEW, TC-GINT-01..07) - real mosquitto,
+  the real backend MQTTService subscribed to it, and the real worker as a SEPARATE OS
+  PROCESS. The separate process is not incidental: a Last Will is published by the broker
+  only when a connection drops without DISCONNECT, so an in-process worker can only ever
+  prove `will_set()` was called.
+- [DONE] `tests/backend/_guard_worker_harness.py` (NEW) - the worker subprocess, with the
+  detector and camera injected. Substitutes exactly two things; everything else is
+  production code.
+- [DONE] Broker resolution: an already-running broker first (the NUC's compose broker),
+  otherwise a private mosquitto on an ephemeral port, otherwise skip AND SAY SO.
+
+### Two defects the real broker found
+- [FIXED] **A live Last Will marked the dead worker as alive.** MQTT-3.3.1-9: the retain
+  flag is set only when a message is delivered in response to a NEW subscription, so a live
+  will arrives with RETAIN=0 and looked exactly like live traffic. `_on_state` called
+  `mark_seen` on it - stamping `worker_alive: true` and `worker_seen_at: now` for a pid that
+  no longer existed. Fix: UNAVAILABLE is the one state a worker cannot truthfully report
+  about itself, so it never counts as proof of life.
+- [FIXED] **Not refreshing liveness was not enough.** An armed worker publishes health every
+  5 s, so its last heartbeat is always recent when it dies; the backend would still have read
+  `worker_alive: true` for up to the full heartbeat timeout after the will had already said
+  otherwise. Added `liveness.mark_gone()` - clears the seen timestamp at once, KEEPS the
+  reported state so the dashboard still shows what the worker last said. Not `forget()`.
+
+### Two defects in my own test, both instructive
+- The "worker is up" predicate was satisfied by a RETAINED LWT from an earlier run, so a
+  command went out while the worker was still booting and unsubscribed - QoS 1 with no
+  matching subscription drops silently. **The v3.40 bug reproduced inside its own regression
+  test.** Fixed by waiting on `liveness.is_alive` (which retained replays cannot satisfy) and
+  by clearing retained state around every test.
+- Failure messages built the worker log with an f-string ARGUMENT, evaluated before the wait
+  began - so it always showed an empty log and three runs were diagnosed blind. `_await` now
+  takes a `diagnose` CALLABLE, read at failure time.
+
+### Also
+- [DONE] `docs/guard_deploy_runbook.md` (NEW) - phone-first, irreversible steps named (only
+  ONE is: pushing main), integration suite section saying plainly that it needs the compose
+  broker on the NUC, acceptance measured not asserted, rollback with the same three
+  independent proofs as A.5.
+
+### Result (measured, not asserted)
+- **823 passed, 1 skipped** on the dev box with ffmpeg available (skip = the real-camera ring
+  test, needs GUARD_TEST_RTSP_URL, answerable only on the marina LAN).
+- Integration suite: **7 passed** against real mosquitto 2.1.2.
+- **NOT run on the NUC.** The five acceptance criteria remain unmeasured: CI proves the
+  mechanism behind three of them, none of the five numbers. See the runbook section 4.
+
+---
+
 # Implementation Status - Guard worker ENTRYPOINT built; worker now starts (Stage B closed)
 
 ## 2026-09-28 - the gap that 803 green tests did not catch

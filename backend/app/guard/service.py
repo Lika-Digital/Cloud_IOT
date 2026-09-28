@@ -153,6 +153,22 @@ class WorkerLiveness:
             if now - sent > settings.guard_ack_timeout_s
         ]
 
+    def mark_gone(self, camera_id: int) -> None:
+        """Positive proof the worker is absent — clear liveness NOW, keep what it last said.
+
+        This is not the same as letting the heartbeat lapse. A Last Will is the broker
+        telling us the connection dropped, so the worker is provably gone *at this instant*;
+        waiting out `guard_heartbeat_timeout_s` would leave `worker_alive: true` and a
+        `worker_seen_at` of seconds ago for a process that no longer exists. The operator
+        would be reading a contradiction — "UNAVAILABLE" beside "last seen 2s ago" — during
+        exactly the window when they are trying to work out what happened.
+
+        `_reported_state` is deliberately left alone: the last thing the worker said (and the
+        will's reason) is what the dashboard shows, so it must survive. That is why this is
+        not `forget()`.
+        """
+        self._seen.pop(camera_id, None)
+
     def forget(self, camera_id: int) -> None:
         self._seen.pop(camera_id, None)
         self._reported_state.pop(camera_id, None)
@@ -315,19 +331,46 @@ async def _on_state(camera_id: int, data: dict, retained: bool) -> None:
     A retained `state` is exactly the case that made a dead cabinet look online in v3.40, so
     it is recorded for display but `mark_seen` is not called — only live traffic proves the
     worker is there.
+
+    The retain flag is NOT sufficient on its own, though, and the integration suite
+    (TC-GINT-05) proved it against a real broker. A Last Will is published by the broker when
+    the worker's connection drops, and MQTT delivers it to already-subscribed clients with
+    **RETAIN=0** — [MQTT-3.3.1-9] sets the retain flag only when a message is delivered in
+    response to a *new* subscription. So the will looks exactly like live traffic, and
+    marking the worker "seen" on it stamped a dead process as alive at the precise moment it
+    died: `worker_alive: true`, `worker_seen_at: now`, for a pid that no longer existed.
+
+    Hence the second condition. UNAVAILABLE is the one state a worker cannot truthfully
+    report about itself — a process that can publish is, by definition, available. So an
+    UNAVAILABLE on this topic came from the broker's will or from a worker on its way out,
+    and either way it is evidence of absence, never of life.
+
+    And absence is acted on immediately rather than merely not-refreshed: `mark_gone` clears
+    liveness at once. Simply skipping `mark_seen` was not enough, because an armed worker
+    publishes health every 5 s, so its last heartbeat is always recent when it dies — the
+    backend would have reported `worker_alive: true` for up to the full heartbeat timeout
+    after the will had already told it otherwise.
     """
+    reported_state = data.get("state")
     liveness.set_reported(camera_id, {
-        "state": data.get("state"),
+        "state": reported_state,
         "flags": data.get("flags", []),
         "reason": data.get("reason"),
         "config_version": data.get("config_version"),
         "health": liveness.reported(camera_id).get("health", {}),
     })
-    if not retained:
-        liveness.mark_seen(camera_id)
-    else:
+    if retained:
         logger.info("[Guard] camera=%d RETAINED state replay (%s) — not treated as liveness",
-                    camera_id, data.get("state"))
+                    camera_id, reported_state)
+    elif reported_state == STATE_UNAVAILABLE:
+        liveness.mark_gone(camera_id)
+        logger.warning(
+            "[Guard] camera=%d reported UNAVAILABLE (%s) — Last Will or a worker on its way "
+            "out, NOT proof of life; liveness cleared immediately",
+            camera_id, data.get("reason"),
+        )
+    else:
+        liveness.mark_seen(camera_id)
 
     # A worker reporting SUSPENDED_CPU must survive a backend restart as suspended, never as
     # silently armed, so the fact is persisted on the config row.

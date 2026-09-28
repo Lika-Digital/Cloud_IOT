@@ -28,6 +28,8 @@ file replayed at wallclock rate). Nothing else.
   TC-GINT-05  the worker is KILLED: the broker's Last Will makes the backend say UNAVAILABLE
   TC-GINT-06  a command sent while the worker is down is never acked and goes overdue
   TC-GINT-07  an ack that never arrives does not leave a false ARMED behind
+  TC-GINT-08  the refusal mechanism: a skip says it is not a pass, and
+              GUARD_INTEGRATION_REQUIRED=1 makes it fatal
 
 Running this on the NUC: the compose broker on :1883 is used automatically. See
 `docs/guard_deploy_runbook.md` §2.
@@ -61,6 +63,32 @@ HARNESS = Path(__file__).parent / "_guard_worker_harness.py"
 
 # A camera id used by no other test module, so liveness and DB rows cannot collide.
 CAM = 11
+
+# Set GUARD_INTEGRATION_REQUIRED=1 on the NUC. See _unanswered() below.
+INTEGRATION_REQUIRED = os.environ.get("GUARD_INTEGRATION_REQUIRED") == "1"
+
+
+def _unanswered(reason: str, remedy: str) -> None:
+    """Refuse to answer — loudly, and fatally where an answer was required.
+
+    The two things that can stop this suite (no broker, no ffmpeg) are both real deployment
+    conditions on the NUC, and both look like success in a pytest summary line. So the message
+    says what a skip means here, at the point of skipping, because the person running it on a
+    pier has not read the runbook.
+
+    With GUARD_INTEGRATION_REQUIRED=1 it does not skip at all — it fails. That is how the
+    runbook invokes it, so a missing broker cannot be mistaken for a green deployment.
+    """
+    verdict = (
+        "INTEGRATION NOT RUN — this is a FAILURE TO REPORT, not a pass. "
+        "The backend and the worker were never shown to exchange a message."
+    )
+    if INTEGRATION_REQUIRED:
+        pytest.fail(f"{verdict}\n  Reason: {reason}\n  Fix: {remedy}")
+    pytest.skip(
+        f"{reason} — {verdict} Fix: {remedy}. "
+        f"Set GUARD_INTEGRATION_REQUIRED=1 to make this a hard failure (the NUC does)."
+    )
 
 pytestmark = pytest.mark.asyncio
 
@@ -126,10 +154,11 @@ def broker(tmp_path_factory) -> dict:
 
     exe = _mosquitto_bin()
     if exe is None:
-        pytest.skip(
-            "no broker: nothing listening on "
-            f"{host}:{port} and no mosquitto binary found. Start the compose broker "
-            "(`docker compose up -d mosquitto`) or set MOSQUITTO_BIN."
+        _unanswered(
+            f"no broker: nothing is listening on {host}:{port} and no mosquitto binary "
+            f"was found",
+            "start the compose broker with `sudo docker compose up -d mosquitto`, "
+            "or set MOSQUITTO_BIN to a mosquitto executable",
         )
 
     tmp = tmp_path_factory.mktemp("mosquitto")
@@ -407,10 +436,19 @@ def _command(cmd: str) -> str:
         db.close()
 
 
-needs_ffmpeg = pytest.mark.skipif(
-    resolve_ffmpeg() is None,
-    reason="needs ffmpeg for the synthetic camera (set GUARD_FFMPEG or put it on PATH)",
-)
+def _need_ffmpeg() -> None:
+    """Called inside the test, not as a skipif marker.
+
+    A marker can only ever skip; this routes through `_unanswered`, so on the NUC — where
+    ffmpeg is genuinely missing from the installer — the absence fails the run instead of
+    quietly shrinking it.
+    """
+    if resolve_ffmpeg() is None:
+        _unanswered(
+            "no ffmpeg, so there is no synthetic camera and no frames",
+            "`sudo apt install -y ffmpeg` (it is absent from the NUC installer), "
+            "or set GUARD_FFMPEG to the binary",
+        )
 
 
 # ═══ TC-GINT-01 ══════════════════════════════════════════════════════════════
@@ -483,7 +521,6 @@ async def test_command_crosses_the_wire_and_is_acked_in_time(backend, tmp_path):
 
 # ═══ TC-GINT-03 ══════════════════════════════════════════════════════════════
 
-@needs_ffmpeg
 async def test_arm_to_alarm_to_persisted_event_to_labelled(backend, tmp_path):
     """The whole round trip, both processes, one broker.
 
@@ -494,6 +531,7 @@ async def test_arm_to_alarm_to_persisted_event_to_labelled(backend, tmp_path):
     a field that was previously matched by reading a file rather than by carrying it over a
     wire.
     """
+    _need_ffmpeg()
     from app.guard.models import GuardEvent, GuardRecording
 
     source = _synthetic_h264(tmp_path)
@@ -582,7 +620,6 @@ async def test_arm_to_alarm_to_persisted_event_to_labelled(backend, tmp_path):
 
 # ═══ TC-GINT-04 ══════════════════════════════════════════════════════════════
 
-@needs_ffmpeg
 async def test_detections_persist_as_a_batch_and_link_to_their_event(backend, tmp_path):
     """Below-threshold evidence survives the wire, and links to the alarm it fed.
 
@@ -590,6 +627,7 @@ async def test_detections_persist_as_a_batch_and_link_to_their_event(backend, tm
     training index. They are batch-published, so this also proves the batch shape — a list
     under `detections`, not one message per frame.
     """
+    _need_ffmpeg()
     from app.guard.models import GuardDetection, GuardEvent
 
     source = _synthetic_h264(tmp_path)
@@ -764,3 +802,39 @@ async def test_an_ack_that_never_arrives_leaves_no_false_armed(backend, tmp_path
         assert status["desired_state"] == "ARMED"
     finally:
         worker.stop_clean()
+
+
+# ═══ TC-GINT-08 ══════════════════════════════════════════════════════════════
+
+async def test_unanswered_refuses_loudly_and_fatally_when_required(monkeypatch):
+    """The refusal mechanism itself, because it is what makes the other seven trustworthy.
+
+    A suite that can quietly shrink to nothing reports success for a deployment it never
+    checked. So `_unanswered` is the load-bearing part on the NUC, and it gets its own test:
+    the message must carry the verdict, and GUARD_INTEGRATION_REQUIRED=1 must make it fatal
+    rather than skippable.
+
+    I tried to prove this by pointing the fixture at an unroutable broker with a bogus
+    MOSQUITTO_BIN, and the suite passed anyway — the binary fallback list found the local
+    mosquitto and started one, which is correct behaviour and a useless negative test.
+    Testing the mechanism directly is the honest version.
+    """
+    module = sys.modules[__name__]
+
+    # Default: a skip, but one that states what a skip means here.
+    monkeypatch.setattr(module, "INTEGRATION_REQUIRED", False)
+    with pytest.raises(pytest.skip.Exception) as skipped:
+        _unanswered("no broker", "start compose")
+    text = str(skipped.value)
+    assert "FAILURE TO REPORT" in text, \
+        f"a skip must say it is not a pass; got: {text}"
+    assert "no broker" in text and "start compose" in text, \
+        "the reason and the remedy must both reach the person running it"
+    assert "GUARD_INTEGRATION_REQUIRED=1" in text, \
+        "the message must say how to make this fatal"
+
+    # Required: not skippable at all.
+    monkeypatch.setattr(module, "INTEGRATION_REQUIRED", True)
+    with pytest.raises(pytest.fail.Exception) as failed:
+        _unanswered("no broker", "start compose")
+    assert "INTEGRATION NOT RUN" in str(failed.value)

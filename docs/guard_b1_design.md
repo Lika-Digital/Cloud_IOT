@@ -422,3 +422,54 @@ cost of no labels is a tuning decision with nothing to tune against.
 This is a genuine widening of write access and worth revisiting if the marina's staffing
 changes. It is not a hidden control: the backend enforces the split, and reading the review
 queue was never restricted.
+
+---
+
+## 14. Engineering note: a predicate a retained replay can satisfy is not a liveness check
+
+This one is recorded because it has now caught us **three times in three different places**,
+and the third time it was inside the test written to prevent the first two.
+
+**v3.40, cabinets.** The broker replays the last retained message per topic to every new
+subscriber. After a backend restart, a cabinet silent for 19 days delivered its final status
+looking exactly like a live one, and the handler stamped it `online` with a fresh heartbeat.
+Fix: forward the retain flag and never treat a retained message as liveness.
+
+**v3.42, guard worker.** Same rule applied to `guard/state` from the start — but the retain
+flag alone turned out to be insufficient. A **Last Will is delivered to already-subscribed
+clients with RETAIN=0**, because [MQTT-3.3.1-9] sets that flag only when a message is
+delivered in response to a *new* subscription. So the will was indistinguishable from live
+traffic by flag, and `mark_seen` stamped a dead process as alive. Fix: `UNAVAILABLE` is the
+one state a worker cannot truthfully report about itself, so it is never proof of life — and
+`mark_gone()` clears liveness immediately rather than waiting out the heartbeat, because an
+armed worker heartbeats every 5 s and its last beat is therefore always fresh at the moment
+it dies.
+
+**v3.42, the integration test itself.** TC-GINT's "the worker is up" predicate was
+`liveness.reported(CAM)["state"] is not None`. A retained Last Will from an earlier run
+satisfied it, so the test published a command while the worker was still booting and
+unsubscribed — and QoS 1 with no matching subscription drops the message silently. The test
+then failed, reporting that the contract was broken when it was not. **The v3.40 bug,
+reproduced inside its own regression test.**
+
+### The rule
+
+> **A predicate that a retained replay can satisfy is not a liveness check.**
+> "Some state exists for this device" and "this device is there" are different claims. Only
+> the second is liveness, and only live traffic can establish it.
+
+In practice, three things follow:
+
+1. **Assert on liveness, not on the presence of data.** `liveness.is_alive()` is sound by
+   construction: `mark_seen` is reachable only from non-retained traffic. `reported(...)` is
+   not, and never will be — it exists precisely to hold last-known state.
+2. **Clear retained state around tests that depend on absence.** A zero-length retained
+   payload is the MQTT way; `TC-GINT`'s fixture does it before and after every test, so one
+   test's will cannot become the next test's evidence.
+3. **The retain flag is necessary but not sufficient.** Ask additionally whether the *content*
+   could only have come from a live sender. `UNAVAILABLE` could not.
+
+This generalises past MQTT and is worth carrying into UI v2: a berth row that reads OK
+because *some* data exists for it, rather than because that data is current, is the same
+mistake with a nicer font. It is why `docs/ui_v2_spec.md §1.3` makes **stale ⇒ UNKNOWN, never
+OK** a rule rather than a preference.

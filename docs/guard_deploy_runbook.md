@@ -13,6 +13,28 @@ occupancy, MQTT, the tunnel or the backend.
 
 ---
 
+## Read these three things first
+
+> ### 1. Exactly one step in this runbook is irreversible: **pushing `main`** (§3.1).
+>
+> Everything after it is a `systemctl disable` and a directory removal. So the order is not
+> negotiable: **§2 and §4 must both pass before §3.1**, because that is the last point at
+> which stopping costs nothing.
+
+> ### 2. None of the five acceptance criteria is proven by CI.
+>
+> CI proves the **mechanism** behind three of them. It proves **not one of the five
+> numbers.** A green test run is not clearance to deploy — §4 is. Do not let a green suite,
+> here or on the dev box, stand in for a measurement on this hardware.
+
+> ### 3. A SKIPPED test on the NUC is a failure to report, not a pass.
+>
+> Skips here mean the question was never asked — no broker, or no ffmpeg. Both are real
+> deployment conditions, and both look like success in a summary line. §2 runs the suite in a
+> mode where a skip is an outright failure, so this cannot be missed by accident.
+
+---
+
 ## 0. Which steps are irreversible
 
 Read this before starting. Everything else can be undone in under a minute.
@@ -86,13 +108,18 @@ cd ~/Cloud_IOT && sudo docker compose up -d mosquitto
 
 ```bash
 cd ~/Cloud_IOT
-GUARD_FFMPEG=$(command -v ffmpeg) \
+GUARD_INTEGRATION_REQUIRED=1 GUARD_FFMPEG=$(command -v ffmpeg) \
   ./backend/.venv/bin/python -m pytest tests/backend/test_guard_integration.py -v -rs
 ```
 
-**STOP if anything fails, and STOP if anything SKIPS.** A skip here means the question went
-unanswered — most likely no broker (§2.1) or no ffmpeg (`sudo apt install -y ffmpeg`; it is
-missing from the installer, see `project_nuc_ffmpeg_missing`).
+`GUARD_INTEGRATION_REQUIRED=1` is what makes this trustworthy: **with it set, the suite cannot
+skip.** A missing broker or missing ffmpeg becomes an outright failure saying
+*"INTEGRATION NOT RUN — this is a FAILURE TO REPORT, not a pass"*, rather than a green summary
+line with a quietly smaller test count. Both of those conditions are real on this box (ffmpeg
+is absent from the installer — `sudo apt install -y ffmpeg`), which is exactly why they must
+not be skippable here.
+
+**STOP if anything fails.**
 
 Expect **7 passed**:
 

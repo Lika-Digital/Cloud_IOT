@@ -55,9 +55,16 @@ from guard_worker.recorder import (
     sweep_orphan_parts,
     timestamp_name,
 )
+from guard_worker.capture import resolve_ffmpeg, resolve_ffprobe
 
-HAVE_FFMPEG = shutil.which("ffmpeg") is not None
-needs_ffmpeg = pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not on PATH")
+HAVE_FFMPEG = resolve_ffmpeg() is not None
+# The binary every test uses, whether it only builds a command string or actually runs
+# one. No test asserts on argv[0], so using the resolved path throughout costs nothing
+# and stops the executing tests from failing on a box where ffmpeg is not on PATH.
+FFMPEG = resolve_ffmpeg() or "ffmpeg"
+FFPROBE = resolve_ffprobe(FFMPEG) or "ffprobe"
+needs_ffmpeg = pytest.mark.skipif(
+    not HAVE_FFMPEG, reason="no ffmpeg (set GUARD_FFMPEG or put it on PATH)")
 
 CAM = 1
 ALARM_AT = datetime(2026, 9, 27, 14, 32, 7)
@@ -65,7 +72,7 @@ ALARM_AT = datetime(2026, 9, 27, 14, 32, 7)
 
 def _cfg(tmp_path: Path, **kw) -> RecordingConfig:
     defaults = dict(storage_path=tmp_path / "recordings", segment_seconds=2,
-                    preroll_seconds=4, record_seconds=60, ffmpeg="ffmpeg")
+                    preroll_seconds=4, record_seconds=60, ffmpeg=FFMPEG)
     defaults.update(kw)
     return RecordingConfig(**defaults)
 
@@ -392,7 +399,7 @@ def test_tc_grec_20_real_clip_assembles_and_plays(tmp_path):
     seg_dir = tmp_path / "segments"
     seg_dir.mkdir()
     subprocess.run(
-        ["ffmpeg", "-hide_banner", "-loglevel", "error",
+        [FFMPEG, "-hide_banner", "-loglevel", "error",
          "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25", "-t", "9",
          "-map", "0:v:0", "-an", "-dn", "-sn",
          "-c:v", "libx264", "-preset", "ultrafast", "-g", "25",
@@ -403,7 +410,7 @@ def test_tc_grec_20_real_clip_assembles_and_plays(tmp_path):
     segs = sorted(seg_dir.glob("*.ts"))
     assert len(segs) >= 3, f"expected several segments, got {len(segs)}"
 
-    cfg = _cfg(tmp_path, segment_seconds=3, record_seconds=60, ffmpeg="ffmpeg")
+    cfg = _cfg(tmp_path, segment_seconds=3, record_seconds=60, ffmpeg=FFMPEG)
     asm = ClipAssembler(cfg, seg_dir)
     # Assemble all but the last (treated as in progress), mirroring production.
     clip = asm.assemble(CAM, ALARM_AT, segs[:-1])
@@ -415,7 +422,7 @@ def test_tc_grec_20_real_clip_assembles_and_plays(tmp_path):
     assert asm.pinned_segments == frozenset(), "pin released after success"
 
     probe = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
+        [FFPROBE, "-v", "error", "-select_streams", "v:0", "-count_frames",
          "-show_entries", "stream=nb_read_frames,codec_type",
          "-of", "default=noprint_wrappers=1", str(clip.path)],
         capture_output=True, text=True, timeout=120,
@@ -428,7 +435,7 @@ def test_tc_grec_20_real_clip_assembles_and_plays(tmp_path):
 
     # No audio may reach a clip either — the policy applies to assembly, not just capture.
     kinds = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+        [FFPROBE, "-v", "error", "-show_entries", "stream=codec_type",
          "-of", "default=noprint_wrappers=1:nokey=1", str(clip.path)],
         capture_output=True, text=True, timeout=60,
     ).stdout

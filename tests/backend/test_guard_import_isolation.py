@@ -20,8 +20,10 @@ installed in the test environment.
   TC-GIS-01  the shared modules import no forbidden top-level module
   TC-GIS-02  ...nor via `from X import ...`
   TC-GIS-03  the shared modules do not import from the wider app package
-  TC-GIS-04  guard_worker capture AND recorder are stdlib-only (they retain evidence)
+  TC-GIS-04  guard_worker capture, recorder and watchdog are stdlib-only
   TC-GIS-05  heavy imports in the shared modules are function-local, not module-level
+  TC-GIS-06  the entrypoint imports paho/numpy/PIL lazily, never at module level
+  TC-GIS-07  `python -m guard_worker` exists at all — the check that was missing
   TC-GIS-06  the modules really do import with only numpy+PIL available
 """
 from __future__ import annotations
@@ -44,7 +46,18 @@ SHARED_MODULES = [
 WORKER_STDLIB_ONLY = [
     REPO / "guard_worker" / "capture.py",
     REPO / "guard_worker" / "recorder.py",
+    REPO / "guard_worker" / "watchdog.py",
 ]
+# `guard_worker/__main__.py` is deliberately NOT in that list. The entrypoint is the one
+# place that must import paho, and the pipeline behind it needs numpy and PIL — that is what
+# an entrypoint is for. It keeps the rule honest by importing the heavy pieces lazily
+# (TC-GIS-06) so the modules above can still be exercised without them.
+WORKER_ENTRYPOINT = REPO / "guard_worker" / "__main__.py"
+# What the entrypoint may import at module level. paho is absent: it is imported inside
+# connect(), so the worker can be constructed and unit-tested on a box without it.
+ENTRYPOINT_MODULE_LEVEL_FORBIDDEN = {
+    "paho", "numpy", "PIL", "openvino", "fastapi", "sqlalchemy", "app",
+}
 
 # Absent from the staging venv. A top-level import of any of these breaks the probe.
 FORBIDDEN = {
@@ -184,3 +197,41 @@ def test_tc_gis_06_modules_import_with_only_numpy_and_pil(monkeypatch):
     # And they are actually usable, not just importable.
     assert pipeline.classify_band(0.9, pipeline.PipelineConfig()) == pipeline.BAND_ALARM
     assert alarm_rule.DEFAULT_WINDOW_SECONDS == 4.0
+
+
+def test_tc_gis_06_entrypoint_imports_the_heavy_stack_lazily():
+    """The entrypoint may use paho, numpy and PIL — but not at module import time.
+
+    Two reasons, both practical. It keeps `python -c "import guard_worker.__main__"` usable
+    as a cheap deploy check on a box where the venv is still being built. And it is what lets
+    the smoke test construct a `GuardWorker` with a fake broker and a fake detector, which is
+    how the armed path gets tested at all given OpenVINO has no 32-bit wheel.
+    """
+    top = _module_level_imports(WORKER_ENTRYPOINT)
+    offenders = top & ENTRYPOINT_MODULE_LEVEL_FORBIDDEN
+    assert not offenders, (
+        f"guard_worker/__main__.py imports {sorted(offenders)} at module level. Move it "
+        f"inside the function that needs it: paho belongs in connect(), the detector in "
+        f"_make_detector(), and the pipeline in handle_frame()."
+    )
+
+
+def test_tc_gis_07_entrypoint_exists_and_is_runnable_as_a_module():
+    """`python -m guard_worker` must resolve. This is the check that was missing.
+
+    The systemd unit's ExecStart is `python -m guard_worker`. For 803 green tests there was
+    no `__main__.py` at all, so the service could not have started — a component suite cannot
+    notice that, only a check on the assembled thing can. The smoke suite runs it for real;
+    this asserts the entrypoint's existence and shape without spawning anything, so it stays
+    green even where ffmpeg is absent.
+    """
+    assert WORKER_ENTRYPOINT.exists(), (
+        "guard_worker/__main__.py is missing, so `python -m guard_worker` — the unit's "
+        "ExecStart — cannot run."
+    )
+    tree = ast.parse(WORKER_ENTRYPOINT.read_text(encoding="utf-8"))
+    functions = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
+    assert "main" in functions, "__main__.py defines no main()"
+    source = WORKER_ENTRYPOINT.read_text(encoding="utf-8")
+    assert 'if __name__ == "__main__":' in source, \
+        "__main__.py has no __main__ guard, so running it as a module does nothing"

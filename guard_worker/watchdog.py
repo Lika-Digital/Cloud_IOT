@@ -170,7 +170,54 @@ class Watchdog:
         self._auto_resumes = [t for t in self._auto_resumes
                               if now - t < _SECONDS_PER_DAY]
 
+    # ── introspection that does NOT advance the machine ──
+
+    @property
+    def current_flags(self) -> list[str]:
+        """Read the flags without ticking.
+
+        This exists because the obvious alternative — calling `tick()` just to read
+        `verdict.flags` — advances the state machine. A tick with no readings looks like
+        "CPU unknown, disk fine, ring healthy, view usable", so it would clear
+        `segments_stalled` and `limited_visibility` as a side effect of publishing a state
+        message. Reads and ticks have to be different operations.
+        """
+        return sorted(self._flags)
+
     # ── human control ──
+
+    def arm(self) -> list[Transition]:
+        """Arm guard after a disarm. NOT the same thing as `manual_rearm`.
+
+        Two differences, both deliberate:
+
+        * The auto-resume budget is preserved. If it were cleared here, an operator could
+          bypass `awaiting_manual_rearm` with disable-then-enable, and a persistently
+          overloaded box would go back to shedding guard every few minutes forever — which
+          is exactly what the budget exists to stop.
+        * It refuses while `awaiting_manual_rearm` is set. That flag means the machine has
+          given up on resuming by itself and wants a human decision; `enable` is not that
+          decision, `rearm` is.
+
+        The CPU window is cleared either way: samples taken before guard was running
+        describe a different machine, and judging a freshly armed guard on them would
+        suspend it within seconds.
+        """
+        if FLAG_AWAITING_MANUAL_REARM in self._flags:
+            return [Transition(
+                "arm_refused",
+                "guard is awaiting a manual re-arm after repeated CPU suspensions; use "
+                "rearm, which is the explicit statement that a human has looked",
+                {"state": self.state},
+            )]
+        was = self.state
+        self.state = STATE_ARMED
+        self._below_resume_since = None
+        self._suspended_at = None
+        self._cpu.clear()
+        if was == STATE_ARMED:
+            return []
+        return [Transition("armed", f"guard armed from {was}", {"previous": was})]
 
     def manual_rearm(self, now: float) -> list[Transition]:
         """An operator re-enabling guard after a suspension.

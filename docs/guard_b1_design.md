@@ -15,7 +15,7 @@ Six things in this document need a yes. They are marked **[DECIDE]** and collect
 | | `cloud-iot-backend.service` (exists) | `cloud-iot-guard.service` (new) |
 |---|---|---|
 | Runs as | `cloud-iot` | **`guard`**, group `cloud-iot` |
-| Venv | `/opt/cloud-iot/backend/.venv` — **openvino never enters it** | `/opt/cloud-iot/guard/.venv` |
+| Venv | `/opt/cloud-iot/backend/.venv` — **openvino never enters it** | `/opt/cloud-iot/guard/.venv` — see `guard_worker/requirements.txt` |
 | Owns | all DB writes, REST, WebSocket, desired guard state | ffmpeg, inference, alarm decision, recording files, retention |
 | Network | tunnel, ERP webhooks, MQTT | **MQTT + camera only** (egress blocked) |
 
@@ -65,6 +65,9 @@ Group=cloud-iot
 WorkingDirectory=/opt/cloud-iot/guard
 EnvironmentFile=/opt/cloud-iot/guard/guard.env
 ExecStart=/opt/cloud-iot/guard/.venv/bin/python -m guard_worker
+# `-m guard_worker` resolves to guard_worker/__main__.py. That file did not exist when this
+# design was first written and the service could not have started; it exists now, and
+# TC-GIS-07 asserts it, because a component test suite cannot notice a missing entrypoint.
 
 Restart=on-failure
 RestartSec=5
@@ -321,3 +324,101 @@ Start-time only (worker restart to change): `MARINA_ID`, `GUARD_NUM_THREADS` (1)
 
 Small commits on `develop`, `implementation_status.md` updated per step, and **`main` only
 after the acceptance criteria are measured on the NUC.**
+
+---
+
+## 12. The worker entrypoint (added after step 5)
+
+`guard_worker/__main__.py` is what the unit's `ExecStart` runs. It was missing when steps
+1-5 were reported complete: every component was unit-tested, nothing checked that they
+compose into a process, and 803 green tests coexisted with a service that could not start.
+That gap is now closed structurally by `tests/backend/test_guard_worker_smoke.py`
+(TC-GSMOKE-01..07), which boots the real loop against a synthetic H.264 source, and by
+TC-GIS-07, which fails if the entrypoint disappears.
+
+**Shape.** One thread does the work. Frames arrive at `fps` (1/s), so the loop has most of
+a second spare between them for the watchdog, health, retention, pruning and clip assembly.
+MQTT runs on paho's own network thread, but commands are *queued* and applied by the main
+loop — arming from inside a network callback would start ffmpeg and load a model on paho's
+thread, which is how a client ends up still connected but no longer heartbeating.
+
+**Two seams exist for testing, and only two:** the broker client and the detector factory.
+They are what make the armed path testable off the NUC at all, given OpenVINO has no 32-bit
+wheel. Everything else in the smoke tests is production code.
+
+### Clip assembly is deferred, and this was a real bug
+
+`ClipAssembler.select_segments` spans `alarm_at - preroll` through
+`alarm_at + record_seconds`. The post-roll footage **does not exist yet** when the alarm
+fires. Assembling immediately therefore yields a pre-roll-only clip while still returning a
+valid file and a success — the worst kind of failure, because nothing reports it and the
+clip is useless for deciding whether the detection was a person.
+
+So the alarm publishes immediately (it is the time-critical fact), its segments are pinned
+against the ring's pruner, and the clip is assembled and published on `guard/recording`
+once the footage exists. The backend already links the two by `event_uuid` and backfills
+`video_path` onto the event, which is why `recording` was a separate topic from `alarm`.
+
+Consequences worth knowing:
+- an alarm arrives with `video_path: null` and `video_skipped: false` — a clip is *coming*,
+  which is different from there being none;
+- `video_skipped: true` is reserved for cases where no clip will ever arrive (`no_disk`,
+  `assembly_failed`);
+- TC-GSMOKE-05 asserts the deferral by **measuring** that the recording message arrives at
+  least `record_seconds` after the alarm, rather than inferring it from clip duration —
+  duration at one-second segments is dominated by ffmpeg startup jitter, which would make
+  the test flaky while appearing to check the right thing.
+
+### `Watchdog.arm()` — why it is not `manual_rearm()`
+
+Building the entrypoint exposed that the watchdog had no way to be armed: `manual_rearm`
+was the only path back from OFF, and it clears the 24 h auto-resume budget. Using it for an
+ordinary `enable` would mean disable-then-enable is a budget reset, so a persistently
+overloaded box would go back to shedding guard every few minutes forever — the exact loop
+the budget exists to prevent. `arm()` therefore preserves the budget and **refuses** while
+`awaiting_manual_rearm` is set, because that flag means a human needs to look and `enable`
+is not that decision. TC-GWD-21 and TC-GWD-22.
+
+Related: `Watchdog.current_flags` reads the flags without ticking. The obvious alternative —
+`tick().flags` — advances the state machine, and a tick with no readings looks like "disk
+fine, ring healthy, view usable", so publishing a state message would clear
+`segments_stalled` and `limited_visibility` as a side effect of reporting them. TC-GWD-23.
+
+---
+
+## 13. Two decisions to keep out of commit messages
+
+Both were judgement calls rather than consequences of the spec, so they are recorded here
+where they can be argued with later.
+
+### Guard WS events are NOT marked INTERNAL
+
+Step 6 (the guard admin screen) was cancelled and merged into UI v2, so step 5 shipped the
+complete event contract with no frontend handlers. The WS drift guard wanted them
+classified, and `INTERNAL_EVENTS` was the easy answer.
+
+It would also have been a lie that never gets corrected. `INTERNAL` means "no UI will ever
+consume this", and these five events exist *specifically* for UI v2 to consume. Marked
+internal, the drift guard would stay green even after UI v2 shipped without handlers — the
+one thing it exists to catch.
+
+Instead `PENDING_FRONTEND_EVENTS` records the real state (declared, awaiting a consumer),
+and `test_pending_frontend_events_are_not_yet_handled` **fails the moment a handler
+appears**, forcing the entry to be deleted. That failure is the feature: it is what stops
+the list quietly becoming a graveyard of permanently exempted events.
+
+### Labelling is `require_any_role`, not admin
+
+Arming, re-arming and config changes are admin or `monitor_control`. Labelling an alarm
+correct or false is open to any operator role, deliberately.
+
+The reasoning is about who is actually looking. The person who recognises a gull on the
+stern rail is usually whoever is watching the screen, and that is often a `monitor`.
+Requiring an admin would mean labels get written later, by someone who did not see it, or
+not at all — and the labels are the entire accuracy dataset for Phase 2. The cost of a
+wrong label is low and re-labelling is allowed, because a second look is legitimate; the
+cost of no labels is a tuning decision with nothing to tune against.
+
+This is a genuine widening of write access and worth revisiting if the marina's staffing
+changes. It is not a hidden control: the backend enforces the split, and reading the review
+queue was never restricted.

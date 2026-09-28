@@ -1,3 +1,64 @@
+# Implementation Status - Guard worker ENTRYPOINT built; worker now starts (Stage B closed)
+
+## 2026-09-28 - the gap that 803 green tests did not catch
+
+`guard_worker/__main__.py` DID NOT EXIST. Steps 1-5 were reported complete on the basis that
+every component existed and was unit-tested; nothing checked that they compose into a
+running process. The unit's `ExecStart=... -m guard_worker` could not have started, so the
+backend half would have reported UNAVAILABLE forever.
+
+**Reporting rule from now on:** a step is done when it has been *started* or *exercised end
+to end*, and the report says which of the two. "Components exist" is not done.
+
+### Built
+- [DONE] `guard_worker/__main__.py` (NEW, ~700 lines) - the worker process. Single-threaded
+  loop; MQTT on paho's network thread with commands QUEUED and applied by the main loop
+  (arming inside a network callback would start ffmpeg and load a model on paho's thread -
+  a wedged client that still looks connected but stops heartbeating). LWT on `guard/state`
+  set before connect. Always comes up OFF and waits for the backend: desired state lives in
+  the backend, so a watchdog-suspended guard cannot rearm itself just by restarting.
+- [DONE] **Deferred clip assembly** - a real bug found while wiring it. `select_segments`
+  spans `alarm_at + record_seconds`, and that footage does not exist when the alarm fires;
+  assembling immediately yields a pre-roll-only clip AND REPORTS SUCCESS. Now: alarm
+  publishes at once, segments are pinned, the clip is assembled and published on
+  `guard/recording` after the post-roll. `video_skipped` is reserved for "no clip will ever
+  arrive" (no_disk / assembly_failed), distinct from "a clip is coming".
+- [DONE] `Watchdog.arm()` (NEW) - the watchdog had NO way to be armed; `manual_rearm` was
+  the only path back from OFF and it clears the 24 h auto-resume budget. `arm()` preserves
+  the budget and refuses while `awaiting_manual_rearm` is set. Plus `current_flags`, which
+  reads flags WITHOUT ticking - `tick().flags` would have cleared `segments_stalled` and
+  `limited_visibility` as a side effect of publishing the state that reports them.
+- [DONE] `guard_worker/requirements.txt` (NEW) - the guard venv needs `paho-mqtt`, which the
+  B1 venv spec omitted. Ranges not exact pins (3.14 has no cp-exact wheels), wheels only.
+- [DONE] `CameraCapture(input_args=...)` exposed - `build_capture_command` already supported
+  it; the class did not, so the assembled worker could only ever run against the real camera.
+- [DONE] `resolve_ffmpeg()` / `resolve_ffprobe()` in capture.py - honour GUARD_FFMPEG /
+  GUARD_FFPROBE, and derive ffprobe as a suffix-preserving sibling. Previously 5 tests
+  skipped on a box where ffmpeg was installed but not on PATH, and duration came back None
+  on Windows so every duration assertion there was vacuous.
+
+### Tests — the structural fix
+- [DONE] `tests/backend/test_guard_worker_smoke.py` (NEW, TC-GSMOKE-01..07) - boots the REAL
+  `run()` loop and the REAL `python -m guard_worker`. Substitutes exactly two things: the
+  broker (a recording fake) and the detector (no 32-bit openvino wheel). 04 sends a real
+  graceful signal to a real subprocess and asserts exit 0 plus a final OFF. 05 drives
+  arm -> ffmpeg -> pipeline -> alarm -> deferred clip against a synthetic H.264 source, and
+  measures the deferral (recording arrives >= record_seconds after the alarm) rather than
+  inferring it from duration, which at 1 s segments is startup jitter.
+- [DONE] TC-GIS-06/07 - the entrypoint imports paho/numpy/PIL lazily, and
+  `python -m guard_worker` exists at all. 07 is the check whose absence allowed this.
+- [DONE] TC-GWD-21/22/23 - arm() budget, arm() refusal, current_flags does not tick.
+- [DONE] `tests/run_tests.sh` - finds ffmpeg itself (winget/scoop/PATH) and PRINTS THE SKIP
+  COUNT with reasons. A green run with skipped tests is not a green run.
+
+### Result (measured, not asserted)
+- **816 passed, 1 skipped** with ffmpeg available. The 1 skip is TC-GCAP-19's real-camera
+  ring test, unanswerable off the marina LAN (needs GUARD_TEST_RTSP_URL).
+- Without ffmpeg: 809 passed, 8 skipped. The commit gate now finds ffmpeg, so it sees 816/1.
+- NOT yet run on the NUC. Nothing here has been deployed.
+
+---
+
 # Implementation Status - Guard Stage B step 2 DONE (pipeline + alarm rule)
 
 ## 2026-09-26 - Step 1 ACCEPTED on the NUC (TC-GCAP-19 green, 24 passed). Step 2 complete.

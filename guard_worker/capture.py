@@ -122,12 +122,52 @@ class FfmpegNotAvailable(RuntimeError):
     deployment condition rather than a theoretical one."""
 
 
+def resolve_ffmpeg() -> str | None:
+    """GUARD_FFMPEG if set and usable, otherwise whatever is on PATH, otherwise None.
+
+    The environment override comes first because that is the same order the unit uses: it
+    runs with ProtectSystem=strict and points at an absolute path rather than trusting the
+    caller's PATH. Honouring it here too means a box where ffmpeg is installed but not on
+    PATH behaves consistently — previously the ffmpeg-gated tests skipped on such a box
+    while production ran fine, so five checks quietly went unanswered.
+    """
+    override = os.environ.get("GUARD_FFMPEG")
+    if override:
+        if Path(override).is_file() or shutil.which(override):
+            return override
+        logger.warning("GUARD_FFMPEG=%s is not an executable; falling back to PATH",
+                       override)
+    return shutil.which("ffmpeg")
+
+
+def resolve_ffprobe(ffmpeg: str | None = None) -> str | None:
+    """ffprobe, preferring the one shipped alongside the ffmpeg actually in use.
+
+    The sibling lookup keeps the pair matched: probing a file with a much older ffprobe than
+    the ffmpeg that wrote it is a way to get confusing answers about durations and codecs.
+    The suffix is carried over from the ffmpeg path — deriving a bare `ffprobe` next to
+    `ffmpeg.exe` finds nothing, so duration silently came back None on Windows and every
+    duration assertion there was vacuous.
+    """
+    override = os.environ.get("GUARD_FFPROBE")
+    if override and (Path(override).is_file() or shutil.which(override)):
+        return override
+    base = ffmpeg or resolve_ffmpeg()
+    if base:
+        sibling = Path(base)
+        candidate = sibling.with_name("ffprobe" + sibling.suffix)
+        if candidate.is_file():
+            return str(candidate)
+    return shutil.which("ffprobe")
+
+
 def _require_ffmpeg() -> str:
-    exe = shutil.which("ffmpeg")
+    exe = resolve_ffmpeg()
     if exe is None:
         raise FfmpegNotAvailable(
-            "ffmpeg not found on PATH. Install it (`sudo apt install -y ffmpeg`) — it is "
-            "missing from nuc_image/ubuntu-install.sh."
+            "ffmpeg not found on PATH and GUARD_FFMPEG is unset. Install it "
+            "(`sudo apt install -y ffmpeg`) — it is missing from "
+            "nuc_image/ubuntu-install.sh."
         )
     return exe
 
@@ -408,6 +448,7 @@ class CameraCapture:
         jpeg_quality: int = 3,
         ffmpeg: str | None = None,
         stderr_lines: int = 200,
+        input_args: list[str] | None = None,
     ):
         self.stream_url = stream_url
         self.segment_dir = Path(segment_dir)
@@ -416,6 +457,11 @@ class CameraCapture:
         self.segment_ring = segment_ring
         self.rtsp_transport = rtsp_transport
         self.jpeg_quality = jpeg_quality
+        # Replaces the RTSP-specific input flags, so the worker can be exercised end to end
+        # against a pre-encoded file instead of the camera. `build_capture_command` already
+        # supported this; `CameraCapture` did not expose it, which meant the assembled
+        # worker could only ever be run against the real camera on the marina LAN.
+        self.input_args = input_args
         # An absolute path from config is preferable to relying on PATH: the unit runs
         # with ProtectSystem=strict, and a service should not depend on the caller's
         # environment for the binary it executes.
@@ -443,7 +489,7 @@ class CameraCapture:
             self.stream_url, self.segment_dir,
             fps=self.fps, segment_seconds=self.segment_seconds,
             rtsp_transport=self.rtsp_transport, jpeg_quality=self.jpeg_quality,
-            ffmpeg=self.ffmpeg,
+            ffmpeg=self.ffmpeg, input_args=self.input_args,
         )
 
     def start(self) -> None:

@@ -57,8 +57,35 @@ if ! python -m pytest --version &>/dev/null; then
     pip install pytest pytest-asyncio httpx starlette --quiet
 fi
 
-python -m pytest tests/backend/ -v --tb=short --no-header -W ignore::DeprecationWarning "$@"
-PYTEST_EXIT=$?
+# ── ffmpeg for the guard tests ────────────────────────────────────────────────
+# Seven guard tests need a real ffmpeg, including the two smoke tests that drive the
+# worker's full armed path. They resolve it via GUARD_FFMPEG or PATH, exactly as the
+# worker does. Finding it here rather than leaving them skipped matters: a skipped test
+# is an unanswered question, and on this dev box ffmpeg is installed but not on PATH.
+if [ -z "${GUARD_FFMPEG:-}" ] && ! command -v ffmpeg &>/dev/null; then
+    for candidate in \
+        "$LOCALAPPDATA/Microsoft/WinGet/Links/ffmpeg.exe" \
+        "$HOME/AppData/Local/Microsoft/WinGet/Packages"/Gyan.FFmpeg*/*/bin/ffmpeg.exe \
+        "$HOME/scoop/shims/ffmpeg.exe" \
+        /c/ffmpeg/bin/ffmpeg.exe \
+        /usr/bin/ffmpeg /usr/local/bin/ffmpeg
+    do
+        if [ -f "$candidate" ]; then
+            export GUARD_FFMPEG="$candidate"
+            echo -e "  ${CYAN}ffmpeg: $candidate${NC}"
+            break
+        fi
+    done
+fi
+if [ -z "${GUARD_FFMPEG:-}" ] && ! command -v ffmpeg &>/dev/null; then
+    echo -e "  ${YELLOW}[!] no ffmpeg found — 7 guard tests will SKIP, including the"
+    echo -e "      worker smoke tests that exercise capture -> alarm -> clip.${NC}"
+fi
+
+PYTEST_LOG="${LOG_DIR}/pytest_last.log"
+python -m pytest tests/backend/ -v --tb=short --no-header -rs \
+    -W ignore::DeprecationWarning "$@" 2>&1 | tee "$PYTEST_LOG"
+PYTEST_EXIT=${PIPESTATUS[0]}
 rm -f tests/test_pedestal.db tests/test_users.db
 
 echo ""
@@ -67,6 +94,14 @@ if [ $PYTEST_EXIT -eq 0 ]; then
 else
     echo -e "${RED}[✘] pytest FAILED — fix before committing${NC}"
     OVERALL_EXIT=1
+fi
+
+# Say the skip count out loud. A green run with skipped tests is not the same as a green
+# run, and the difference is invisible in the summary line unless it is named.
+SKIPPED=$(grep -cE "^SKIPPED " "$PYTEST_LOG" 2>/dev/null || echo 0)
+if [ "${SKIPPED:-0}" -gt 0 ]; then
+    echo -e "${YELLOW}[!] ${SKIPPED} test(s) SKIPPED — unanswered, not passed:${NC}"
+    grep -E "^SKIPPED " "$PYTEST_LOG" | sed 's/^/      /'
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════

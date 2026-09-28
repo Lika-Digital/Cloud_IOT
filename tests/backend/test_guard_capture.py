@@ -68,13 +68,22 @@ from guard_worker.capture import (
     iter_jpeg_frames,
     list_segments,
     prune_segments,
+    resolve_ffmpeg,
+    resolve_ffprobe,
     write_concat_list,
 )
 
-HAVE_FFMPEG = shutil.which("ffmpeg") is not None
+# Resolved the same way production does, GUARD_FFMPEG included: a box with ffmpeg
+# installed but not on PATH used to skip five tests while the worker ran fine there.
+HAVE_FFMPEG = resolve_ffmpeg() is not None
+# The binary every test uses, whether it only builds a command string or actually runs
+# one. No test asserts on argv[0], so using the resolved path throughout costs nothing
+# and stops the executing tests from failing on a box where ffmpeg is not on PATH.
+FFMPEG = resolve_ffmpeg() or "ffmpeg"
+FFPROBE = resolve_ffprobe(FFMPEG) or "ffprobe"
 needs_ffmpeg = pytest.mark.skipif(
     not HAVE_FFMPEG,
-    reason="ffmpeg not on PATH (absent from the NUC installer; run these on the NUC)",
+    reason="no ffmpeg (set GUARD_FFMPEG or put it on PATH; absent from the NUC installer)",
 )
 
 URL = "rtsp://admin:secret@192.168.1.191:554/profile1"
@@ -98,7 +107,7 @@ def _make_segments(d: Path, n: int, start: int = 0) -> list[Path]:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def test_tc_gcap_01_no_audio_data_or_subtitles_on_any_output(tmp_path):
-    cmd = build_capture_command(URL, tmp_path, fps=1, segment_seconds=10, ffmpeg="ffmpeg")
+    cmd = build_capture_command(URL, tmp_path, fps=1, segment_seconds=10, ffmpeg=FFMPEG)
 
     # Two outputs → each exclusion must appear twice, once per output.
     assert cmd.count("-an") == 2, "audio must be refused on BOTH outputs"
@@ -116,7 +125,7 @@ def test_tc_gcap_01_no_audio_data_or_subtitles_on_any_output(tmp_path):
 
 def test_tc_gcap_02_single_input_two_outputs(tmp_path):
     """One RTSP session is the constraint; two outputs from one input is how it is met."""
-    cmd = build_capture_command(URL, tmp_path, fps=1, segment_seconds=10, ffmpeg="ffmpeg")
+    cmd = build_capture_command(URL, tmp_path, fps=1, segment_seconds=10, ffmpeg=FFMPEG)
     assert cmd.count("-i") == 1, "more than one -i would open a second RTSP session"
     assert cmd[-1] == "pipe:1"
     assert any(str(tmp_path) in a for a in cmd), "segment output missing"
@@ -124,7 +133,7 @@ def test_tc_gcap_02_single_input_two_outputs(tmp_path):
 
 def test_tc_gcap_03_segments_are_mpegts_not_mp4(tmp_path):
     """MP4 killed mid-write is a 0-byte unplayable file. See TC-GCAP-14."""
-    cmd = build_capture_command(URL, tmp_path, fps=1, segment_seconds=10, ffmpeg="ffmpeg")
+    cmd = build_capture_command(URL, tmp_path, fps=1, segment_seconds=10, ffmpeg=FFMPEG)
     assert SEGMENT_FORMAT == "mpegts"
     i = cmd.index("-segment_format")
     assert cmd[i + 1] == "mpegts"
@@ -138,13 +147,13 @@ def test_tc_gcap_03_segments_are_mpegts_not_mp4(tmp_path):
 def test_tc_gcap_04_monotonic_names_not_segment_wrap(tmp_path):
     """-segment_wrap would overwrite a segment an in-progress alarm clip still needs,
     which is exactly what pinning (TC-GCAP-13) exists to prevent."""
-    cmd = build_capture_command(URL, tmp_path, fps=1, segment_seconds=10, ffmpeg="ffmpeg")
+    cmd = build_capture_command(URL, tmp_path, fps=1, segment_seconds=10, ffmpeg=FFMPEG)
     assert "-segment_wrap" not in cmd
 
 
 @pytest.mark.parametrize("fps", [1, 2, 0.5])
 def test_tc_gcap_05_frame_output_honours_fps(tmp_path, fps):
-    cmd = build_capture_command(URL, tmp_path, fps=fps, segment_seconds=10, ffmpeg="ffmpeg")
+    cmd = build_capture_command(URL, tmp_path, fps=fps, segment_seconds=10, ffmpeg=FFMPEG)
     i = cmd.index("-vf")
     assert cmd[i + 1] == f"fps={fps}"
     assert "image2pipe" in cmd
@@ -154,7 +163,7 @@ def test_tc_gcap_05_frame_output_honours_fps(tmp_path, fps):
 def test_tc_gcap_06_concat_command_is_copy_and_audio_free(tmp_path):
     cmd = build_concat_command(
         ["a.ts", "b.ts"], tmp_path / "l.txt", tmp_path / "out.mp4",
-        max_seconds=60, ffmpeg="ffmpeg",
+        max_seconds=60, ffmpeg=FFMPEG,
     )
     assert "-an" in cmd and "-dn" in cmd
     assert cmd[cmd.index("-c:v") + 1] == "copy", "assembly must not re-encode"
@@ -163,7 +172,7 @@ def test_tc_gcap_06_concat_command_is_copy_and_audio_free(tmp_path):
     assert cmd[-1].endswith("out.mp4")
 
     no_cap = build_concat_command(["a.ts"], tmp_path / "l.txt", tmp_path / "o.mp4",
-                                  ffmpeg="ffmpeg")
+                                  ffmpeg=FFMPEG)
     assert "-t" not in no_cap
 
     # EXPLICIT output format, and it must precede the output path.
@@ -174,7 +183,7 @@ def test_tc_gcap_06_concat_command_is_copy_and_audio_free(tmp_path):
     # inferred, deliberately — relying on extension inference is what broke.
     part_out = tmp_path / "2026-09-27T14-32-07Z.mp4.part"
     cmd_part = build_concat_command(["a.ts"], tmp_path / "l.txt", part_out,
-                                    max_seconds=60, ffmpeg="ffmpeg")
+                                    max_seconds=60, ffmpeg=FFMPEG)
     fmt_positions = [i for i, a in enumerate(cmd_part)
                      if a == "-f" and cmd_part[i + 1] == "mp4"]
     assert fmt_positions, (
@@ -204,7 +213,7 @@ def test_tc_gcap_08_credentials_never_logged(tmp_path):
     assert _redact("-an") == "-an"
     assert _redact("rtsp://192.168.1.191/profile1") == "rtsp://192.168.1.191/profile1"
 
-    cap = CameraCapture(URL, tmp_path, ffmpeg="ffmpeg")
+    cap = CameraCapture(URL, tmp_path, ffmpeg=FFMPEG)
     assert "secret" not in " ".join(_redact(a) for a in cap.command())
 
 
@@ -293,7 +302,7 @@ def ffmpeg_version() -> str:
     on this test. Observed on marina-iot: **ffmpeg 8.0.1-3ubuntu2 (2026-09-26)**.
     """
     try:
-        out = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True,
+        out = subprocess.run([FFMPEG, "-version"], capture_output=True, text=True,
                              timeout=30)
         return out.stdout.splitlines()[0] if out.stdout else "unknown"
     except Exception:
@@ -309,7 +318,7 @@ def decoded_frame_count(path: Path) -> int | None:
     """
     try:
         out = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
+            [FFPROBE, "-v", "error", "-select_streams", "v:0", "-count_frames",
              "-show_entries", "stream=nb_read_frames",
              "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
             capture_output=True, text=True, timeout=120,
@@ -333,7 +342,7 @@ def _make_h264_source(tmp_path: Path, seconds: int = 40) -> Path:
     """
     src = tmp_path / "source.mp4"
     subprocess.run(
-        ["ffmpeg", "-hide_banner", "-loglevel", "error",
+        [FFMPEG, "-hide_banner", "-loglevel", "error",
          "-f", "lavfi", "-i", f"testsrc=size=320x240:rate=25",
          "-t", str(seconds), "-c:v", "libx264", "-preset", "ultrafast",
          "-g", "25", "-an", "-y", str(src)],
@@ -354,7 +363,7 @@ def _run_ring_until_killed(tmp_path: Path, source: Path, *, segment_seconds: int
     seg_dir.mkdir(exist_ok=True)
     cmd = build_capture_command(
         str(source), seg_dir,
-        fps=1, segment_seconds=segment_seconds, ffmpeg="ffmpeg",
+        fps=1, segment_seconds=segment_seconds, ffmpeg=FFMPEG,
         # -re throttles the file read to realtime, standing in for a live 25 fps source.
         input_args=["-re"],
     )
@@ -476,7 +485,7 @@ def test_tc_gcap_18_why_mpegts_and_not_mp4_segments(tmp_path):
     for fmt, suffix in (("mpegts", ".ts"), ("mp4", ".mp4")):
         out = tmp_path / f"single_{fmt}{suffix}"
         proc = subprocess.Popen(
-            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-re", "-i", str(src),
+            [FFMPEG, "-hide_banner", "-loglevel", "error", "-re", "-i", str(src),
              "-map", "0:v:0", "-an", "-dn", "-sn", "-c:v", "copy",
              "-f", fmt, "-y", str(out)],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
@@ -522,7 +531,7 @@ def test_tc_gcap_15_real_capture_yields_segments_and_frames(tmp_path):
     src = _make_h264_source(tmp_path, seconds=20)
     cmd = build_capture_command(
         str(src), seg_dir,
-        fps=2, segment_seconds=1, ffmpeg="ffmpeg", input_args=["-re"],
+        fps=2, segment_seconds=1, ffmpeg=FFMPEG, input_args=["-re"],
     )
     assert "-rtsp_transport" not in cmd
 
@@ -593,7 +602,7 @@ def test_tc_gcap_19_real_camera_ring_survives_sigkill(tmp_path):
     # The real command, unmodified: RTSP flags, -c:v copy, segment muxer, MJPEG frames.
     cap = CameraCapture(
         RTSP_URL_ENV, seg_dir,
-        fps=1, segment_seconds=5, segment_ring=6, ffmpeg="ffmpeg",
+        fps=1, segment_seconds=5, segment_ring=6, ffmpeg=FFMPEG,
     )
     cap.start()
 
@@ -715,7 +724,7 @@ def test_tc_gcap_19_real_camera_ring_survives_sigkill(tmp_path):
     # wrongly read it as duplication. Asking for index alongside codec_type makes the
     # distinction visible instead of guessable.
     probe = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "stream=index,codec_type",
+        [FFPROBE, "-v", "error", "-show_entries", "stream=index,codec_type",
          "-of", "csv=p=0", str(complete[0])],
         capture_output=True, text=True, timeout=60,
     )
@@ -784,7 +793,7 @@ HTTP_ONLY_INPUT_OPTIONS = (
 
 
 def test_tc_gcap_20_no_http_only_options_on_rtsp_input(tmp_path):
-    cmd = build_capture_command(URL, tmp_path, fps=1, segment_seconds=10, ffmpeg="ffmpeg")
+    cmd = build_capture_command(URL, tmp_path, fps=1, segment_seconds=10, ffmpeg=FFMPEG)
     for opt in HTTP_ONLY_INPUT_OPTIONS:
         assert opt not in cmd, (
             f"{opt} is an HTTP/TCP protocol option and is INVALID for an RTSP input. "
@@ -799,9 +808,9 @@ def test_tc_gcap_21_nostdin_is_always_present(tmp_path):
     """Without -nostdin ffmpeg reads the terminal: it wedged an interactive shell during
     field testing, and under systemd it risks blocking on an stdin that never delivers."""
     capture = build_capture_command(URL, tmp_path, fps=1, segment_seconds=10,
-                                    ffmpeg="ffmpeg")
+                                    ffmpeg=FFMPEG)
     concat = build_concat_command(["a.ts"], tmp_path / "l.txt", tmp_path / "o.mp4",
-                                  ffmpeg="ffmpeg")
+                                  ffmpeg=FFMPEG)
     for name, cmd in (("capture", capture), ("concat", concat)):
         assert "-nostdin" in cmd, f"{name} command is missing -nostdin"
         # Must be a global option, i.e. ahead of the input.
@@ -899,7 +908,7 @@ def test_tc_gcap_24_timestamp_options_present(tmp_path):
     RTSP source that omits timestamps: unlike +genpts it guarantees a value on every packet,
     and being a demuxer option it still applies under -c:v copy.
     """
-    cmd = build_capture_command(URL, tmp_path, fps=1, segment_seconds=10, ffmpeg="ffmpeg")
+    cmd = build_capture_command(URL, tmp_path, fps=1, segment_seconds=10, ffmpeg=FFMPEG)
 
     i = cmd.index("-use_wallclock_as_timestamps")
     assert cmd[i + 1] == "1"
@@ -922,7 +931,7 @@ def test_tc_gcap_25_stderr_is_drained_continuously(tmp_path):
     freezes silently after days, with no error anywhere. The original implementation read
     the pipe only on exit, which is exactly that bug.
     """
-    cap = CameraCapture(URL, tmp_path, ffmpeg="ffmpeg", stderr_lines=5)
+    cap = CameraCapture(URL, tmp_path, ffmpeg=FFMPEG, stderr_lines=5)
 
     # Callable before start, and empty rather than raising.
     assert cap.recent_stderr() == []
@@ -951,11 +960,11 @@ def test_tc_gcap_26_no_deprecations_on_a_synthetic_run(tmp_path):
     seg_dir = tmp_path / "segments"
     seg_dir.mkdir()
     cap = CameraCapture(
-        str(src), seg_dir, fps=1, segment_seconds=2, ffmpeg="ffmpeg",
+        str(src), seg_dir, fps=1, segment_seconds=2, ffmpeg=FFMPEG,
     )
     # A file source needs -re instead of the RTSP flags; everything else is production.
     cap.command = lambda: build_capture_command(  # type: ignore[method-assign]
-        str(src), seg_dir, fps=1, segment_seconds=2, ffmpeg="ffmpeg",
+        str(src), seg_dir, fps=1, segment_seconds=2, ffmpeg=FFMPEG,
         input_args=["-re"],
     )
     cap.start()
@@ -992,7 +1001,7 @@ def test_tc_gcap_27_accepted_deprecation_is_scoped_not_disabled(tmp_path):
     """
     from guard_worker.capture import ACCEPTED_DEPRECATIONS
 
-    cap = CameraCapture(URL, tmp_path, ffmpeg="ffmpeg")
+    cap = CameraCapture(URL, tmp_path, ffmpeg=FFMPEG)
     known = ("[segment @ 0x55] Timestamps are unset in a packet for stream 0. "
              "This is deprecated and will stop working in the future.")
     novel = "[out#0/mp4] The frobnicator option is deprecated and will be removed"

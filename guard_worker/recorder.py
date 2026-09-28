@@ -268,12 +268,10 @@ class ClipAssembler:
 
 
 def _probe_duration(path: Path, ffmpeg: str | None = None) -> float | None:
-    ffprobe = "ffprobe"
-    if ffmpeg and ffmpeg != "ffmpeg":
-        candidate = Path(ffmpeg).with_name("ffprobe")
-        if candidate.exists():
-            ffprobe = str(candidate)
-    if shutil.which(ffprobe) is None and not Path(ffprobe).exists():
+    from .capture import resolve_ffprobe
+
+    ffprobe = resolve_ffprobe(ffmpeg)
+    if ffprobe is None:
         return None
     try:
         out = subprocess.run(

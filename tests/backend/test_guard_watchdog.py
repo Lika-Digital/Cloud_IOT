@@ -36,6 +36,9 @@ filling a disk.
   TC-GWD-18  disk_reading returns None for a missing path (not a disk problem)
   TC-GWD-19  the verdict describes ONLY guard — nothing else can be shed
   TC-GWD-20  CPU limit tripping MID-ASSEMBLY leaves no half clip and no stuck pin
+  TC-GWD-21  arm() preserves the auto-resume budget; only rearm() clears it
+  TC-GWD-22  arm() is refused while awaiting a manual re-arm
+  TC-GWD-23  reading current_flags does NOT advance the state machine
 """
 from __future__ import annotations
 
@@ -445,3 +448,86 @@ def test_tc_gwd_20_cpu_suspension_mid_assembly_leaves_no_half_clip(tmp_path, mon
     # 4. And the recovery path works: a human re-arms, and guard is usable again.
     assert _events(wd.manual_rearm(now=1_000.0)) == ["rearmed"]
     assert wd.state == STATE_ARMED
+
+
+# ─── TC-GWD-21 .. TC-GWD-23 — arm(), added with the worker entrypoint ─────────
+#
+# These exist because building the entrypoint exposed that the watchdog had no way to be
+# ARMED at all: `manual_rearm` was the only path back from OFF, and it clears the
+# auto-resume budget. Using it for an ordinary `enable` would have quietly given an operator
+# an unlimited budget just by disabling and re-enabling.
+
+def test_tc_gwd_21_arm_preserves_the_auto_resume_budget():
+    """`enable` must NOT hand back the auto-resume allowance; only `rearm` does.
+
+    Otherwise disable-then-enable is a budget reset, and a persistently overloaded box goes
+    back to shedding guard every few minutes forever — the exact loop the budget prevents.
+    """
+    wd = Watchdog(WatchdogConfig(cpu_limit=60.0, cpu_resume=45.0, resume_after_s=300.0,
+                                 max_auto_resumes=2, window_s=60.0))
+    # Burn one auto-resume: overload, then sustained quiet.
+    _feed(wd, 0.0, 90.0, 120.0)
+    assert wd.state == STATE_SUSPENDED_CPU
+    _feed(wd, 200.0, 10.0, 400.0)
+    assert wd.state == STATE_ARMED
+    assert wd.auto_resumes_used(700.0) == 1
+
+    wd.disarm()
+    assert wd.state == STATE_OFF
+    events = _events(wd.arm())
+    assert events == ["armed"], f"expected a single armed transition, got {events}"
+    assert wd.state == STATE_ARMED
+    assert wd.auto_resumes_used(700.0) == 1, (
+        "arm() reset the auto-resume budget; that is what rearm is for, and letting enable "
+        "do it makes the budget meaningless"
+    )
+
+
+def test_tc_gwd_22_arm_is_refused_while_awaiting_a_manual_rearm():
+    """Once the machine has given up resuming itself, `enable` is not the answer.
+
+    The flag means "a human needs to look". Arming on `enable` would let the UI's ordinary
+    toggle bypass that, and guard would be suspended again within the minute — which reads
+    to the operator as guard being broken rather than the box being overloaded.
+    """
+    wd = Watchdog(WatchdogConfig(cpu_limit=60.0, cpu_resume=45.0, resume_after_s=300.0,
+                                 max_auto_resumes=1, window_s=60.0))
+    _feed(wd, 0.0, 90.0, 120.0)
+    _feed(wd, 200.0, 10.0, 400.0)          # spends the only auto-resume
+    _feed(wd, 700.0, 90.0, 120.0)          # overloaded again -> suspended
+    _feed(wd, 900.0, 10.0, 400.0)          # quiet, but the budget is gone
+    assert wd.state == STATE_SUSPENDED_CPU
+    assert FLAG_AWAITING_MANUAL_REARM in wd.current_flags
+
+    events = _events(wd.arm())
+    assert events == ["arm_refused"], f"arm() should refuse, got {events}"
+    assert wd.state == STATE_SUSPENDED_CPU, "a refused arm must not change the state"
+
+    # And the documented way out still works.
+    assert _events(wd.manual_rearm(now=1_400.0)) == ["rearmed"]
+    assert wd.state == STATE_ARMED
+    assert FLAG_AWAITING_MANUAL_REARM not in wd.current_flags
+
+
+def test_tc_gwd_23_current_flags_does_not_advance_the_machine():
+    """Reading the flags must not be a tick.
+
+    The worker publishes state on every transition, and the obvious way to fill in `flags`
+    is `tick().flags`. But a tick with no readings looks like "disk fine, ring healthy, view
+    usable", so publishing a state message would CLEAR segments_stalled and
+    limited_visibility as a side effect — the flag would vanish from the very message meant
+    to report it.
+    """
+    wd = Watchdog(WatchdogConfig(window_s=60.0))
+    wd.tick(now=0.0, segments_stalled=True, stall_reason="no new segments",
+            limited_visibility=True, **HEALTHY_DISK)
+    assert FLAG_SEGMENTS_STALLED in wd.current_flags
+    assert FLAG_LIMITED_VISIBILITY in wd.current_flags
+    state_before = wd.state
+
+    for _ in range(5):
+        flags = wd.current_flags
+
+    assert FLAG_SEGMENTS_STALLED in flags, "reading the flags cleared segments_stalled"
+    assert FLAG_LIMITED_VISIBILITY in flags, "reading the flags cleared limited_visibility"
+    assert wd.state == state_before, "reading the flags changed the state"

@@ -1,8 +1,40 @@
 # Access-control plan — NFC, QR and smart mode, as one change
 
-**Date:** 2026-09-28 · **Status:** for approval. **No code written.**
-**Reads with:** `docs/nfc_qr_access_audit.md` (findings + your addendum),
+**Date:** 2026-09-29 (rev 2) · **Status:** for approval. §1 is **implemented and committed**;
+everything else awaits decisions.
+**Reads with:** `docs/nfc_qr_access_audit.md` (findings + addendum),
 `docs/ui_v2_audit.md §1 Rule 6b` (smart mode).
+
+---
+
+## The two supported topologies
+
+Both stay. Everything in this plan is written against both, because the same endpoint means
+different things in each.
+
+| | **MODE 1 — with ERP** (primary, ships first) | **MODE 2 — without ERP** |
+|---|---|---|
+| Flow | app → ERP → pedestal | app → pedestal directly |
+| Who bills | **ERP** | **the pedestal** |
+| What our session rows are | measurement and reconciliation data | **the billing record — there is nothing else** |
+| Setting | `nfc_direct_client_mode = False` (default) | `nfc_direct_client_mode = True` |
+
+The consequence that governs the rest of this document: **in MODE 2 a session row is a
+financial record.** Reading or altering someone else's is not a privacy problem, it is
+tampering. In MODE 1 the same act corrupts reconciliation instead, and does so *silently*,
+because the two systems only ever compare totals.
+
+### Engineering note — the lesson, recorded
+
+> **An authentication check answers "who is this". It never answers "may this caller touch
+> this record".** And a boundary is only as good as who holds the credential: a machine key
+> compiled into a mobile app bundle is not a machine key, it is a public one.
+
+This is the same family as `docs/guard_b1_design.md §14` (a predicate a retained replay can
+satisfy is not a liveness check): in both cases a check existed, was correct on its own terms,
+and answered a different question from the one that mattered. The guard for both is a **scan
+over the real surface** rather than more assertions — `TC-OAZ-01` here, the WS catalog drift
+guard there.
 
 One change, because these are the same defect wearing three hats: a control that decides
 physical access or who pays is sitting in the operations tier instead of the installation
@@ -48,7 +80,7 @@ That is the finding, and §1 is about it.
 
 ---
 
-## 1. **[DECIDE 1]** The ERP machine key is distributed to customer phones
+## 1. Object-level authorisation — **DONE, committed**
 
 `EXPO_PUBLIC_*` values are **compiled into the app bundle** by Expo — that is what the prefix
 means. So the static key that authenticates ERP is shipped to every customer who installs the
@@ -81,33 +113,149 @@ authorised for the specific record. That is independent of the key exposure and 
 fixing even if the key were server-only; the exposure is what turns it from an ERP-trust
 question into a customer-trust one.
 
-**My recommendation — two stages, and only the first is in this change:**
+### What the principal is in MODE 2 today — the answer that sized the fix
 
-**Stage 1, in this change (small, no app release needed):** add the object checks.
-- `/session/{id}` and `/session/{id}/stop`: require the session's `nfc_user_id` to match a
-  `user_id` supplied by the caller, and 404 (not 403) when it does not — a mismatched id
-  should not confirm that the session exists.
-- `/sessions/by-user/{user_id}`: unchanged in shape, but it becomes the *only* endpoint whose
-  contract is "trust the caller's claim about identity", and that is documented as such.
-- `/scan`: reject a `user_id` that does not look like an ERP user id, and log every scan with
-  the resolved tag, socket and claimed user so attribution disputes are answerable.
+You asked, because it decided whether this was small or needed Stage 2 first.
 
-**Stage 2, NOT in this change — needs your decision and an app release:** the mobile app stops
-holding the ERP key. The three customer-facing calls move to the customer's own Bearer token
-(the app already has one — `role="customer"`, 30-day expiry), and ownership is enforced from
-the token rather than a claimed `user_id`. `X-API-Key` then means what it says: genuine
-server-to-server ERP. The key should also be rotated, since the current one must be assumed
-known.
+**Server-side there is no per-customer principal: `require_erp_api_key` returns the key
+itself** (`auth/erp_api_key.py`), a single shared machine identity. Customer identity was
+entirely caller-asserted through the body.
 
-**[DECIDE 1]** — approve Stage 1 inside this change, and say whether Stage 2 becomes its own
-piece of work. I recommend yes, and soon, but it is an app release and a coordination with the
-ERP side, so it should not be smuggled into an access-control tightening.
+**But the correct principal was already on the wire.** The app's axios interceptor attaches
+`Authorization: Bearer <customer JWT>` to **every** request
+(`mobile/src/api/client.ts:19-20`), so the NFC calls carry *both* the machine key and a real
+customer token — and the backend was reading only the key. The identity the body claims is even
+derivable from it: the app sends `profile.email || String(profile.id)`
+(`mobile/app/(app)/scan.tsx:42`).
+
+So: **small fix, no app release.** Implemented and committed:
+
+| Endpoint | Now |
+|---|---|
+| `POST /scan` | identity from the principal; a disagreeing body `user_id` is **403**, refused loudly rather than silently corrected; resolved tag, socket and principal logged |
+| `GET /session/{id}` | **404** on a mismatch — a distinct 403 would confirm the record exists, which is all an enumeration of sequential ids needs |
+| `POST /session/{id}/stop` | same, and ownership is checked **before** the already-ended check, so a probe cannot learn the state of a session it does not own |
+| `GET /sessions/by-user/{id}` | **403** — the caller supplied the id, so refusing it plainly leaks nothing, and an empty list would read as "you have none" |
+
+Both identity spellings are accepted (email and `str(id)`), or the fix would lock customers out
+of their own sessions depending on which app version wrote the row.
+
+**And the bypass is closed where it matters.** Every check above assumes a token is present;
+omit the header and the caller falls back to being "the ERP". *A check an attacker opts out of
+by sending fewer headers is not a check.* So `nfc_direct_client_mode = True` (MODE 2) refuses
+the bare machine key outright. MODE 1 still accepts it, because there the caller really is
+ERP's server — and `TC-NFCA-09` documents that remaining boundary rather than pretending it is
+shut.
+
+Tests: `TC-NFCA-01..10` behavioural, `TC-OAZ-01..05` the route-table scan.
+
+### Stage 2 — still needed, and more urgent than I first said
+
+In MODE 2 the app is a **first-class client**, not a convenience wrapper around ERP. A
+first-class client needs a per-customer credential, not a shared machine key compiled into the
+bundle. So Stage 2 stands as its own work: the three customer-facing calls drop `X-API-Key`
+entirely, `require_erp_api_key` returns to meaning server-to-server, and MODE 2 marinas stop
+depending on a shared secret at all.
+
+**Rotate the current key regardless of when Stage 2 lands.** It has shipped in
+`EXPO_PUBLIC_*` and must be assumed known. Rotation is independent of the app change in MODE 1
+(where the app does not need the key) and blocks on it in MODE 2 (where it currently does) —
+which is itself an argument for doing Stage 2 sooner.
+
+**[DECIDE 1]** — confirm Stage 2 as its own piece of work, and whether the key rotation happens
+now or with it.
 
 > I should be straight about one thing: the audit did not catch this. It checked *who may
 > configure* NFC and *how the ERP path resolves*, which is what you asked, and it read
 > `require_erp_api_key` as an adequate boundary without asking what was behind it or who holds
 > the key. Finding it took reading the mobile client, which I only did because you told me to
 > establish whether `/scan` was live.
+
+---
+
+## 1b. Mode consequences — the five additions
+
+### (1) Mode awareness: is it configuration or inference?
+
+**Today it is neither — it does not exist.** Nothing in the system knows whether it is billing
+or merely measuring. `nfc_direct_client_mode` (added with §1) is the first time the question can
+be asked at all, and it is **explicit configuration**, not inferred.
+
+Inferring it was the tempting option and is wrong: the obvious signal is "is `erp_api_key`
+set?", but that is set in *both* modes today because the app uses it. A system that guesses
+whether it is the billing authority will guess wrong exactly once, and the consequence is a
+charge nobody can reconstruct.
+
+**[DECIDE 8]** — the mode should also be **visible**: surfaced in `/api/system/health` and in
+the admin UI as "this marina bills locally" / "ERP bills". An operator cannot reason about a
+disputed charge without knowing which system owns it. Confirm you want it exposed.
+
+### (2) MODE 2 session integrity, treated as financial data
+
+| Question | Today | Proposed |
+|---|---|---|
+| Who may **read** a session | any key holder | its owner (§1), or an operator |
+| Who may **stop** one | any key holder | its owner (§1), or an operator |
+| Can a **stopped** session be modified afterwards? | **yes — nothing prevents it** | no: `completed` is terminal for customer-facing paths |
+| Is the energy figure append-only? | `energy_kwh` is overwritten in place | see below |
+
+The third row is the gap §1 did not close. `nfc_session_stop` refuses to re-stop an ended
+session, but nothing stops *other* writers from amending a completed row, and in MODE 2 that row
+is an invoice line.
+
+There is already a partial answer in the schema: `energy_logged_kwh` is a high-water mark into
+`energy_intervals`, the 15-minute billing ledger, and that ledger is append-only. So the
+defensible position is **the ledger is the financial record and `sessions` is a mutable
+summary of it** — which is a coherent design, but it is currently undocumented and the NFC
+payload reports the summary, not the ledger.
+
+**[DECIDE 9]** — either (a) declare `energy_intervals` the financial record of truth, document
+it, and make the MODE 2 payload reconcile against it; or (b) make completed sessions immutable
+outside an explicit operator correction that is itself logged. I recommend **(a)** — the ledger
+already exists and already has the right properties; (b) adds a lock on top of data that is
+still a derived summary.
+
+### (3) MODE 1 divergence: can our records drift from ERP's unnoticed?
+
+**Today: yes, silently.** There is no comparison. Each side keeps its own totals and nothing
+asserts they agree. `GET /sessions/by-user/{id}` exists so ERP *can* reconcile, but nothing
+requires it to, and nothing on our side notices if it stops.
+
+Minimum to close it, and it is small because the data is already there:
+
+- an **operator-visible divergence view**: sessions with `nfc_user_id` set whose energy or
+  duration ERP has never acknowledged, oldest first;
+- **`last_reconciled_at`** stamped when ERP reads a session through `by-user` or
+  `session/{id}`, so "ERP has never looked at this" becomes a fact rather than an assumption;
+- an **alarm on silence** — if no reconciliation read arrives for N days while sessions are
+  being created, ERP integration is effectively down and the marina is billing nothing.
+
+That last one is the same shape as the guard liveness lesson: absence of a signal is
+information, and only becomes visible if something is watching for it.
+
+**[DECIDE 10]** — approve the three, and set N.
+
+### (4) Configuration of the direct path
+
+`nfc_direct_client_mode` is **marina-wide**, and I recommend keeping it that way: it describes
+whether an ERP exists at this site, which is a property of the deployment, not of a cabinet. A
+marina running both topologies simultaneously would mean two billing authorities for
+neighbouring berths — a state nobody should be able to reach by accident.
+
+**Can it be switched off where ERP is present?** Yes, and it is off by default. But note what
+"off" currently means: MODE 1 still *accepts* the machine key on those endpoints, because real
+ERP calls arrive that way. So the direct path is not closed in MODE 1, it is merely
+unprivileged — and you are right that a direct path left open in an ERP marina is attack
+surface with no purpose.
+
+Closing it properly needs the app off the key (Stage 2), after which MODE 1 can refuse any
+customer-token caller on the ERP endpoints outright. **[DECIDE 11]** — confirm that is the
+intended end state for MODE 1: ERP server-to-server only, app talks to ERP, no direct path at
+all.
+
+### (5) Stage 2 urgency and key rotation
+
+Covered in §1 above. Recorded here so the five additions are answerable as a set.
 
 ---
 
@@ -309,16 +457,23 @@ schema column is dropped.
 
 ## 12. Decisions needed
 
-| | Decision |
-|---|---|
-| **[DECIDE 1]** | Stage 1 object checks in this change; Stage 2 (app off the ERP key, key rotated) as its own piece — approve, and confirm Stage 2 is wanted |
-| **[DECIDE 2]** | NFC/QR **reads** stay `require_any_role` |
-| **[DECIDE 3]** | `/scan` hard-fails on a stale heartbeat rather than warning |
-| **[DECIDE 4]** | the tag↔socket cross-check lives on the controls activation path, not `/scan` |
-| **[DECIDE 5]** | cross-check socket field optional-then-required, rather than required at once |
-| **[DECIDE 6]** | role tests restructured around installation/operation/observation, including the route-table scan |
-| **[DECIDE 7]** | ERP guide states the gateway's admin elevation, and that NFC is deliberately absent from the catalog |
+§1 is done and committed. These eleven remain.
 
-Once these are settled I will implement it as one commit series on `develop`, with the role
-tests written first so the tightening is demonstrated by a test that fails before the change
-and passes after.
+| | Decision | My recommendation |
+|---|---|---|
+| **[DECIDE 1]** | Stage 2 (app off the ERP key) as its own work, and whether the key rotation happens now or with it | separate work, **rotate now** — the key has shipped and rotation is independent of the app change in MODE 1 |
+| **[DECIDE 2]** | NFC/QR **reads** stay `require_any_role` | yes — seeing which tag is on which socket is how staff answer a customer, and it is not configuration |
+| **[DECIDE 3]** | `/scan` hard-fails on a stale heartbeat rather than warning | hard-fail — "pending, plug in your charger" when the NUC cannot act is the worst answer available |
+| **[DECIDE 4]** | the tag↔socket cross-check lives on the controls activation path, not `/scan` | yes — that is the call that actually switches power; `/scan` switches nothing |
+| **[DECIDE 5]** | cross-check socket field optional-then-required | optional first, logged on mismatch, then required once ERP reliably sends it |
+| **[DECIDE 6]** | role tests restructured around INSTALLATION_ACTS / OPERATIONS / OBSERVATIONS with the route-table scan | yes — you have already confirmed this one |
+| **[DECIDE 7]** | ERP guide states the gateway's admin elevation, and that NFC is deliberately absent from the catalog | yes |
+| **[DECIDE 8]** | the mode is **visible** — `/api/system/health` and the admin UI say which system bills | yes — a disputed charge cannot be reasoned about without it |
+| **[DECIDE 9]** | (a) declare `energy_intervals` the financial record and reconcile the MODE 2 payload against it, or (b) make completed sessions immutable | **(a)** — the append-only ledger already exists and already has the right properties |
+| **[DECIDE 10]** | MODE 1 divergence: divergence view + `last_reconciled_at` + alarm on reconciliation silence, and the value of N | all three; N = 7 days |
+| **[DECIDE 11]** | MODE 1's end state is ERP server-to-server only, with no direct app path | yes, after Stage 2 |
+
+Once these are settled I will implement as one commit series on `develop`, with the role tests
+written **first**, so the tightening is demonstrated by a test that fails before the change and
+passes after — rather than a test written afterwards to describe what the code now does, which
+is how the original drift became invisible.

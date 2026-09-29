@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session as DBSession
 from ..auth.dependencies import require_admin
 from ..auth.models import User
+from ..config import settings
 from ..database import get_db
 from ..models.sensor_reading import SensorReading
 from ..services.error_log_service import get_logs, get_summary, clear_all_logs, purge_old_logs
@@ -48,6 +49,24 @@ class SecuritySummary(BaseModel):
     unauthorized_access_7d: int
 
 
+class BillingAuthority(BaseModel):
+    """Which system is the billing authority at this marina (v3.43).
+
+    A pedestal must know whether it is billing or merely measuring, because the consequences
+    of a wrong session row differ completely between the two — and so must whoever is looking
+    at a disputed charge. Without this, the first question in any billing dispute ("which
+    system owns this number?") has no answer visible anywhere.
+
+    Explicit configuration, never inferred. The tempting signal — "is erp_api_key set?" — is
+    wrong because it is set in BOTH topologies today, and a system that guesses whether it is
+    the billing authority guesses wrong exactly once.
+    """
+    mode: str                  # "erp" | "direct"
+    bills: str                 # "ERP" | "this pedestal"
+    description: str           # one plain sentence for the admin UI
+    record_of_truth: str       # where "what does this customer owe" is answered from
+
+
 class HealthSummaryResponse(BaseModel):
     # Existing error-log stats
     total_7d: int
@@ -64,6 +83,7 @@ class HealthSummaryResponse(BaseModel):
     # New
     alarm_summary: AlarmSummary
     security_summary: SecuritySummary
+    billing_authority: BillingAuthority
 
 
 # ─── Endpoints ────────────────────────────────────────────────────────────────
@@ -99,12 +119,33 @@ def health_summary(_: User = Depends(require_admin)):
         unauthorized_access_7d=sum(1 for e in sec_logs_7d if "403" in e.message or "unauthoris" in e.message.lower()),
     )
 
+    direct = settings.nfc_direct_client_mode
+    billing = BillingAuthority(
+        mode="direct" if direct else "erp",
+        bills="this pedestal" if direct else "ERP",
+        description=(
+            "This marina has no ERP, so this pedestal is the billing system — its session "
+            "records are the only record of what customers owe."
+            if direct else
+            "ERP bills at this marina. Session records here are measurement and "
+            "reconciliation data, not the source of charge."
+        ),
+        # Decision 9: the append-only 15-minute ledger is the financial record, and a session
+        # row is an interpretation of it. Stated here so nobody later builds billing off
+        # sessions because they are easier to query.
+        record_of_truth=(
+            "energy_intervals (append-only 15-minute ledger)" if direct
+            else "ERP's own records; energy_intervals is our reconciliation ledger"
+        ),
+    )
+
     return HealthSummaryResponse(
         **summary,
         mqtt_connected=mqtt_service.is_connected,
         simulator_running=simulator_manager.is_running,
         alarm_summary=alarm_sum,
         security_summary=sec_sum,
+        billing_authority=billing,
     )
 
 

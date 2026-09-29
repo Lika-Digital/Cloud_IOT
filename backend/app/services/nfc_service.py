@@ -12,11 +12,14 @@ Design points (confirmed):
   * Pending sessions expire LAZILY after 5 minutes — no background task; callers
     use `get_live_pending` / `expire_if_past` which mark stale rows expired inline.
 """
+import logging
 from datetime import datetime, timedelta
 
 from ..models.nfc_tag import NfcTag
 from ..models.nfc_pending_session import NfcPendingSession
 from ..time_utils import iso_z
+
+logger = logging.getLogger(__name__)
 
 PENDING_TTL_MINUTES = 5
 
@@ -67,10 +70,22 @@ def list_tags(db, cabinet_id: str) -> list[NfcTag]:
 def provision_tag(db, nfc_tag_id: str, cabinet_id: str, socket_id: str,
                   provisioned_by: str | None = None) -> NfcTag:
     """Map an NFC tag to a socket, replacing any previous active tag on that
-    socket. Raises DuplicateNfcTagError if the tag is already active elsewhere."""
+    socket. Raises DuplicateNfcTagError if the tag is already active elsewhere.
+
+    `provisioned_by` is REQUIRED from v3.43. The column stays nullable for rows written before
+    then, but a new unattributed mapping is refused: this decides which socket a customer's tap
+    energises, and every path that creates one must be able to answer who did it. It is a
+    ValueError rather than a silent default because a caller that has no actor has a bug, and
+    writing "(unknown)" would hide it.
+    """
     nfc_tag_id = (nfc_tag_id or "").strip()
     if not nfc_tag_id:
         raise ValueError("nfc_tag_id is required")
+    if not (provisioned_by or "").strip():
+        raise ValueError(
+            "provisioned_by is required — an NFC mapping must be attributable to the admin "
+            "who created it"
+        )
 
     # Reject the same physical tag mapped to a DIFFERENT socket.
     existing = get_active_tag_by_id(db, nfc_tag_id)
@@ -112,13 +127,23 @@ def provision_tag(db, nfc_tag_id: str, cabinet_id: str, socket_id: str,
     return tag
 
 
-def remove_tag(db, cabinet_id: str, socket_id: str) -> bool:
-    """Deactivate the active tag for a socket. Returns True if one was cleared."""
+def remove_tag(db, cabinet_id: str, socket_id: str,
+               removed_by: str | None = None) -> bool:
+    """Deactivate the active tag for a socket. Returns True if one was cleared.
+
+    `removed_by` is recorded alongside the time (v3.43). The row already survived removal, so
+    the history was there — but nothing said who un-pointed the tag or when, which made the
+    one destructive act in a tag's life the only untraceable one.
+    """
     tag = get_active_tag_for_socket(db, cabinet_id, socket_id)
     if tag is None:
         return False
     tag.is_active = False
+    tag.removed_at = datetime.utcnow()
+    tag.removed_by = removed_by
     db.commit()
+    logger.info("[NFC] tag %s removed from cabinet=%s socket=%s by %s",
+                tag.nfc_tag_id, cabinet_id, socket_id, removed_by or "(unattributed)")
     return True
 
 

@@ -27,5 +27,15 @@ class NfcTag(Base):
     socket_id      = Column(String, nullable=False)   # "Q1" | "Q2" | "Q3" | "Q4"
 
     provisioned_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    provisioned_by = Column(String, nullable=True)    # admin user email
+    # Admin user email. Nullable in the schema for the rows that predate v3.43, but the
+    # service layer now REFUSES to write a row without it — an unattributed mapping decides
+    # which socket a customer's tap energises, and "who set this up" has to be answerable.
+    provisioned_by = Column(String, nullable=True)
     is_active      = Column(Boolean, nullable=False, default=True)
+
+    # v3.43 — removal audit trail. Deactivation kept the row but recorded neither who nor
+    # when, so the only part of a tag's life that was traceable was its creation. For a
+    # control that decides which socket a customer's tap energises, un-pointing it deserves
+    # the same trail as pointing it.
+    removed_at     = Column(DateTime, nullable=True)
+    removed_by     = Column(String, nullable=True)

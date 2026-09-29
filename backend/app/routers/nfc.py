@@ -152,6 +152,10 @@ def _tag_out(tag) -> dict:
         "provisioned_at": iso_z(tag.provisioned_at),
         "provisioned_by": tag.provisioned_by,
         "is_active": tag.is_active,
+        # v3.43 — surfaced so the trail is readable without a DB query. Null for an active tag
+        # and for rows removed before the columns existed.
+        "removed_at": iso_z(tag.removed_at) if tag.removed_at else None,
+        "removed_by": tag.removed_by,
     }
 
 
@@ -210,11 +214,15 @@ def provision_nfc_tags_bulk(body: NfcBulkBody, db: DBSession = Depends(get_db),
 
 @router.delete("/tags/{cabinet_id}/{socket_id}")
 def remove_nfc_tag(cabinet_id: str, socket_id: str, db: DBSession = Depends(get_db),
-                   _: User = Depends(require_admin)):
-    """Clear the NFC tag mapping for a socket (is_active=False)."""
+                   admin: User = Depends(require_admin)):
+    """Clear the NFC tag mapping for a socket (is_active=False).
+
+    The actor is recorded from v3.43 — the dependency was `_: User` before, discarding the one
+    piece of information the audit trail was missing.
+    """
     if socket_id not in _VALID_SOCKETS:
         raise HTTPException(status_code=400, detail="socket_id must be one of Q1..Q4")
-    cleared = nfc_service.remove_tag(db, cabinet_id, socket_id)
+    cleared = nfc_service.remove_tag(db, cabinet_id, socket_id, removed_by=admin.email)
     if not cleared:
         raise HTTPException(status_code=404, detail="No active NFC tag for this socket")
     return {"cabinet_id": cabinet_id, "socket_id": socket_id, "removed": True}

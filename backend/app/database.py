@@ -201,6 +201,12 @@ def _migrate_schema():
         # v3.23 — temperature range alarms: severity (warning/critical) + auto-resolve.
         ("active_alarms",  "severity",    "TEXT"),
         ("active_alarms",  "resolved_at", "DATETIME"),
+        # v3.43 — NFC removal audit trail. Deactivating a tag kept the row but recorded
+        # neither who nor when, so the one destructive act in a tag's life was the only
+        # untraceable one. Nullable: existing rows were removed before this existed and
+        # backfilling a guess would be worse than an honest NULL.
+        ("nfc_tags",       "removed_at",  "DATETIME"),
+        ("nfc_tags",       "removed_by",  "TEXT"),
     ]
 
     with engine.connect() as conn:

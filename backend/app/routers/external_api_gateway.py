@@ -35,6 +35,11 @@ _MAX_BODY_BYTES = int(os.environ.get("EXT_API_MAX_BODY_BYTES", str(1 * 1024 * 10
 # (production / RATE_LIMIT_ENABLED) — see app/ratelimit.py.
 _EXT_RATE_LIMIT = os.environ.get("EXT_API_RATE_LIMIT", "1200/minute")
 
+# v3.43 — set on every proxied request so handlers can tell an external system from a human.
+# Defined here because this is the only place that legitimately sets it; importers should treat
+# its presence as provenance, never as authorisation (see the note at the proxy call site).
+EXT_API_CALLER_HEADER = "X-Ext-Api-Caller"
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -370,6 +375,16 @@ async def gateway(request: Request, path: str) -> Response:
                     "Authorization":  f"Bearer {internal_token}",
                     "Content-Type":   request.headers.get("Content-Type", "application/json"),
                     "Accept":         request.headers.get("Accept", "application/json"),
+                    # v3.43 — provenance, so a handler can tell an external system from a
+                    # human at the dashboard. Both arrive with an admin JWT (this proxy mints
+                    # one), which is why the distinction is not otherwise available.
+                    #
+                    # This is a PROVENANCE HINT, NOT A SECURITY BOUNDARY. Anyone who can already
+                    # reach the API with an operator token could set it themselves, so nothing
+                    # may be *granted* on the strength of it. It is used only to hold ERP to a
+                    # stricter contract than a human — e.g. requiring the NFC cross-check field
+                    # — which is about catching configuration drift, not resisting an attacker.
+                    EXT_API_CALLER_HEADER: "1",
                 },
             )
     except httpx.RequestError as e:

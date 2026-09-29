@@ -154,6 +154,23 @@ class Settings(BaseSettings):
     # berths, which is not a configuration anyone should be able to reach by accident.
     nfc_direct_client_mode: bool = False
 
+    # v3.43 — NFC tag/socket cross-check (double-bookkeeping). ERP resolves the tag to a socket
+    # and sends BOTH; we hold the same mapping and check they agree before switching power. Two
+    # independent records mean a disagreement exposes a tag stuck on the wrong socket, labels
+    # swapped at installation, or a wrong socket typed into ERP — otherwise we switch the socket
+    # ERP names and the customer pays for a neighbour's power, with nothing reporting it.
+    #
+    # False = ERP MAY send nfc_tag_id; it is cross-checked when present and a mismatch is
+    #   refused and alarmed either way. An activation without it is logged as "not-supplied".
+    # True  = ERP MUST send it; an activation from the ERP without it is refused (400). Requests
+    #   from a human at the dashboard are never required to carry one — an operator has no tag
+    #   in hand — so this is enforced only against the gateway-proxied path.
+    #
+    # REQUIRED FROM: 2026-11-30. Flip this to True on that date. The optional phase exists to
+    # let ERP start sending the field without a flag-day; it is not an indefinite state, and a
+    # date is recorded because "optional for now" with no date stays optional for ever.
+    nfc_cross_check_required: bool = False
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

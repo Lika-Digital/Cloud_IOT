@@ -3,9 +3,10 @@ import asyncio
 import json
 import logging
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DBSession
+from ..config import settings
 from ..database import get_db
 from ..auth.user_database import get_user_db
 from ..auth.customer_models import Customer
@@ -576,6 +577,92 @@ def get_pedestal_led(
 class DirectCmdBody(BaseModel):
     # Opta valid actions: activate, stop (maintenance is NOT supported by firmware)
     action: str = Field(..., pattern=r"^(activate|stop)$")
+    # v3.43 — the NFC tag ERP resolved to this socket, for the double-bookkeeping cross-check.
+    # Optional until the date in settings.nfc_cross_check_required; see _cross_check_nfc_tag.
+    nfc_tag_id: str | None = Field(default=None, max_length=256)
+
+
+def _cross_check_nfc_tag(db: DBSession, pedestal_id: int, socket_name: str,
+                         nfc_tag_id: str | None, from_ext_api: bool) -> str:
+    """Double-bookkeeping: does ERP's tag→socket resolution agree with ours? (v3.43)
+
+    ERP keeps its own mapping and resolves the tag before calling us. We keep the same mapping.
+    Two independent records of the same fact mean a disagreement exposes an error that is
+    otherwise invisible: a tag physically stuck on the wrong socket, two labels swapped at
+    installation, or a wrong socket number typed into ERP. Without the check we switch the
+    socket ERP names and **the customer pays for a neighbour's power** — and nothing anywhere
+    reports it.
+
+    The cost is maintaining the mapping twice, so mismatches are handled deliberately rather
+    than by failing hard everywhere:
+
+      agree                 -> act
+      disagree              -> REFUSE and raise an alarm. Physical installation and
+                               configuration have diverged; that needs a human, not a retry.
+      no local mapping      -> ACT on ERP's instruction and log that it could not be verified.
+                               Never block: an incomplete local mapping must not stop a paying
+                               customer charging.
+
+    This lives on the activation path rather than `/scan` because this is the call that actually
+    switches power. A mismatch on `/scan` costs nothing — it switches nothing — so a refusal
+    there would be the strictness without the benefit.
+
+    Returns a short provenance string for the log/response: "verified", "unverified", or
+    "not-supplied".
+    """
+    from ..services import nfc_service
+
+    if not nfc_tag_id:
+        # The "required" phase of the rollout. Enforced only against the ERP path, because a
+        # human at the dashboard has no tag in hand and never will — requiring it of them would
+        # break the operator's own controls. `from_ext_api` is provenance, not authorisation.
+        if from_ext_api and settings.nfc_cross_check_required:
+            raise HTTPException(
+                status_code=400,
+                detail="nfc_tag_id is required on socket activation from the ERP so the "
+                       "tag-to-socket mapping can be cross-checked. See the ERP integration "
+                       "guide.",
+            )
+        return "not-supplied"
+
+    tag = nfc_service.get_active_tag_by_id(db, nfc_tag_id)
+    if tag is None:
+        logger.warning(
+            "[NFC cross-check] UNVERIFIED: tag %s is not in our mapping; acting on ERP's "
+            "instruction for pedestal=%s socket=%s",
+            nfc_tag_id, pedestal_id, socket_name,
+        )
+        return "unverified"
+
+    cabinet_id = _get_cabinet_id(db, pedestal_id)
+    if tag.cabinet_id == cabinet_id and tag.socket_id == socket_name:
+        return "verified"
+
+    # Disagreement. Refuse, and make it loud — this is the case the check exists for.
+    detail = (
+        f"NFC tag {nfc_tag_id} is mapped to {tag.cabinet_id}/{tag.socket_id} here, but "
+        f"activation was requested for {cabinet_id}/{socket_name}. Refusing: switching the "
+        f"wrong socket would charge the wrong customer."
+    )
+    logger.error("[NFC cross-check] MISMATCH — %s", detail)
+    try:
+        from ..services.alarm_service import trigger_alarm
+        trigger_alarm(
+            alarm_type="nfc_mapping_mismatch",
+            source="sensor_auto",
+            message=(
+                f"NFC tag {nfc_tag_id}: our mapping says {tag.cabinet_id}/{tag.socket_id}, "
+                f"the ERP asked for {cabinet_id}/{socket_name}. The tag may be on the wrong "
+                f"socket, or the two configurations have diverged. Someone must check."
+            ),
+            pedestal_id=pedestal_id,
+            severity="critical",
+            deduplicate=True,
+        )
+    except Exception:
+        # An alarm that fails must not turn a clean refusal into a 500.
+        logger.exception("[NFC cross-check] could not raise the mismatch alarm")
+    raise HTTPException(status_code=409, detail=detail)
 
 
 @router.post("/pedestal/{pedestal_id}/socket/{socket_name}/cmd")
@@ -583,6 +670,7 @@ async def direct_socket_cmd(
     pedestal_id: int,
     socket_name: str,
     body: DirectCmdBody,
+    request: Request,
     db: DBSession = Depends(get_db),
     _: User = Depends(require_control),
 ):
@@ -602,6 +690,18 @@ async def direct_socket_cmd(
 
     # v3.30 — standalone cabinets reject all socket control (activate AND stop).
     _require_smart_mode(db, pedestal_id)
+
+    # v3.43 — double-bookkeeping, on activation only. A stop is always safe to honour: the
+    # worst case is ending a session early, whereas activating the wrong socket bills the wrong
+    # customer. Refusing a stop because of a mapping disagreement would leave power on, which is
+    # the more dangerous of the two failures.
+    from .external_api_gateway import EXT_API_CALLER_HEADER
+
+    from_ext_api = request.headers.get(EXT_API_CALLER_HEADER) == "1"
+    cross_check = "not-applicable"
+    if body.action == "activate":
+        cross_check = _cross_check_nfc_tag(
+            db, pedestal_id, socket_name, body.nfc_tag_id, from_ext_api)
 
     from ..services.mqtt_handlers import _socket_name_to_id
     socket_id = _socket_name_to_id(socket_name)
@@ -661,7 +761,11 @@ async def direct_socket_cmd(
         "event": "direct_cmd_sent",
         "data": {"pedestal_id": pedestal_id, "target": socket_name, "action": body.action},
     })
-    return {"status": "sent", "socket": socket_name, "action": body.action}
+    # `nfc_cross_check` is reported back so ERP can see whether its instruction was verified
+    # against our mapping or merely trusted. "unverified" is not an error, but it is worth
+    # ERP knowing it happened rather than assuming every success was checked.
+    return {"status": "sent", "socket": socket_name, "action": body.action,
+            "nfc_cross_check": cross_check}
 
 
 @router.post("/pedestal/{pedestal_id}/water/{valve_name}/cmd")

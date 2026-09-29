@@ -408,3 +408,29 @@ def test_tc_nfca_10_invalid_customer_token_is_401_not_anonymous(client, authz_pi
         f"an invalid token produced {r.status_code}; it must not be treated as anonymous, "
         f"which would fall through to the machine-key path and read another's session"
     )
+
+
+@pytest.fixture(autouse=True)
+def _cabinet_alive_and_smart(authz_pid):
+    """A scan now requires a cabinet that is ANSWERING and in smart mode (v3.43).
+
+    Both checks were absent before, so these tests passed against a cabinet the NUC had never
+    heard from — which is exactly the situation that used to answer "pending, plug in your
+    charger" and then do nothing. The precondition is real, so the fixture supplies it:
+    liveness comes from the in-memory heartbeat, because only live traffic writes that.
+    """
+    from app.models.pedestal_config import PedestalConfig
+    from app.services.mqtt_handlers import last_heartbeat
+
+    last_heartbeat[authz_pid] = datetime.utcnow()
+    db = _S()
+    try:
+        cfg = db.query(PedestalConfig).filter(
+            PedestalConfig.pedestal_id == authz_pid).first()
+        if cfg is not None and not cfg.smart_mode:
+            cfg.smart_mode = True
+            db.commit()
+    finally:
+        db.close()
+    yield
+    last_heartbeat.pop(authz_pid, None)

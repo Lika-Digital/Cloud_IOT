@@ -19,6 +19,7 @@ Critical architecture notes (per spec):
     stop flow is unchanged and works for NFC sessions identically.
 """
 import logging
+from datetime import datetime
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -44,6 +45,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/nfc", tags=["nfc"])
 
 _VALID_SOCKETS = {"Q1", "Q2", "Q3", "Q4"}
+
+# Same threshold the comm-loss watchdog uses (main.COMM_LOSS_TIMEOUT_SECONDS). Imported by
+# value rather than from main to avoid a circular import; kept identical on purpose, because
+# two different opinions about when a cabinet is dead is how the dashboard and the NFC path
+# would come to disagree in front of a customer.
+COMM_LOSS_TIMEOUT_S = 60
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -303,6 +310,52 @@ def _require_direct_client_principal(customer) -> None:
         )
 
 
+def _require_pedestal_can_act(cfg: PedestalConfig) -> None:
+    """Refuse a scan the NUC cannot actually honour, and say why in words a customer can use.
+
+    Both checks were absent before v3.43 (`grep smart_mode nfc.py` and `grep opta_connected`
+    each returned nothing), so `/scan` answered *"pending — please plug in your charger"* in
+    situations where nothing could follow. That is worse than an error: the customer plugs in,
+    waits, nothing happens, and blames the system instead of retrying. This cabinet was silent
+    for 19 days in September, so it has almost certainly already happened.
+
+    The messages are written for someone standing on a pontoon with a cable in their hand.
+    They name the thing that is wrong and the action that helps, because a generic failure
+    leaves them with neither.
+
+    **Liveness comes from the in-memory heartbeat, never from the database.**
+    `mqtt_handlers.last_heartbeat` is populated only by live traffic — retained replays are
+    dropped outright (v3.40) — and it resets on backend restart, so "absent" honestly means
+    "we have not heard from this cabinet since we started". `PedestalConfig.last_heartbeat`
+    and `opta_connected` persist, so they are last-known state and would report a cabinet that
+    died weeks ago as reachable. A predicate a retained replay can satisfy is not a liveness
+    check: see `docs/engineering_notes.md`.
+    """
+    from ..services.mqtt_handlers import last_heartbeat
+
+    # Liveness first. If the cabinet is not answering we cannot trust our stored view of its
+    # smart mode either, so "not responding" is the more truthful of the two answers.
+    last_hb = last_heartbeat.get(cfg.pedestal_id)
+    if last_hb is None or (datetime.utcnow() - last_hb).total_seconds() > COMM_LOSS_TIMEOUT_S:
+        logger.warning(
+            "[NFC] scan refused: pedestal=%s not responding (last live heartbeat %s)",
+            cfg.pedestal_id, last_hb.isoformat() if last_hb else "never since restart",
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="This pedestal is not responding, so the socket cannot be switched on. "
+                   "Please contact the marina office.",
+        )
+
+    if not cfg.smart_mode:
+        logger.warning("[NFC] scan refused: pedestal=%s has smart mode OFF", cfg.pedestal_id)
+        raise HTTPException(
+            status_code=409,
+            detail="This pedestal is running on its own and cannot be switched on remotely. "
+                   "Please ask the marina office to start your socket.",
+        )
+
+
 @router.post("/scan")
 def nfc_scan(body: NfcScanBody, db: DBSession = Depends(get_db),
              customer=Depends(optional_customer),
@@ -337,26 +390,59 @@ def nfc_scan(body: NfcScanBody, db: DBSession = Depends(get_db),
 
     tag = nfc_service.get_active_tag_by_id(db, body.nfc_tag_id)
     if tag is None:
-        raise HTTPException(status_code=404, detail="NFC tag not provisioned")
+        # Still a 404, and still no fallback to a default socket — but worded for the person
+        # reading it. "NFC tag not provisioned" told a customer nothing they could act on.
+        raise HTTPException(
+            status_code=404,
+            detail="This tag is not registered to a socket. Please contact the marina office "
+                   "to have it registered.",
+        )
 
     cabinet_id, socket_id = tag.cabinet_id, tag.socket_id
     cfg = _resolve_pedestal(db, cabinet_id)
     if cfg is None:
-        raise HTTPException(status_code=404, detail="NFC tag not provisioned")
+        # DISTINCT from "unknown tag" (v3.43). The tag IS provisioned — to a cabinet this
+        # system has no record of. That is our provisioning error, not the customer's unknown
+        # token, and sharing the 404 made a configuration fault indistinguishable from a
+        # stranger's tag. 500 because it is a server-side inconsistency, not a bad request.
+        logger.error("[NFC] tag %s is provisioned to cabinet %s, which has no pedestal row",
+                     body.nfc_tag_id, cabinet_id)
+        raise HTTPException(
+            status_code=500,
+            detail="This tag is registered to a pedestal the system does not recognise. "
+                   "Please contact the marina office.",
+        )
+
+    # Can the NUC act at all? Smart mode and liveness, neither of which was checked before.
+    _require_pedestal_can_act(cfg)
 
     socket_int = _socket_str_to_id(socket_id)
 
     # Socket availability.
     if _socket_display_state(db, cfg.pedestal_id, socket_int) == "fault":
-        raise HTTPException(status_code=503, detail="Socket unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail="This socket has a fault and cannot be used. Please contact the marina "
+                   "office, or try another socket.",
+        )
     active = session_service.get_active_for_socket(db, cfg.pedestal_id, socket_int, session_type="electricity")
     if active is not None and active.status == "active":
-        raise HTTPException(status_code=409, detail="Socket already in use")
+        raise HTTPException(
+            status_code=409,
+            detail="This socket is already in use. Please use another socket.",
+        )
 
-    # A still-valid pending scan for this socket blocks a second one.
+    # A still-valid pending scan for this socket blocks a second one. DISTINCT from
+    # "already in use" (v3.43): sharing that message meant ERP — and the customer — could not
+    # tell "someone is charging here" from "someone tapped 30 seconds ago", which are minutes
+    # apart in what you should do about them.
     live = nfc_service.get_live_pending(db, cabinet_id, socket_id)
     if live is not None:
-        raise HTTPException(status_code=409, detail="Socket already in use")
+        raise HTTPException(
+            status_code=409,
+            detail="Someone else tapped this socket a moment ago and it is being held for "
+                   f"them until {iso_z(live.expires_at)}. Please wait, or use another socket.",
+        )
 
     rec = nfc_service.create_pending(db, body.nfc_tag_id, user_id, cabinet_id, socket_id)
     # Log the resolved mapping and the authenticated principal, so an attribution dispute is

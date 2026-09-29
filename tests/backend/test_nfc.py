@@ -345,3 +345,29 @@ def test_stop_already_ended_409(client, nfc_pid):
 def test_stop_missing_key_401(client, nfc_pid):
     r = client.post("/api/nfc/session/1/stop")
     assert r.status_code == 401
+
+
+@pytest.fixture(autouse=True)
+def _cabinet_alive_and_smart(nfc_pid):
+    """A scan now requires a cabinet that is ANSWERING and in smart mode (v3.43).
+
+    Both checks were absent before, so these tests passed against a cabinet the NUC had never
+    heard from — which is exactly the situation that used to answer "pending, plug in your
+    charger" and then do nothing. The precondition is real, so the fixture supplies it:
+    liveness comes from the in-memory heartbeat, because only live traffic writes that.
+    """
+    from app.models.pedestal_config import PedestalConfig
+    from app.services.mqtt_handlers import last_heartbeat
+
+    last_heartbeat[nfc_pid] = datetime.utcnow()
+    db = _S()
+    try:
+        cfg = db.query(PedestalConfig).filter(
+            PedestalConfig.pedestal_id == nfc_pid).first()
+        if cfg is not None and not cfg.smart_mode:
+            cfg.smart_mode = True
+            db.commit()
+    finally:
+        db.close()
+    yield
+    last_heartbeat.pop(nfc_pid, None)

@@ -71,7 +71,28 @@ SENSOR_MOIST_RE   = re.compile(r"pedestal/(\d+)/sensors/moisture")
 DIAGNOSTICS_RE    = re.compile(r"pedestal/(\d+)/diagnostics/response")
 SENSOR_REGISTER_RE = re.compile(r"pedestal/(\d+)/register")
 
-# Topic patterns — marina cabinet firmware schema (real hardware)
+# Topic patterns — the `marina/cabinet/...` schema.
+#
+# **CORRECTION 2026-09-29: this comment used to say "(real hardware)". It is the opposite.**
+#
+# A full 60-second MQTT capture from MAR_KRK_ORM_01 (firmware 3.1.0) contains ONLY `opta/...`
+# topics: opta/status, opta/config/hardware, opta/door/status, opta/breakers/Q{n}/status,
+# opta/sockets/Q{n}/status, opta/water/V{n}/status, opta/meters/Q{n}/telemetry. Not one
+# `marina/cabinet/...` message. Nothing in this codebase bridges the two prefixes either — no
+# component republishes opta/* as marina/cabinet/*.
+#
+# So every handler below fires ONLY from tests. The code is not wrong, but it is UNTESTED
+# AGAINST ANYTHING REAL, and its vocabulary drifted as a result: bare-digit socket names and
+# the WTR-n valve spelling both live here and nowhere in real traffic (see _SOCKET_NAMES).
+#
+# They are kept rather than deleted because no capture exists for other firmware builds, and a
+# second marina could be running one. But treat anything reached only through these patterns as
+# unverified, and do not let its shapes become the reference for what hardware sends — that is
+# precisely how the WTR-n error propagated into a resolver allowlist.
+#
+# The backend DOES publish marina/cabinet command topics (cmd/socket/E{n},
+# outlet/PWR-{n}/cmd/stop, outlet/WTR-{n}/cmd/stop) alongside the opta/cmd/* ones. The Opta
+# listens on opta/cmd/*, so those publishes are no-ops on this hardware — harmless, but dead.
 MARINA_SOCKET_RE  = re.compile(r"marina/cabinet/([^/]+)/sockets/([^/]+)/state")
 MARINA_WATER_RE   = re.compile(r"marina/cabinet/([^/]+)/water/([^/]+)/state")
 MARINA_DOOR_RE    = re.compile(r"marina/cabinet/([^/]+)/door/state")
@@ -312,23 +333,96 @@ def _auto_discover_valve_config(db, pedestal_id: int, valve_id: int) -> bool:
         return False
 
 
+class UnknownOutletName(ValueError):
+    """An outlet identifier the system does not recognise.
+
+    Raised instead of guessing. See `_socket_name_to_id` for why that matters.
+    """
+
+
+# Outlet-name allowlists, corrected against a real MQTT capture from MAR_KRK_ORM_01,
+# firmware 3.1.0 (2026-09-29). Read the provenance notes before adding or removing an entry —
+# two of these were wrong, and both were wrong because they came from documentation rather than
+# from traffic.
+#
+# VERIFIED IN REAL TRAFFIC: sockets are ALWAYS `Q1`..`Q4` — on opta/sockets/{id}/status,
+# opta/breakers/{id}/status, opta/meters/{id}/telemetry and in config/hardware's socketId.
+# Water is ALWAYS `V1`/`V2` on opta/water/{id}/status, with `{"id":"V1"}` in the payload.
+#
+# The other spellings below belong to the `marina/cabinet/...` topic family, which this
+# firmware NEVER publishes (see the note on MARINA_* regexes). They are kept because nothing
+# proves no other firmware build uses them, and dropping a spelling this resolver used to
+# accept could silently break a cabinet nobody has captured. They are FLAGGED, not endorsed:
+#
+#   bare digits ("1".."4")  — only ever seen in marina/cabinet/+/sockets/{n}/state and in the
+#                             26 tests that exercise it. Never in verified firmware traffic.
+#   E1..E4                  — the marina/cabinet command vocabulary (cmd/socket/E{n}).
+#   PWR-1..PWR-4            — ours, published on marina/cabinet/{cab}/outlet/PWR-{n}/cmd/stop.
+_SOCKET_NAMES: dict[str, int] = {
+    **{f"Q{i}": i for i in (1, 2, 3, 4)},          # VERIFIED, firmware 3.1.0
+    **{str(i): i for i in (1, 2, 3, 4)},           # unverified — marina/* scheme only
+    **{f"E{i}": i for i in (1, 2, 3, 4)},          # unverified — marina/* command vocabulary
+    **{f"PWR-{i}": i for i in (1, 2, 3, 4)},       # unverified — our own outbound spelling
+}
+
+# WTR-1/WTR-2 REMOVED (2026-09-29). It never appears in real traffic. It came from the
+# docstring on `_handle_marina_water`, which describes a `marina/cabinet/.../water/{name}/state`
+# payload as carrying `{"id":"WTR-1"}` — i.e. from the same aspirational topic family the
+# firmware does not publish, and from documentation nobody had checked against a cabinet. The
+# only place WTR-n genuinely exists is a topic WE publish
+# (`marina/cabinet/{cab}/outlet/WTR-{n}/cmd/stop`), which nothing subscribes to.
+#
+# Recorded rather than quietly deleted because the same mistake is available again: an allowlist
+# assembled from docstrings inherits whatever those docstrings got wrong.
+_VALVE_NAMES: dict[str, int] = {
+    **{f"V{i}": i for i in (1, 2)},                # VERIFIED, firmware 3.1.0
+    **{str(i): i for i in (1, 2)},                 # unverified — marina/* scheme only
+}
+
+
 def _socket_name_to_id(name: str) -> int:
-    """E1→1, E2→2, E3→3, E4→4; Q1→1, Q2→2, Q3→3, Q4→4; fallback: strip non-digits."""
-    mapping = {"E1": 1, "E2": 2, "E3": 3, "E4": 4,
-               "Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4}
-    if name in mapping:
-        return mapping[name]
-    digits = re.sub(r"\D", "", name)
-    return int(digits) if digits else 1
+    """Resolve an electricity outlet name to 1-4, or RAISE.
+
+    v3.43 — this used to strip non-digits and return the result, defaulting to 1 when there
+    were none. That made `_socket_name_to_id("V1")` return **1**, i.e. a WATER valve resolved
+    to electricity socket Q1, silently and confidently. It was unreachable only because
+    `_VALID_SOCKETS` refused to store a `V1` tag — and relaxing that set is the first thing
+    anyone adding water support does, so the single protection in the way was the one the next
+    change removes.
+
+    A parser that falls back to extracting whatever it recognises will eventually return a
+    confident wrong answer. An identifier this system does not recognise is an error.
+
+    Callers do not need to catch it: `handle_message` wraps every handler in try/except with an
+    error log and a hardware-error record, so an unrecognised name from firmware becomes
+    log-and-skip — which is the correct outcome. The HTTP paths validate names before calling.
+    """
+    try:
+        return _SOCKET_NAMES[name.strip()]
+    except (KeyError, AttributeError):
+        raise UnknownOutletName(
+            f"unrecognised electricity outlet name {name!r} — expected one of "
+            f"{sorted(_SOCKET_NAMES)}. Refusing to guess: this resolver used to strip digits, "
+            f"which turned 'V1' into socket 1."
+        ) from None
 
 
 def _water_name_to_id(name: str) -> int:
-    """V1→1, V2→2; fallback: strip non-digits."""
-    mapping = {"V1": 1, "V2": 2}
-    if name in mapping:
-        return mapping[name]
-    digits = re.sub(r"\D", "", name)
-    return int(digits) if digits else 1
+    """Resolve a water outlet name to 1-2, or RAISE. Same reasoning as the socket resolver.
+
+    Note the asymmetry this preserves: a socket name is never a valid valve name and vice
+    versa, EXCEPT for bare digits, which both accept because both genuinely receive them. That
+    is why the six-tag model needs a TYPE dimension on the tag rather than inference from the
+    name — "1" cannot tell you whether it means socket 1 or valve 1, and no amount of parsing
+    will fix that.
+    """
+    try:
+        return _VALVE_NAMES[name.strip()]
+    except (KeyError, AttributeError):
+        raise UnknownOutletName(
+            f"unrecognised water outlet name {name!r} — expected one of "
+            f"{sorted(_VALVE_NAMES)}. Refusing to guess."
+        ) from None
 
 
 def _smart_mode_on(db, pedestal_id: int) -> bool:
@@ -582,9 +676,22 @@ async def _handle_marina_socket(cabinet_id: str, socket_name: str, payload: str)
 
 
 async def _handle_marina_water(cabinet_id: str, water_name: str, payload: str):
-    """
-    marina/cabinet/{cabinetId}/water/{waterName}/state
-    Payload: {"id":"WTR-1","state":"idle","ts":...,"total_l":1.0,"session_l":0,"session":null}
+    """marina/cabinet/{cabinetId}/water/{waterName}/state
+
+    **This topic is not published by real firmware.** A full MQTT capture from MAR_KRK_ORM_01
+    (firmware 3.1.0, 2026-09-29) shows only the `opta/...` family; nothing in this codebase
+    bridges `opta/` to `marina/cabinet/`, and nothing publishes these inbound state topics. So
+    this handler runs only from tests. Kept because no capture exists for other firmware builds,
+    but treat it as unverified against hardware.
+
+    Payload, CORRECTED 2026-09-29 — the real shape on `opta/water/V1/status` is:
+
+        {"id":"V1","state":"idle","hw_status":"off","ts":118475996,
+         "total_l":0.000,"session_l":0,"session":null}
+
+    This docstring previously claimed `{"id":"WTR-1", ...}`. That spelling appears nowhere in
+    real traffic, and the claim had propagated into the valve-name allowlist — documentation
+    becoming a source of truth about hardware it had never been checked against.
     """
     try:
         data = json.loads(payload)
@@ -3044,7 +3151,12 @@ async def _handle_opta_diagnostic(payload: str):
     sensors = {}
     power_arr = data.get("power", [])
     for item in power_arr:
-        idx = _socket_name_to_id(item.get("id", "Q1"))
+        try:
+            idx = _socket_name_to_id(item.get("id", "Q1"))
+        except UnknownOutletName as exc:
+            logger.warning("[Diagnostic] skipping unrecognised power entry %r: %s",
+                           item.get("id"), exc)
+            continue
         hw = item.get("hw", "off")
         state = item.get("state", "idle")
         if hw == "fault" or state == "fault":
@@ -3060,7 +3172,16 @@ async def _handle_opta_diagnostic(payload: str):
     # can fire selectively on only the valves that passed.
     per_valve_ok: dict[int, bool] = {}
     for w in water_arr:
-        vid = _water_name_to_id(w.get("id", ""))
+        # v3.43 — resolved per entry, and a bad entry skips only itself. The resolver now raises
+        # on an unrecognised name instead of guessing, and this loop previously passed
+        # `w.get("id", "")` — so one malformed valve in the array would abort the entire
+        # diagnostic, losing the other valves AND every socket result already collected.
+        try:
+            vid = _water_name_to_id(w.get("id", ""))
+        except UnknownOutletName as exc:
+            logger.warning("[Diagnostic] skipping unrecognised water entry %r: %s",
+                           w.get("id"), exc)
+            continue
         ok = (w.get("hw", "off") != "fault")
         sensors[f"water_v{vid}"] = "ok" if ok else "fail"
         per_valve_ok[vid] = ok
@@ -3091,7 +3212,12 @@ async def _handle_opta_diagnostic(payload: str):
     for item in power_arr:
         if "plugged" not in item:
             continue   # older firmware without the field → don't touch state
-        sid = _socket_name_to_id(item.get("id", "Q1"))
+        try:
+            sid = _socket_name_to_id(item.get("id", "Q1"))
+        except UnknownOutletName as exc:
+            logger.warning("[Diagnostic] skipping plug state for unrecognised outlet %r: %s",
+                           item.get("id"), exc)
+            continue
         plugged = bool(item.get("plugged"))
         db = SessionLocal()
         try:

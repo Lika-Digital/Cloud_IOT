@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from ..database import get_db
 from ..models.pedestal_config import PedestalConfig
-from ..auth.dependencies import require_any_role, require_control
+from ..auth.dependencies import require_admin, require_any_role
 from ..services.qr_service import (
     generate_socket_qr,
     regenerate_socket_qr,
@@ -91,13 +91,18 @@ def download_all_qr_codes(
 def regenerate_all_qr_codes(
     cabinet_id: str,
     db: DBSession = Depends(get_db),
-    _: object = Depends(require_control),
+    _: object = Depends(require_admin),
 ):
     """Delete every `{cabinet_id}_*.png` on disk and render a fresh set.
 
     Used when the URL format changes (shouldn't happen without a migration)
     or when an operator wants to force-refresh the printable labels.
     Returns a tiny summary the dashboard can show as a toast.
+
+    **Admin only (v3.43).** This invalidates every QR code already stuck to a cabinet, so
+    every customer's printed label stops working until the new ones are physically replaced.
+    Reprinting labels is an installation act, not day-to-day operations — the same reasoning
+    that moved NFC tag provisioning to admin.
     """
     _resolve_cabinet(db, cabinet_id)
     deleted = delete_all_qr_for_pedestal(cabinet_id)

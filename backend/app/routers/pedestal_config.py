@@ -337,9 +337,17 @@ def set_smart_mode(
     cabinet_id: str,
     body: SmartModeBody,
     db: Session = Depends(get_db),
-    _user = Depends(require_control),
+    _user = Depends(require_admin),
 ):
     """v3.28 — enable/disable firmware SmartMode for a cabinet.
+
+    **Admin only (v3.43).** Smart mode OFF makes the Opta ignore the NUC entirely — no
+    sessions, no NFC, no auto-activate, no remote control — so this is the heaviest single
+    write in the marina profile, and it was in the same tier as switching a socket. It is a
+    commissioning decision about how the cabinet is wired into the system, not day-to-day
+    operations, and the marina must not be able to reach that state. Enforced here rather than
+    by hiding the control: a hidden button that a known URL can still reach is not access
+    control.
 
     Publishes `opta/cmd/smartmode {"value": bool}` and optimistically stores the
     new value (firmware confirms it on the next opta/status heartbeat). 404 if the

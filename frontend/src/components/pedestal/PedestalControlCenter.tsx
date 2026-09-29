@@ -919,10 +919,17 @@ function CmdButton({
 
 export default function PedestalControlCenter({ pedestalId }: { pedestalId: number }) {
   const { role } = useAuthStore()
-  // v3.34 — the Control Center is fully available to Monitor & Control as well as
-  // Admin. Every control gate below keys off this flag (it means "may control",
-  // not "is admin"); plain Monitor sees the panel read-only.
-  const isAdmin = canControl(role)
+  // v3.34 — the Control Center is fully available to Monitor & Control as well as Admin, so
+  // operational gates key off canControlHere; plain Monitor sees the panel read-only.
+  //
+  // v3.43 — this was `const isAdmin = canControl(role)`. The name asserted one thing and
+  // tested another, and it is one of the three signals that made NFC/QR configuration read as
+  // admin-only while marina staff could reach it. Two flags now, each named for what it means.
+  const canControlHere = canControl(role)
+  // Installation acts: NFC tag provisioning, QR regeneration, provisioning mode, smart mode.
+  // The backend enforces these independently (require_admin) — this flag only decides what is
+  // worth rendering, never what is permitted.
+  const isRealAdmin = role === 'admin'
 
   const {
     optaSocketStates,
@@ -1089,7 +1096,7 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
         <QrCodesSection
           cabinetId={health.opta_client_id}
           pedestalId={pedestalId}
-          isAdmin={isAdmin}
+          canConfigure={isRealAdmin}
           onFeedback={show}
         />
       )}
@@ -1099,7 +1106,7 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
         <SmartModeControl
           pedestalId={pedestalId}
           cabinetId={health.opta_client_id}
-          isAdmin={isAdmin}
+          isAdmin={isRealAdmin}
           onFeedback={show}
         />
       )}
@@ -1179,7 +1186,7 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
                 autoSkipReason={socketAutoSkipReasons[key]?.reason}
                 onAutoActivateChange={onAutoActivateChange}
                 ownerLabel={ownerLabel}
-                isAdmin={isAdmin}
+                isAdmin={canControlHere}
                 onFeedback={show}
                 smartMode={smartOn}
               />
@@ -1205,7 +1212,7 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
                 valveName={name}
                 valveState={optaWaterStates[`${pedestalId}-${name}`] ?? null}
                 pedestalId={pedestalId}
-                isAdmin={isAdmin}
+                isAdmin={canControlHere}
                 autoActivate={valveAutoActivate[key] ?? true}
                 onAutoActivateChange={onValveAutoActivateChange}
                 showFlowWarning={valveFlowWarnings.includes(key)}
@@ -1219,13 +1226,13 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
       </div>
 
       {/* ── LED Control ────────────────────────────────────────────────── */}
-      <LedControl pedestalId={pedestalId} isAdmin={isAdmin} onFeedback={show} />
+      <LedControl pedestalId={pedestalId} isAdmin={canControlHere} onFeedback={show} />
 
       {/* ── LED Schedule (v3.10) ───────────────────────────────────────── */}
-      <LedScheduleSection pedestalId={pedestalId} isAdmin={isAdmin} onFeedback={show} />
+      <LedScheduleSection pedestalId={pedestalId} isAdmin={canControlHere} onFeedback={show} />
 
       {/* ── Reset ──────────────────────────────────────────────────────── */}
-      {isAdmin && (
+      {canControlHere && (
         <div className="rounded-lg border border-red-900/50 bg-red-950/20 p-3 space-y-2">
           <div className="flex items-center gap-2">
             <span className="text-base">⚠️</span>
@@ -1284,12 +1291,14 @@ export default function PedestalControlCenter({ pedestalId }: { pedestalId: numb
 function QrCodesSection({
   cabinetId,
   pedestalId,
-  isAdmin,
+  canConfigure,
   onFeedback,
 }: {
   cabinetId: string
   pedestalId: number
-  isAdmin: boolean
+  // v3.43 — renamed from isAdmin, and it now genuinely means admin: everything gated below
+  // (regenerate, provisioning mode, the NFC tag table) is an installation act.
+  canConfigure: boolean
   onFeedback: (key: string, type: 'success' | 'error', text: string) => void
 }) {
   const [expanded, setExpanded] = useState(true)
@@ -1395,7 +1404,7 @@ function QrCodesSection({
             >
               {zipBusy ? 'Downloading…' : 'Download All'}
             </button>
-            {isAdmin && (
+            {canConfigure && (
               <button
                 type="button"
                 onClick={handleRegenerate}
@@ -1415,12 +1424,12 @@ function QrCodesSection({
           <div className="flex items-center gap-4 text-sm">
             <span className="text-xs text-gray-500">Provisioning:</span>
             {(['nfc', 'qr'] as ProvisioningMode[]).map((m) => (
-              <label key={m} className={`flex items-center gap-1.5 cursor-pointer ${!isAdmin ? 'opacity-60' : ''}`}>
+              <label key={m} className={`flex items-center gap-1.5 cursor-pointer ${!canConfigure ? 'opacity-60' : ''}`}>
                 <input
                   type="radio"
                   name={`prov-mode-${cabinetId}`}
                   checked={mode === m}
-                  disabled={!isAdmin || modeBusy}
+                  disabled={!canConfigure || modeBusy}
                   onChange={() => switchMode(m)}
                 />
                 <span className="text-gray-200">{m === 'nfc' ? 'NFC' : 'QR'}</span>
@@ -1448,7 +1457,7 @@ function QrCodesSection({
             <NfcProvisioningTable
               cabinetId={cabinetId}
               pedestalId={pedestalId}
-              isAdmin={isAdmin}
+              isAdmin={canConfigure}
               onFeedback={onFeedback}
             />
           )}

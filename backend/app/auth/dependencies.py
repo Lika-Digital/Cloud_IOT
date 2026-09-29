@@ -61,11 +61,28 @@ def require_any_role(user: User = Depends(_get_current_user)) -> User:
 
 
 def require_control(user: User = Depends(_get_current_user)) -> User:
-    """Admin or monitor_control — may control/configure the non-admin sections.
+    """Admin or monitor_control — OPERATIONS: acting within an installation that exists.
 
     v3.34 — gates the write/control endpoints outside System Health, Settings and
-    API Gateway (e.g. session controls, breaker reset, smart-mode, thresholds,
-    LED, NFC/QR, billing config, contracts, berths). Monitor is rejected here.
+    API Gateway (e.g. session controls, breaker reset, thresholds, LED, billing
+    config, contracts, berths). Monitor is rejected here.
+
+    **The principle, so the next such decision has a rule and not a list to copy (v3.43).**
+
+      * `require_control` = **operations**. Allow, deny, stop, reset, set a price. Daily work
+        inside an installation that already exists and is not being changed.
+      * `require_admin` = **installation acts**, as well as the admin-only sections. Anything
+        that changes what the hardware *is*: which socket a physical NFC tag energises, which
+        printed QR codes are valid, whether a cabinet obeys the NUC at all. These are done
+        once, by someone standing at the cabinet.
+
+    NFC/QR used to be listed here and are not any more: re-pointing a physical token is an
+    installation act. The old entry is worth remembering as a cautionary tale — the list said
+    "NFC/QR", `nfc.py`'s docstring said `require_admin`, and the frontend said
+    `const isAdmin = canControl(role)`. Three signals reading as admin-only while the code
+    admitted marina staff, which is precisely how it went unnoticed. `test_roles.py`
+    TC-ROLE-07 now scans the route table for installation-act paths gated here, so the next
+    one fails a test rather than waiting to be read.
     """
     if user.role not in _CONTROL_ROLES:
         raise HTTPException(

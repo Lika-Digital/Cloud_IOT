@@ -1,9 +1,16 @@
-"""NFC provisioning + ERP integration endpoints (v3.26).
+"""NFC provisioning + ERP integration endpoints (v3.26, access model revised v3.43).
 
 Two audiences:
-  * Operator/admin (JWT, require_admin): provision/remove/list NFC tags per socket.
+  * **Admin (JWT, require_admin): provisioning.** Writing, re-assigning or deleting a tag, and
+    switching a cabinet's provisioning mode, are INSTALLATION acts — after one, a customer's
+    tap energises a different socket. They are admin only. Until v3.43 this docstring said
+    `require_admin` while the code used `require_control`, so marina staff could re-point a
+    physical tag; three places read as admin-only while behaving otherwise, which is how it
+    stayed invisible. Reads stay open to any operator: answering "why did my tap not work?"
+    is operations, not configuration.
   * ERP / myMarina (X-API-Key, require_erp_api_key): /scan pre-registration,
-    /session read + remote stop.
+    /session read + remote stop. See the object-authorisation note further down — a valid key
+    is not a claim to a particular record.
 
 Critical architecture notes (per spec):
   * /scan does NOT activate the socket. It only pre-registers intent. Activation
@@ -22,7 +29,7 @@ from ..config import settings
 from ..database import get_db
 from ..auth.user_database import get_user_db
 from ..auth.customer_dependencies import optional_customer
-from ..auth.dependencies import require_any_role, require_control
+from ..auth.dependencies import require_admin, require_any_role
 from ..auth.erp_api_key import require_erp_api_key
 from ..auth.models import User
 from ..models.session import Session
@@ -99,7 +106,7 @@ def get_provisioning_mode(cabinet_id: str, db: DBSession = Depends(get_db),
 @router.patch("/mode/{cabinet_id}")
 def set_provisioning_mode(cabinet_id: str, body: NfcModeBody,
                           db: DBSession = Depends(get_db),
-                          _: User = Depends(require_control)):
+                          _: User = Depends(require_admin)):
     """Switch the cabinet's provisioning mode. Switching to NFC disables
     auto_activate on ALL the cabinet's sockets (explicit activation required);
     switching back to QR restores auto_activate=True on all of them."""
@@ -164,7 +171,7 @@ def _provision_one(db, cabinet_id: str, socket_id: str, nfc_tag_id: str, by: str
 
 @router.post("/tags")
 def provision_nfc_tag(body: NfcProvisionBody, db: DBSession = Depends(get_db),
-                      admin: User = Depends(require_control)):
+                      admin: User = Depends(require_admin)):
     """Provision (or replace) the NFC tag for one socket."""
     tag = _provision_one(db, body.cabinet_id, body.socket_id, body.nfc_tag_id, admin.email)
     return _tag_out(tag)
@@ -172,7 +179,7 @@ def provision_nfc_tag(body: NfcProvisionBody, db: DBSession = Depends(get_db),
 
 @router.post("/tags/bulk")
 def provision_nfc_tags_bulk(body: NfcBulkBody, db: DBSession = Depends(get_db),
-                            admin: User = Depends(require_control)):
+                            admin: User = Depends(require_admin)):
     """Save All — provision multiple sockets at once. Validated per item; a
     duplicate/invalid item aborts the whole batch (nothing committed past the
     failing item is left half-applied because each provision commits, so we
@@ -196,7 +203,7 @@ def provision_nfc_tags_bulk(body: NfcBulkBody, db: DBSession = Depends(get_db),
 
 @router.delete("/tags/{cabinet_id}/{socket_id}")
 def remove_nfc_tag(cabinet_id: str, socket_id: str, db: DBSession = Depends(get_db),
-                   _: User = Depends(require_control)):
+                   _: User = Depends(require_admin)):
     """Clear the NFC tag mapping for a socket (is_active=False)."""
     if socket_id not in _VALID_SOCKETS:
         raise HTTPException(status_code=400, detail="socket_id must be one of Q1..Q4")

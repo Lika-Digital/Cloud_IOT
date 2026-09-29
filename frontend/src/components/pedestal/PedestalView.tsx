@@ -350,8 +350,10 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
   // reject) lives in the Control Center; clicking a socket only surfaces its
   // state, live readings, session counter, and the pedestal's Smart Mode.
   const { pendingSessions, activeSessions, socketLiveData, pendingSockets, optaWaterStates, socketComputedStates, socketBreakerStates, socketLoadStates, socketHardwareConfig, optaStatusInfo, pedestalHealth } = useStore()
-  // Controls the usage-report delete action — a control action, not admin-only.
-  const isAdmin = canControl(useAuthStore((s) => s.role))
+  // Controls the usage-report delete action — a control action, not admin-only. Renamed in
+  // v3.43: an `isAdmin` that actually tests canControl() is how NFC/QR came to read as
+  // admin-only while marina staff could reach it.
+  const canControlHere = canControl(useAuthStore((s) => s.role))
   const [histOpen, setHistOpen] = useState(false)
   const [alarmsOpen, setAlarmsOpen] = useState(false)
 
@@ -559,7 +561,7 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
           socketId={isWater ? (valveName ? Number(valveName.replace('V', '')) : 0) : (socketId ?? 0)}
           resource={isWater ? 'water' : 'electricity'}
           label={isWater ? (valveName ?? 'V?') : (socketId !== null ? `Q${socketId}` : '?')}
-          isAdmin={isAdmin}
+          isAdmin={canControlHere}
           onClose={() => setHistOpen(false)}
         />
       )}

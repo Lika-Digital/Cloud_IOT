@@ -129,7 +129,10 @@ def start_simulator(
     pedestal.initialized = False
     db.commit()
     _sync_simulator(db)
-    return {"running": simulator_manager.is_running, "pedestal_id": pedestal_id}
+    # v3.43 — report WHY when nothing started. The simulator was deleted in March 2026
+    # (be0df4f) and this returned running:false with no explanation.
+    return {"running": simulator_manager.is_running, "pedestal_id": pedestal_id,
+            "reason": simulator_manager.last_error}
 
 
 @router.post("/{pedestal_id}/simulator/stop")
@@ -151,10 +154,24 @@ def stop_simulator(
 
 @router.get("/{pedestal_id}/simulator/status")
 def simulator_status(pedestal_id: int, db: DBSession = Depends(get_db)):
+    """Simulator state, including WHY it is not running when it is not.
+
+    v3.43 — `available` and `reason` are reported because the simulator was deleted from the
+    repository in March 2026 (`be0df4f`) and this endpoint answered `running: false` with no
+    explanation for six months. "Not running" and "cannot run, and here is why" are different
+    answers, and only the second one saves someone a diagnosis.
+    """
+    from ..services.simulator_manager import simulator_available
+
     pedestal = db.get(Pedestal, pedestal_id)
     in_sim_mode = pedestal is not None and pedestal.data_mode == "synthetic"
     running = simulator_manager.is_running and in_sim_mode
-    return {"running": running, "in_simulator_mode": in_sim_mode}
+    return {
+        "running": running,
+        "in_simulator_mode": in_sim_mode,
+        "available": simulator_available(),
+        "reason": simulator_manager.last_error,
+    }
 
 
 def _sync_simulator(db: DBSession) -> None:

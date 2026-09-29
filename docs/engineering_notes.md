@@ -141,16 +141,68 @@ previously gave no way to tell them apart.
 
 ---
 
+## 7. While a commit gate is in flight, the working tree is frozen
+
+**Three times from one root cause**, which is two more than it should have taken.
+
+A pre-commit hook tests **the tree as it is at that moment**, not the snapshot that was staged.
+So editing files while a gate runs means it tests something nobody intended, and running a
+second test suite alongside it means both share one SQLite file and clobber each other. The
+symptoms are convincing and worthless: ten failures across unrelated modules, a commit reported
+as running when it had already aborted, and a failure list that evaporates on a clean run.
+
+> **Start a gate, then touch nothing — no edits, no test runs — until it finishes.** If work
+> must continue, separate it first (`git stash push --keep-index`), so the gate sees one
+> coherent change.
+
+**And fix the gate rather than working around it.** The reason the rule kept being broken is
+that the gate took 8–10 minutes and sometimes never finished, so waiting felt expensive. The
+cause was measurable: `pip-audit` fetches PyPI's advisory database and ran >122 s without
+completing. Its *result* was already advisory — its *runtime* was unbounded, and **a
+non-blocking check that can hang forever still blocks.**
+
+**Enforced by:** the gate split (`GATE_LEVEL=fast` on commit, `full` on push), hard timeouts on
+every network-dependent stage, and a not-run report at the end so a fast gate is never mistaken
+for a complete one. `scripts/install_git_hooks.sh` exists because `.git/hooks/` is untracked, so
+a gate improvement on one machine otherwise reaches nobody — and a fresh clone has no gate at
+all while looking exactly like one that passed.
+
+---
+
+## 8. Zero and unknown are different values, and must stay different rows
+
+**v3.43, meter registers.** A cumulative register that does not move between two boundaries
+means genuine zero consumption — a boat plugged in and drawing nothing, which is a true
+observation worth recording. A register that could not be read means we do not know.
+
+Collapsing the second into the first loses a real measurement *and* asserts something false:
+zero tells ERP the customer used nothing, and they would bill accordingly.
+
+> **`0.0` is a measurement. `None` is the absence of one.** Never coalesce them, and never
+> default the second to the first because a column is non-nullable.
+
+**Enforced by:** `DeltaResult.status` distinguishing `ok` / `unknown` / `rejected`, and
+`consumption_source` on the session recording how a figure was derived.
+
+---
+
 ## Appendix — things that look like over-engineering and are not
 
-One line each on what they prevent, for whoever maintains this next. Removing any of them
-restores a specific, previously-observed failure.
+One line each on what they prevent, for whoever maintains this next. Each looks like needless
+complication; removing any of them restores a specific, previously-observed failure.
 
-*(To be completed in the docs pass — see the access-control plan and the guard design for the
-current entries: provenance-not-boundary on `X-Ext-Api-Caller`; the sustained-quiet clock
-restarting on any CPU rise; releasing the assembly pin on failure; recording clip age from the
-filename rather than mtime; 404-not-403 on someone else's session; three divergence states
-rather than two.)*
+| Looks odd | Why it is there |
+|---|---|
+| **One unreadable interval makes the whole session's figure unknown** | The sum of a partial set is not the total. Reporting it as one is a silent under-report, and the customer is the one it favours least. |
+| `X-Ext-Api-Caller` is called a *provenance hint*, never a security boundary | Anyone who can already reach the API with an operator token could set it. It holds ERP to a stricter contract than a human; nothing is *granted* on its strength. Pretending a settable header is a control would be worse than having no discriminator. |
+| The sustained-quiet clock **restarts on any CPU rise**, not just on a suspension | Otherwise a box flapping at the limit accumulates unrelated quiet and resumes guard on it, then immediately re-suspends. |
+| Manual re-arm clears the **CPU window**, not only the budget | A re-armed guard judged on samples from the overload it just recovered from is re-suspended within seconds. |
+| The assembly pin is released **in a `finally`** | A failed clip assembly would otherwise pin segments for ever, and the capture ring silently stops reclaiming disk. |
+| Clip age comes from the **filename**, not mtime | A file copied, restored or touched gets a new mtime, and retention would then keep evidence it should have dropped — or drop evidence it should have kept. |
+| **404, not 403**, for someone else's session | A distinct "forbidden" confirms the record exists, which is all an enumeration of sequential ids needs. |
+| **Three** divergence states, not two | "ERP stopped reconciling" and "nothing happened worth reconciling" need different responses. One alarm for both gets muted, and then the first goes unnoticed too. |
+| Ownership is checked **before** the already-ended check | Otherwise a 409 tells a stranger the session exists and what state it is in. |
+| `provisioned_by` **raises** instead of defaulting to "(unknown)" | A caller with no actor has a bug; a default hides it, and an unattributable NFC mapping decides who pays. |
 
 ---
 

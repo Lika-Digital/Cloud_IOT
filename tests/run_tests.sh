@@ -11,9 +11,33 @@
 #  Pre-push gate also runs Playwright E2E (tests/playwright_e2e.sh).
 #
 #  Usage: bash tests/run_tests.sh [pytest extra args]
-#  Called automatically by the pre-commit hook.
+#  Called automatically by the pre-commit and pre-push hooks.
+#
+#  GATE_LEVEL (v3.43)
+#  ------------------
+#  fast (default, pre-commit) — everything that is deterministic and local:
+#      pytest, bandit, the cross-layer gap checks. No unbounded network calls.
+#  full (pre-push)            — the above plus semgrep, pip-audit, detect-secrets and
+#      ESLint. Push is the sharing boundary, so that is where the slow and
+#      network-dependent checks belong.
+#
+#  WHY THIS SPLIT EXISTS. pip-audit fetches PyPI's vulnerability database and was measured
+#  taking >122 s without completing on a developer box. Its RESULT was already advisory
+#  ("warn but do not block") — but its RUNTIME was unbounded, and a non-blocking check that
+#  can hang forever still blocks. Three commits were lost to it, and the person losing them
+#  started working around the gate, which is precisely what a slow gate produces. Every
+#  network-dependent stage now has a hard timeout, and a timeout is REPORTED rather than
+#  passing silently.
 # ─────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
+
+GATE_LEVEL="${GATE_LEVEL:-fast}"
+# Hard ceilings for stages that reach the network. Exceeding one is reported as NOT RUN —
+# never as a pass, because "we could not check" and "we checked and it was fine" are
+# different answers.
+SEMGREP_TIMEOUT_S="${SEMGREP_TIMEOUT_S:-180}"
+PIP_AUDIT_TIMEOUT_S="${PIP_AUDIT_TIMEOUT_S:-90}"
+SKIPPED_STAGES=()
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -25,6 +49,8 @@ mkdir -p "$LOG_DIR"
 YELLOW='\033[1;33m'; RED='\033[0;31m'; GREEN='\033[0;32m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
+echo ""
+echo "  Gate level: ${GATE_LEVEL}   (fast = pytest + bandit + gap checks; full adds semgrep, pip-audit, eslint)"
 echo ""
 echo "╔══════════════════════════════════════════════════════╗"
 echo "║          Cloud_IOT — Automated Test Suite           ║"
@@ -186,12 +212,15 @@ SEMGREP_BIN="${VENV_BIN}/semgrep"
 [ -f "${SEMGREP_BIN}.exe" ] && SEMGREP_BIN="${SEMGREP_BIN}.exe"
 
 SEMGREP_EXIT=0
-if command -v "$SEMGREP_BIN" &>/dev/null || [ -f "$SEMGREP_BIN" ]; then
+if [ "$GATE_LEVEL" != "full" ]; then
+    echo -e "${YELLOW}[~] semgrep: not run at gate level 'fast' — runs on push.${NC}"
+    SKIPPED_STAGES+=("semgrep (fast gate; runs on push)")
+elif command -v "$SEMGREP_BIN" &>/dev/null || [ -f "$SEMGREP_BIN" ]; then
     SEMGREP_LOG="${LOG_DIR}/semgrep_last.log"
 
     # Run semgrep with auto rules (free, no login needed for local use)
     # Scan backend Python + frontend TypeScript
-    "$SEMGREP_BIN" \
+    timeout "${SEMGREP_TIMEOUT_S}" "$SEMGREP_BIN" \
         --config "p/python" \
         --config "p/typescript" \
         --config "p/security-audit" \
@@ -262,8 +291,11 @@ echo -e "${CYAN}${BOLD}[4/4] TypeScript lint (eslint)${NC}"
 echo ""
 
 ESLINT_EXIT=0
-if [ -f "frontend/node_modules/.bin/eslint" ] || \
-   [ -f "frontend/node_modules/.bin/eslint.cmd" ]; then
+if [ "$GATE_LEVEL" != "full" ]; then
+    echo -e "${YELLOW}[~] eslint: not run at gate level 'fast' — runs on push.${NC}"
+    SKIPPED_STAGES+=("eslint (fast gate; runs on push)")
+elif [ -f "frontend/node_modules/.bin/eslint" ] || \
+     [ -f "frontend/node_modules/.bin/eslint.cmd" ]; then
 
     ESLINT_LOG="${LOG_DIR}/eslint_last.log"
     cd frontend
@@ -396,14 +428,22 @@ PIP_AUDIT_BIN="${VENV_BIN}/pip-audit"
 [ -f "${PIP_AUDIT_BIN}.exe" ] && PIP_AUDIT_BIN="${PIP_AUDIT_BIN}.exe"
 
 echo "  [GAP-3] Security: pip-audit dependency CVE scan..."
-if command -v "$PIP_AUDIT_BIN" &>/dev/null || [ -f "$PIP_AUDIT_BIN" ]; then
+if [ "$GATE_LEVEL" != "full" ]; then
+    echo -e "  ${YELLOW}[~] pip-audit: not run at gate level 'fast' — runs on push.${NC}"
+    SKIPPED_STAGES+=("pip-audit (fast gate; runs on push)")
+elif command -v "$PIP_AUDIT_BIN" &>/dev/null || [ -f "$PIP_AUDIT_BIN" ]; then
     AUDIT_LOG="${LOG_DIR}/pip_audit_last.log"
-    "$PIP_AUDIT_BIN" \
+    timeout "${PIP_AUDIT_TIMEOUT_S}" "$PIP_AUDIT_BIN" \
         --requirement "${ROOT_DIR}/backend/requirements.txt" \
         --format json \
         --output "$AUDIT_LOG" \
         2>/dev/null
     AUDIT_EXIT=$?
+    if [ $AUDIT_EXIT -eq 124 ]; then
+        echo -e "  ${YELLOW}[!] pip-audit TIMED OUT after ${PIP_AUDIT_TIMEOUT_S}s — dependency CVEs NOT CHECKED.${NC}"
+        echo -e "      It fetches PyPI advisories; a slow or blocked network looks exactly like this."
+        SKIPPED_STAGES+=("pip-audit (TIMED OUT - CVEs not checked)")
+    fi
 
     AUDIT_SUMMARY=$(python - "$AUDIT_LOG" << 'PYEOF'
 import sys, json, os
@@ -457,6 +497,11 @@ fi
 # Summary
 # ═══════════════════════════════════════════════════════════════════════════════
 echo ""
+if [ ${#SKIPPED_STAGES[@]} -gt 0 ]; then
+    echo -e "${YELLOW}Stages NOT RUN at gate level ${GATE_LEVEL}:${NC}"
+    for st in "${SKIPPED_STAGES[@]}"; do echo "    - $st"; done
+    echo ""
+fi
 echo "──────────────────────────────────────────────────────────"
 if [ $OVERALL_EXIT -eq 0 ]; then
     echo -e "${GREEN}${BOLD}✓ All checks passed.${NC}"

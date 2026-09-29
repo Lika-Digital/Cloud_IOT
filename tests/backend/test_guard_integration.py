@@ -748,12 +748,14 @@ async def test_command_sent_while_the_worker_is_down_goes_overdue(backend, tmp_p
     assert not liveness.overdue_acks(time.time()), \
         "an ack was declared overdue before the timeout elapsed"
 
+    # Deliberately NOT asserting the ack is still sitting in `overdue_acks` after the timeout.
+    # The app's own ack watchdog is running in the TestClient's lifespan and reconciles the same
+    # `liveness` singleton every few seconds, so whether this test or that loop gets there first
+    # is a race — and the first version of this test lost it under random ordering while passing
+    # with -p no:randomly. The bookkeeping is an implementation detail; what matters is the
+    # state an operator is shown, which is the same whoever did the reconciling.
     await asyncio.sleep(settings.guard_ack_timeout_s + 0.5)
-    overdue = liveness.overdue_acks()
-    assert any(r == req_id for r, _c in overdue), \
-        f"the unacked command never went overdue: {overdue}"
-
-    await check_overdue_acks()
+    await check_overdue_acks()          # idempotent; safe if the watchdog already ran
 
     status = _status()
     assert status["desired_state"] == "ARMED", \
@@ -788,9 +790,12 @@ async def test_an_ack_that_never_arrives_leaves_no_false_armed(backend, tmp_path
                      timeout=30, what="the Last Will")
 
         req_id = _command("arm")
+        # Pending immediately, which cannot race the watchdog — it only touches acks that are
+        # already overdue.
+        assert any(r == req_id for r, _c in liveness.overdue_acks(time.time() + 10_000)), \
+            "the command was not registered as awaiting an ack at all"
+
         await asyncio.sleep(settings.guard_ack_timeout_s + 0.5)
-        assert any(r == req_id for r, _c in liveness.overdue_acks()), \
-            "the command to a dead worker was not registered as overdue"
         await check_overdue_acks()
 
         status = _status()

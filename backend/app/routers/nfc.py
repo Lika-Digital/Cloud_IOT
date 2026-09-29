@@ -18,8 +18,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DBSession
 
+from ..config import settings
 from ..database import get_db
 from ..auth.user_database import get_user_db
+from ..auth.customer_dependencies import optional_customer
 from ..auth.dependencies import require_any_role, require_control
 from ..auth.erp_api_key import require_erp_api_key
 from ..auth.models import User
@@ -207,12 +209,125 @@ def remove_nfc_tag(cabinet_id: str, socket_id: str, db: DBSession = Depends(get_
 # ══════════════════════════════════════════════════════════════════════════════
 # ERP integration (X-API-Key, require_erp_api_key)
 # ══════════════════════════════════════════════════════════════════════════════
+#
+# OBJECT-LEVEL AUTHORISATION (v3.43)
+# ----------------------------------
+# These routes serve two callers: the ERP server-to-server, and the mobile app. Until v3.43
+# they checked only that the X-API-Key was valid and then acted on whatever record id or
+# `user_id` the request named. Authentication answers "who is this"; it never answers "may
+# this caller touch this record", and the gap between those two questions is what these
+# helpers close.
+#
+# It matters more than an ordinary IDOR because of what the records ARE. In MODE 2
+# (nfc_direct_client_mode, no ERP) our session rows are the billing record — there is no
+# second system holding the truth. Reading or stopping someone else's session there is
+# tampering with a financial record, not merely seeing data you should not. In MODE 1 a forged
+# identifier corrupts ERP reconciliation instead, and silently, because the two systems only
+# compare totals.
+#
+# The principal was already available: the app's axios interceptor attaches
+# `Authorization: Bearer <customer JWT>` to every request (mobile/src/api/client.ts:19-20),
+# and the backend was discarding it in favour of the request body.
+
+
+def _customer_identities(customer) -> set[str]:
+    """Every string that legitimately identifies this customer in `nfc_user_id`.
+
+    The app sends `profile.email || String(profile.id)`
+    (`mobile/app/(app)/scan.tsx:42`), so both forms appear in stored rows and both must be
+    accepted — otherwise the fix would lock customers out of their own sessions depending on
+    which app version wrote the row.
+    """
+    out = {str(customer.id)}
+    if getattr(customer, "email", None):
+        out.add(customer.email)
+        out.add(customer.email.lower())
+    return out
+
+
+def _owns(session, customer) -> bool:
+    """Whether this customer owns this session.
+
+    `customer_id` is the real foreign key and is checked first; `nfc_user_id` is the external
+    string the app or ERP supplied, and is the only link for sessions created through the NFC
+    path before an owner was claimed.
+    """
+    if session.customer_id is not None and session.customer_id == customer.id:
+        return True
+    if session.nfc_user_id:
+        return session.nfc_user_id in _customer_identities(customer)
+    return False
+
+
+def _require_session_access(session, customer) -> None:
+    """Gate a single session record.
+
+    404, not 403, on a mismatch: a distinct "forbidden" would confirm that the session exists,
+    which is all an enumeration needs. The caller who legitimately owns nothing and the caller
+    probing someone else's id get the same answer.
+
+    When there is no customer principal the caller is the ERP machine key. In MODE 1 that is a
+    server acting on its own records and is allowed; in MODE 2 it is refused before reaching
+    here, by `_require_direct_client_principal`.
+    """
+    if customer is None:
+        return
+    if not _owns(session, customer):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+
+def _require_direct_client_principal(customer) -> None:
+    """In MODE 2 a customer token is mandatory on the session endpoints.
+
+    Without this the object checks above are bypassable by simply omitting the Bearer header:
+    the caller falls back to being "the ERP", and the ERP key is compiled into the mobile app
+    bundle (EXPO_PUBLIC_ERP_API_KEY), so it must be assumed known. A check that an attacker
+    opts out of by sending fewer headers is not a check.
+
+    MODE 1 deliberately still accepts the bare key, because there the caller really is ERP's
+    server. Closing the app-shaped hole there means the app must stop holding the key at all —
+    a separate change, and the key rotated with it.
+    """
+    if settings.nfc_direct_client_mode and customer is None:
+        raise HTTPException(
+            status_code=401,
+            detail="This marina runs without an ERP, so a customer sign-in is required "
+                   "for session data.",
+        )
+
 
 @router.post("/scan")
 def nfc_scan(body: NfcScanBody, db: DBSession = Depends(get_db),
+             customer=Depends(optional_customer),
              _: str = Depends(require_erp_api_key)):
     """Pre-register a marina customer's intent to use a socket (NFC tag scanned
-    in myMarina). Does NOT activate the socket — activation happens on plug-in."""
+    in myMarina). Does NOT activate the socket — activation happens on plug-in.
+
+    `body.user_id` is NOT trusted when a customer token is present. It becomes
+    `sessions.nfc_user_id`, which is what ERP reconciles billing against in MODE 1 and what
+    attributes the charge itself in MODE 2 — so a value the caller simply asserts is a way to
+    make someone else pay. Identity comes from the authenticated principal; a body value that
+    disagrees is refused rather than quietly corrected, because a disagreement means either a
+    client bug or an attempt, and both are worth surfacing.
+    """
+    _require_direct_client_principal(customer)
+
+    user_id = body.user_id
+    if customer is not None:
+        allowed = _customer_identities(customer)
+        if user_id not in allowed:
+            logger.warning(
+                "[NFC] scan REFUSED: customer id=%s presented user_id=%r which is not theirs",
+                customer.id, user_id,
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="user_id does not match the signed-in customer",
+            )
+        # Normalise to the authenticated identity rather than the supplied spelling, so
+        # attribution is stable regardless of what the client sent.
+        user_id = customer.email or str(customer.id)
+
     tag = nfc_service.get_active_tag_by_id(db, body.nfc_tag_id)
     if tag is None:
         raise HTTPException(status_code=404, detail="NFC tag not provisioned")
@@ -236,9 +351,13 @@ def nfc_scan(body: NfcScanBody, db: DBSession = Depends(get_db),
     if live is not None:
         raise HTTPException(status_code=409, detail="Socket already in use")
 
-    rec = nfc_service.create_pending(db, body.nfc_tag_id, body.user_id, cabinet_id, socket_id)
-    logger.info("[NFC] scan pre-registered user=%s cabinet=%s socket=%s expires=%s",
-                body.user_id, cabinet_id, socket_id, iso_z(rec.expires_at))
+    rec = nfc_service.create_pending(db, body.nfc_tag_id, user_id, cabinet_id, socket_id)
+    # Log the resolved mapping and the authenticated principal, so an attribution dispute is
+    # answerable from the journal rather than by inference.
+    logger.info("[NFC] scan pre-registered user=%s (principal=%s) cabinet=%s socket=%s "
+                "tag=%s expires=%s",
+                user_id, f"customer:{customer.id}" if customer else "erp-api-key",
+                cabinet_id, socket_id, body.nfc_tag_id, iso_z(rec.expires_at))
 
     return {
         "status": "pending",
@@ -253,11 +372,18 @@ def nfc_scan(body: NfcScanBody, db: DBSession = Depends(get_db),
 @router.get("/session/{session_id}")
 def nfc_session_status(session_id: int, db: DBSession = Depends(get_db),
                        user_db: DBSession = Depends(get_user_db),
+                       customer=Depends(optional_customer),
                        _: str = Depends(require_erp_api_key)):
-    """Current session status + spending data for the ERP to poll."""
+    """Current session status + spending data for the ERP to poll.
+
+    A customer may read only their own session. The payload carries energy, duration and
+    estimated cost, and in MODE 2 that is the billing record itself.
+    """
+    _require_direct_client_principal(customer)
     session = db.get(Session, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
+    _require_session_access(session, customer)
     return nfc_service.build_session_payload(db, user_db, session)
 
 
@@ -268,6 +394,7 @@ def nfc_sessions_by_user(
     limit: int = Query(default=100, ge=1, le=500),
     db: DBSession = Depends(get_db),
     user_db: DBSession = Depends(get_user_db),
+    customer=Depends(optional_customer),
     _: str = Depends(require_erp_api_key),
 ):
     """All sessions (active + historical) for one ERP user_id, newest first.
@@ -277,7 +404,17 @@ def nfc_sessions_by_user(
     spending payload as GET /api/nfc/session/{id} (session_id, energy_kwh,
     duration_minutes, estimated_cost, status, …). Optional `status` narrows to
     active or ended; `limit` caps the result (default 100, max 500).
+
+    A customer may list only their own sessions. 403 rather than 404 here, and deliberately:
+    the `user_id` in the path was supplied by the caller, so refusing it plainly leaks nothing
+    they did not already type, and a silent empty list would read as "you have no sessions"
+    when the truth is "that is not you".
     """
+    _require_direct_client_principal(customer)
+    if customer is not None and user_id not in _customer_identities(customer):
+        raise HTTPException(
+            status_code=403, detail="You may only list your own sessions",
+        )
     q = db.query(Session).filter(Session.nfc_user_id == user_id)
     if status == "active":
         q = q.filter(Session.status == "active")
@@ -294,13 +431,22 @@ def nfc_sessions_by_user(
 @router.post("/session/{session_id}/stop")
 async def nfc_session_stop(session_id: int, db: DBSession = Depends(get_db),
                            user_db: DBSession = Depends(get_user_db),
+                           customer=Depends(optional_customer),
                            _: str = Depends(require_erp_api_key)):
     """Remote stop from the ERP. Operator override is highest priority: if the
     session is already ended (e.g. operator stopped it), return 409 and never
-    restart it. Otherwise stop via the SAME flow as operator stop."""
+    restart it. Otherwise stop via the SAME flow as operator stop.
+
+    A customer may stop only their own session. This is the check with a physical consequence:
+    without it, any holder of the machine key could cut power to another berth mid-charge.
+    Ownership is verified BEFORE the already-ended check, so a probe cannot learn the state of
+    a session it does not own.
+    """
+    _require_direct_client_principal(customer)
     session = db.get(Session, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
+    _require_session_access(session, customer)
     if session.status != "active":
         raise HTTPException(status_code=409, detail="Session already ended by operator")
 

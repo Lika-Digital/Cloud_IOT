@@ -136,6 +136,24 @@ class Settings(BaseSettings):
     erp_api_key: Optional[str] = None
     erp_webhook_url: Optional[str] = None
 
+    # v3.43 — which of the two supported NFC topologies this marina runs.
+    #
+    #   False (default) = MODE 1, WITH ERP. Mobile app -> ERP -> pedestal. ERP does the
+    #     billing; our session rows are measurement and reconciliation data. The NFC session
+    #     endpoints accept the ERP machine key, because the real caller IS a server.
+    #
+    #   True = MODE 2, WITHOUT ERP. Mobile app -> pedestal directly. **The pedestal is the
+    #     billing system** — our session rows are the only record of what anyone owes. So the
+    #     NFC session endpoints REQUIRE a per-customer token: a shared machine key cannot
+    #     express "this customer, this session", and in this mode that distinction is the
+    #     difference between a financial record and a suggestion.
+    #
+    # Marina-wide rather than per-pedestal on purpose: it describes whether an ERP exists at
+    # this site, which is a property of the deployment, not of a cabinet. A single marina
+    # running both topologies at once would mean two billing authorities for neighbouring
+    # berths, which is not a configuration anyone should be able to reach by accident.
+    nfc_direct_client_mode: bool = False
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

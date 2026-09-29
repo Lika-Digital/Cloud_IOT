@@ -473,6 +473,31 @@ async def _guard_ack_watchdog():
             logger.warning(f"Guard ack watchdog error: {e}")
 
 
+async def _erp_reconciliation_watchdog():
+    """Hourly: has the ERP stopped reconciling while charges piled up? (v3.43)
+
+    Our records could previously drift from ERP's silently — each side kept its own totals and
+    nothing asserted they agreed. Divergence you can see is a problem; silence is a problem you
+    cannot see, so something has to watch for the absence of a signal.
+
+    Only pedestals with a BACKLOG alarm. A marina that is simply quiet in winter reconciles
+    nothing and is not broken, and an alarm that fires on quiet gets muted — after which the
+    real one goes unnoticed too. The distinction lives in
+    `erp_reconciliation.status_by_pedestal`, not in this loop.
+
+    Hourly rather than tighter: the threshold is measured in days, so a faster loop would only
+    re-raise a deduplicated alarm more often.
+    """
+    from .services.erp_reconciliation import check_reconciliation_silence
+
+    while True:
+        await asyncio.sleep(3600)
+        try:
+            await check_reconciliation_silence()
+        except Exception as e:
+            logger.warning(f"ERP reconciliation watchdog error: {e}")
+
+
 async def _comm_loss_watchdog():
     """
     Every 30 s: check each known pedestal against its last-heartbeat timestamp.
@@ -764,6 +789,9 @@ async def lifespan(app: FastAPI):
     led_scheduler_task   = asyncio.create_task(_run_led_scheduler())
     # v3.23 — Papouch TME temperature poller + range alarms
     temp_poll_task       = asyncio.create_task(_temp_sensor_poll())
+    # v3.43 — ERP reconciliation silence. Hourly, because the threshold is days: a tighter loop
+    # would only re-raise a deduplicated alarm more often.
+    erp_recon_task       = asyncio.create_task(_erp_reconciliation_watchdog())
 
     yield
 
@@ -785,6 +813,7 @@ async def lifespan(app: FastAPI):
     time_sync_task.cancel()
     led_scheduler_task.cancel()
     temp_poll_task.cancel()
+    erp_recon_task.cancel()
     mqtt_service.stop()
     snmp_trap_service.stop()
     simulator_manager.stop()

@@ -207,6 +207,9 @@ def _migrate_schema():
         # backfilling a guess would be worse than an honest NULL.
         ("nfc_tags",       "removed_at",  "DATETIME"),
         ("nfc_tags",       "removed_by",  "TEXT"),
+        # v3.43 — when the ERP last read this session for reconciliation. NULL = never, which
+        # is the honest value for every row that predates this and for every new session.
+        ("sessions",       "last_reconciled_at", "DATETIME"),
     ]
 
     with engine.connect() as conn:

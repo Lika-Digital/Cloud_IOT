@@ -171,6 +171,11 @@ class Settings(BaseSettings):
     # date is recorded because "optional for now" with no date stays optional for ever.
     nfc_cross_check_required: bool = False
 
+    # v3.43 — how long ERP may go without reconciling before it is treated as a fault. Only
+    # pedestals with a BACKLOG alarm: a quiet marina reconciles nothing and is not broken, and
+    # an alarm that fires on quiet gets muted — after which the real one goes unnoticed too.
+    erp_reconciliation_silence_days: int = 7
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

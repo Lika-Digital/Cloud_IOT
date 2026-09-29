@@ -36,7 +36,7 @@ from ..auth.models import User
 from ..models.session import Session
 from ..models.pedestal_config import PedestalConfig
 from ..services.session_service import session_service
-from ..services import nfc_service
+from ..services import erp_reconciliation, nfc_service
 from ..services.nfc_service import DuplicateNfcTagError
 from ..time_utils import iso_z
 
@@ -485,6 +485,11 @@ def nfc_session_status(session_id: int, db: DBSession = Depends(get_db),
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     _require_session_access(session, customer)
+    # v3.43 — a machine caller reading this IS reconciliation; a customer reading their own
+    # charge is not. Stamping both would silence the divergence detector every time someone
+    # opened the app.
+    if customer is None:
+        erp_reconciliation.mark_reconciled(db, [session])
     return nfc_service.build_session_payload(db, user_db, session)
 
 
@@ -522,6 +527,10 @@ def nfc_sessions_by_user(
     elif status == "ended":
         q = q.filter(Session.status != "active")
     rows = q.order_by(Session.started_at.desc()).limit(limit).all()
+    # This endpoint exists so ERP can reconcile, so a machine read of it is the reconciliation
+    # event itself — the strongest signal we get that the integration is alive.
+    if customer is None:
+        erp_reconciliation.mark_reconciled(db, rows)
     return {
         "user_id": user_id,
         "count": len(rows),
@@ -558,3 +567,53 @@ async def nfc_session_stop(session_id: int, db: DBSession = Depends(get_db),
     db.refresh(session)
     logger.info("[NFC] ERP stopped session %d", session_id)
     return nfc_service.build_session_payload(db, user_db, session)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ERP reconciliation visibility (admin)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/reconciliation")
+def erp_reconciliation_status(db: DBSession = Depends(get_db),
+                              _: User = Depends(require_any_role)):
+    """Has ERP actually been reconciling, and what is waiting? (v3.43)
+
+    Before this, our records could drift from ERP's silently — each side kept its own totals
+    and nothing asserted they agreed. Divergence you can see is a problem; **silence is a
+    problem you cannot see**, which is why the per-pedestal state matters more than the list.
+
+    Three states, and only one of them is a fault:
+
+      `reconciling`          ERP read something inside the window. Healthy.
+      `silent_with_backlog`  Finished sessions are waiting AND ERP has not read in the window.
+                             The integration has stopped and the marina is billing nothing.
+      `idle`                 Nothing waiting. A quiet marina, not a broken one.
+
+    Open to any operator deliberately: "is our billing reaching the ERP?" is an operational
+    question the marina should be able to answer without an admin, and it exposes no
+    configuration.
+    """
+    states = erp_reconciliation.status_by_pedestal(db)
+    return {
+        "mode": "direct" if settings.nfc_direct_client_mode else "erp",
+        "silence_threshold_days": settings.erp_reconciliation_silence_days,
+        # In MODE 2 there is no ERP, so none of this is meaningful. Said explicitly rather than
+        # returning empty lists that read as "all healthy".
+        "applicable": not settings.nfc_direct_client_mode,
+        "pedestals": [s.as_dict() for s in states],
+        "needs_attention": [s.as_dict() for s in states
+                            if s.state == erp_reconciliation.STATE_SILENT_WITH_BACKLOG],
+    }
+
+
+@router.get("/reconciliation/divergence")
+def erp_divergence(limit: int = Query(default=200, ge=1, le=1000),
+                   db: DBSession = Depends(get_db),
+                   _: User = Depends(require_any_role)):
+    """Finished ERP sessions never acknowledged, OLDEST FIRST.
+
+    Oldest first because the oldest unreconciled charge is the one most likely to be disputed
+    or written off, and a newest-first list buries exactly the row that needs attention.
+    """
+    rows = erp_reconciliation.divergent_sessions(db, limit=limit)
+    return {"count": len(rows), "sessions": rows}

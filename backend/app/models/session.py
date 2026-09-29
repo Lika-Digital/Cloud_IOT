@@ -50,6 +50,19 @@ class Session(Base):
     # re-log energy already billed. Always <= energy_kwh.
     energy_logged_kwh: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
 
+    # v3.43 — when the ERP last READ this session for reconciliation, i.e. fetched it through
+    # GET /api/nfc/session/{id} or /api/nfc/sessions/by-user/{id} as a machine caller.
+    #
+    # In MODE 1 the ERP bills and our rows are reconciliation data, so "ERP has never looked at
+    # this session" was previously an assumption nobody could check. This makes it a fact.
+    # NULL means exactly that — never reconciled — and is the normal state for a session that
+    # has only just started.
+    #
+    # A customer reading their own session does NOT stamp this: that is someone checking their
+    # charge, not the billing system reconciling. Conflating the two would make the silence
+    # detector go quiet whenever a customer opened the app.
+    last_reconciled_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
     pedestal: Mapped["Pedestal"] = relationship("Pedestal", back_populates="sessions")  # noqa: F821
     sensor_readings: Mapped[list["SensorReading"]] = relationship(  # noqa: F821
         "SensorReading", back_populates="session"

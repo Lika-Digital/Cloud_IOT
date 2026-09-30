@@ -76,16 +76,41 @@ Today the code supports **four** (`_VALID_SOCKETS = {Q1..Q4}`), `/scan` hardcode
 - The provisioning UI should be driven by `opta/config/hardware`, which enumerates the
   cabinet's actual outlets (see item 7).
 
-## 6. Real firmware speaks `opta/*`, and `marina/cabinet/*` is aspirational
+## 6. **DECIDED** — UI v2 is written against `opta/*`
 
-**Landed as a finding; the decision is still open.** A full capture from MAR_KRK_ORM_01
-(firmware 3.1.0) contains only `opta/...` topics. Nothing bridges the two prefixes, nothing
-publishes the `marina/cabinet/...` inbound topics, and every `MARINA_*` handler fires only from
-tests. The comment above those regexes said "(real hardware)" and meant the opposite.
+**Settled 2026-09-30.** A full capture from MAR_KRK_ORM_01 (firmware 3.1.0) contains only
+`opta/...` topics: `opta/status`, `opta/config/hardware`, `opta/sockets/Q1..Q4/status`,
+`opta/water/V1..V2/status`, `opta/meters/Q1..Q4/telemetry`, `opta/breakers/Q1..Q4/status`.
 
-**For the spec — this is an open question, not a settled input.** Is UI v2 written against
-`opta/*`, or is `marina/cabinet/*` where firmware is heading? It needs deciding rather than
-assuming, and it is the first item of the docs pass.
+**`marina/cabinet/*` is aspirational.** Nothing bridges the prefixes, nothing publishes those
+inbound topics, and **every `MARINA_*` handler fires only from tests** — a whole family of
+handlers tested against nothing real. The comment above those regexes said "(real hardware)" and
+said the opposite of the truth.
+
+**For the spec:**
+- UI v2 targets `opta/*`. New code must not assume `marina/cabinet/*`.
+- The existing `MARINA_*` handlers stay for now, but are **not to be extended**. If firmware
+  ever moves to that prefix it will be a deliberate migration with a capture to prove it, not a
+  drift discovered later.
+- **The dead command publishes are removed** (v3.43): six in `controls.py`, one in
+  `mqtt_handlers.py`, all sending to `marina/cabinet/.../cmd/...` while the Opta listens on
+  `opta/cmd/*`. No test asserted them, which is its own signal. A publish nobody receives is
+  worse than no publish, because it reads as working.
+
+## 7. **DECIDED** — three-phase display, ratings, and shape tolerance
+
+**Settled 2026-09-30.**
+
+- **Per-phase values do NOT appear at L1.** One number per row, and "which phase" is not a
+  question marina staff ask.
+- **Berth detail shows per-phase for a three-phase socket** — that is where someone
+  investigating a problem goes. Labelled **"Phase 1 / 2 / 3"**, not L1/L2/L3.
+- **The socket's rating belongs on berth detail**, not on the row: "this berth is on a 16 A
+  socket and the customer wants 32 A" is an answer staff need, and it comes from
+  `opta/config/hardware` rather than a constant (Q1/Q2 are 32 A, Q3/Q4 are 16 A).
+- **The UI must render what the payload contains, not what it expects.** Q1 sends
+  `currentAmpsL1..L3` / `powerKwTotal`; Q2–Q4 send `currentAmps` / `powerKw`. A component that
+  assumes one shape and fails on the other is a real defect, not a styling detail.
 
 ## 7. The cabinet enumerates itself, including per-socket differences
 

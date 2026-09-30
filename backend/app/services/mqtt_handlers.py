@@ -3730,10 +3730,11 @@ async def auto_reject_stale_socket_pending(
             cfg = db.query(_PC).filter(_PC.pedestal_id == s.pedestal_id).first()
             cabinet_id = getattr(cfg, "opta_client_id", None) if cfg else None
             if cabinet_id:
-                mqtt_publish(
-                    f"marina/cabinet/{cabinet_id}/cmd/socket/E{s.socket_id}",
-                    json.dumps({"cmd": "disable"}),
-                )
+                # v3.43 — the marina/cabinet/* command publish that used to sit here is REMOVED.
+                # The Opta listens on opta/cmd/*; a full capture from MAR_KRK_ORM_01 (firmware
+                # 3.1.0) contains no marina/cabinet/* traffic at all, and nothing bridges the two
+                # prefixes. So it went to a topic nobody receives — which is worse than no publish,
+                # because it reads as working. UI v2 and all new code target opta/* only.
                 mqtt_publish(
                     f"opta/cmd/socket/Q{s.socket_id}",
                     json.dumps({"cabinetId": cabinet_id, "cmd": "disable"}),

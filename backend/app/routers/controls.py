@@ -59,10 +59,11 @@ def _publish_socket_approve(db: DBSession, pedestal_id: int, socket_id: int):
     cabinet_id = _get_cabinet_id(db, pedestal_id)
     msg_id = str(int(datetime.utcnow().timestamp() * 1000))
     if cabinet_id:
-        mqtt_service.publish(
-            f"marina/cabinet/{cabinet_id}/cmd/socket/E{socket_id}",
-            json.dumps({"cmd": "enable"}),
-        )
+        # v3.43 — the marina/cabinet/* command publish that used to sit here is REMOVED.
+        # The Opta listens on opta/cmd/*; a full capture from MAR_KRK_ORM_01 (firmware
+        # 3.1.0) contains no marina/cabinet/* traffic at all, and nothing bridges the two
+        # prefixes. So it went to a topic nobody receives — which is worse than no publish,
+        # because it reads as working. UI v2 and all new code target opta/* only.
         # Opta expects {"action": "activate"}, not {"cmd": "enable"}
         mqtt_service.publish(
             f"opta/cmd/socket/Q{socket_id}",
@@ -80,10 +81,6 @@ def _publish_socket_reject(db: DBSession, pedestal_id: int, socket_id: int, reas
     cabinet_id = _get_cabinet_id(db, pedestal_id)
     msg_id = str(int(datetime.utcnow().timestamp() * 1000))
     if cabinet_id:
-        mqtt_service.publish(
-            f"marina/cabinet/{cabinet_id}/cmd/socket/E{socket_id}",
-            json.dumps({"cmd": "disable"}),
-        )
         # Opta expects {"action": "stop"}, not {"cmd": "disable"}
         mqtt_service.publish(
             f"opta/cmd/socket/Q{socket_id}",
@@ -107,20 +104,12 @@ def _publish_session_control(db: DBSession, session: Session, action: str):
         if session.type == "electricity":
             sid = session.socket_id or 1
             if action == "allow":
-                mqtt_service.publish(
-                    f"marina/cabinet/{cabinet_id}/cmd/socket/E{sid}",
-                    json.dumps({"cmd": "enable"}),
-                )
                 # Opta expects {"action": "activate"}, not {"cmd": "enable"}
                 mqtt_service.publish(
                     f"opta/cmd/socket/Q{sid}",
                     json.dumps({"msgId": msg_id, "cabinetId": cabinet_id, "action": "activate"}),
                 )
             elif action == "deny":
-                mqtt_service.publish(
-                    f"marina/cabinet/{cabinet_id}/cmd/socket/E{sid}",
-                    json.dumps({"cmd": "disable"}),
-                )
                 # Opta expects {"action": "stop"}, not {"cmd": "disable"}
                 mqtt_service.publish(
                     f"opta/cmd/socket/Q{sid}",
@@ -128,20 +117,12 @@ def _publish_session_control(db: DBSession, session: Session, action: str):
                 )
             elif action == "stop":
                 mqtt_service.publish(
-                    f"marina/cabinet/{cabinet_id}/outlet/PWR-{sid}/cmd/stop",
-                    json.dumps({"cmd": "stop"}),
-                )
-                mqtt_service.publish(
                     f"opta/cmd/socket/Q{sid}",
                     json.dumps({"msgId": msg_id, "cabinetId": cabinet_id, "action": "stop"}),
                 )
         elif session.type == "water":
             wid = session.socket_id or 1
             if action in ("deny", "stop"):
-                mqtt_service.publish(
-                    f"marina/cabinet/{cabinet_id}/outlet/WTR-{wid}/cmd/stop",
-                    json.dumps({"cmd": "stop"}),
-                )
                 # Opta expects {"action": "stop"}
                 mqtt_service.publish(
                     f"opta/cmd/water/V{wid}",

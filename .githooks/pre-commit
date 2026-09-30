@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Installed by scripts/install_git_hooks.sh — edit there, not here, or the change is lost.
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+echo ""
+echo "🔍 Pre-commit: fast gate (pytest + bandit + gap checks)"
+echo ""
+
+GATE_LEVEL=fast bash "$REPO_ROOT/tests/run_tests.sh"
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ]; then
+    echo ""
+    echo "❌  Commit aborted — the fast gate failed."
+    echo "    Fix it and commit again. The full gate (semgrep, pip-audit, eslint,"
+    echo "    Playwright) runs on push."
+    echo ""
+    exit 1
+fi
+
+echo ""
+echo "✅  Fast gate passed — committing."
+echo ""
+exit 0

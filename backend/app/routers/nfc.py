@@ -42,6 +42,7 @@ from ..services.nfc_service import (
     OUTLET_SOCKET,
     OUTLET_VALVE,
     VALID_OUTLETS,
+    WaterTagBlockedByAppVersion,
     outlet_type_for,
     session_type_for,
 )
@@ -311,6 +312,10 @@ def _provision_one(db, cabinet_id: str, socket_id: str, nfc_tag_id: str, by: str
     try:
         return nfc_service.provision_tag(db, nfc_tag_id, cabinet_id, socket_id,
                                          provisioned_by=by, outlet_type=outlet_type)
+    except WaterTagBlockedByAppVersion as e:
+        # 409, not 400: the request is well-formed and will be valid once the app ships.
+        # 400 would read as "you typed something wrong" and invite a retry.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except DuplicateNfcTagError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -340,6 +345,14 @@ def provision_nfc_tags_bulk(body: NfcBulkBody, db: DBSession = Depends(get_db),
     seen: dict[str, str] = {}
     for it in body.items:
         _outlet_kind_or_400(it.socket_id)
+        if it.outlet_type == OUTLET_VALVE:
+            # In the PRE-PASS, not the write loop. Each provision commits individually,
+            # so discovering this mid-loop would leave the electricity tags before it
+            # applied and the ones after it not — a half-provisioned cabinet.
+            try:
+                nfc_service.assert_valve_provisioning_allowed()
+            except WaterTagBlockedByAppVersion as e:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
         if it.nfc_tag_id in seen and seen[it.nfc_tag_id] != it.socket_id:
             raise HTTPException(
                 status_code=409,
@@ -578,11 +591,25 @@ def nfc_scan(body: NfcScanBody, db: DBSession = Depends(get_db),
     # Kept for the electricity path and for the response, which has always used this name.
     socket_int = outlet_int
 
-    # Outlet availability. The fault check applies to electricity only: the display-state
-    # machine reads socket hardware status, and there is NO valve equivalent in the
-    # firmware payload today. Rather than pass a valve through a socket-shaped check and
-    # get a meaningless answer, the valve path skips it — stated here because a missing
-    # check that looks like a passing check is the failure mode worth naming.
+    # Outlet availability. The fault check applies to electricity only.
+    #
+    # Not because a valve has no state — it does: `opta/water/V{n}/status` carries
+    # `state` and `hw_status`, and v3.43 persists both on `valve_configs`. The reason is
+    # narrower and specific to WHEN a valve fault becomes observable.
+    #
+    # The firmware has a valve `STATE_FAULT`, but it reports it REACTIVELY: an attempt to
+    # open a faulted valve answers on `opta/acks` with
+    # `{"status":"error","reason":"outlet_fault"}` (docs/firmware_requirements.md, v3.9).
+    # It does not appear in the status topic, and no capture has ever shown a `state` or
+    # `hw_status` value other than `idle`/`off`.
+    #
+    # `/scan` runs BEFORE any open command, so at this moment there is genuinely nothing
+    # to read. A check here would test for a string we invented, pass always, and be
+    # indistinguishable from a check that works — the failure mode worth naming. The
+    # fault surfaces where it actually can: the ACK handler, on activation.
+    #
+    # Passing a valve through `_socket_display_state` would be worse: that reads
+    # socket-keyed tables, so V1 would be judged on socket 1's hardware.
     if not is_valve and _socket_display_state(db, cfg.pedestal_id, outlet_int) == "fault":
         raise HTTPException(
             status_code=503,

@@ -12,7 +12,9 @@ skips that valve and the operator must open it manually via the Control Center.
 valve_id = 1 for V1, 2 for V2.
 """
 from datetime import datetime
-from sqlalchemy import Column, Integer, Boolean, DateTime, Float, ForeignKey, UniqueConstraint
+from sqlalchemy import (
+    Column, Integer, String, Boolean, DateTime, Float, ForeignKey, UniqueConstraint,
+)
 from ..database import Base
 
 
@@ -36,6 +38,27 @@ class ValveConfig(Base):
     # (end minus start) rather than any figure we derive.
     meter_total_l    = Column(Float, nullable=True)
     meter_updated_at = Column(DateTime, nullable=True)
+
+    # v3.43 — the valve's LAST REPORTED STATE, persisted.
+    #
+    # `opta/water/V{n}/status` has always carried `state` ("idle"/"active") and `hw_status`
+    # ("off"/...) — the real payload is
+    #     {"id":"V1","state":"idle","hw_status":"off","ts":…,"total_l":…,"session_l":…}
+    # — but the handler broadcast them over the websocket and kept nothing. So any caller that
+    # was not listening at that moment had no way to ask what a valve was doing, and
+    # `socket_states` (which is keyed by number alone) would have answered with the ELECTRICITY
+    # socket of the same number.
+    #
+    # This is the valve counterpart of `socket_states`, put on ValveConfig rather than in a new
+    # table because the row already exists per (pedestal, valve) and the socket equivalent's
+    # extra columns — operator approval — have no valve analogue.
+    #
+    # `state_updated_at` is not decoration: a stored state is only as good as its age. A valve
+    # whose cabinet went silent three days ago must not report "idle" as though it were current
+    # (docs/engineering_notes.md, rule 1).
+    last_state       = Column(String, nullable=True)
+    last_hw_status   = Column(String, nullable=True)
+    state_updated_at = Column(DateTime, nullable=True)
 
     created_at    = Column(DateTime, default=datetime.utcnow)
     updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

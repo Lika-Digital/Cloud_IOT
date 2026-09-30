@@ -712,6 +712,29 @@ async def _handle_marina_water(cabinet_id: str, water_name: str, payload: str):
         # v3.9 — idempotent ValveConfig auto-discovery on first sight.
         if pedestal_id is not None:
             _auto_discover_valve_config(db, pedestal_id, valve_id)
+            # v3.43 — PERSIST the state the firmware just told us.
+            #
+            # `state` and `hw_status` have always been in this payload; they were broadcast
+            # over the websocket and then dropped. Anything not listening at that instant had
+            # nowhere to ask, so the dashboard and the mobile QR landing both fell back to
+            # `socket_states` — which is keyed by number alone and therefore answered with
+            # the ELECTRICITY socket sharing the valve's number.
+            from ..models.valve_config import ValveConfig
+            vc = db.query(ValveConfig).filter(
+                ValveConfig.pedestal_id == pedestal_id,
+                ValveConfig.valve_id == valve_id,
+            ).first()
+            if vc is not None:
+                # Absent keys are preserved rather than overwritten with None, the same
+                # no-overwrite-with-null rule the hardware config follows (D12).
+                if "state" in data:
+                    vc.last_state = data.get("state")
+                if "hw_status" in data:
+                    vc.last_hw_status = data.get("hw_status")
+                # Stamped on every message, even one that changed nothing: the AGE is what
+                # tells a reader whether the stored state is still worth believing.
+                vc.state_updated_at = datetime.utcnow()
+                db.commit()
     finally:
         db.close()
 

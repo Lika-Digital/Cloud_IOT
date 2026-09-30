@@ -1,5 +1,12 @@
 /**
- * QR-scan landing page (v3.6 — mobile monitoring-only).
+ * QR-scan landing page (v3.6 — mobile monitoring-only; six outlets from v3.43).
+ *
+ * NOTE (v3.43): the import below was `../../../../src/api/mobile` — four levels up from
+ * `app/(app)/mobile/socket/[pedestal_id]/`, which lands on `app/src/api/mobile` and does
+ * not exist. Five levels are needed. The module never resolved, so this screen — the
+ * entire QR landing flow — could not build. It was not caught because `tsc --noEmit` on
+ * the mobile package already reported unrelated errors, so one more went unread: a
+ * broken baseline hides the next break. See docs/engineering_notes.md.
  *
  * Flow:
  *   1. On mount, POST /api/mobile/qr/claim with the path params.
@@ -17,15 +24,23 @@
 import { useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native'
 import { useLocalSearchParams } from 'expo-router'
-import { qrClaim, sessionLive, type QrClaimResponse, type SessionLiveResponse } from '../../../../src/api/mobile'
+import { qrClaim, sessionLive, type QrClaimResponse, type SessionLiveResponse } from '../../../../../src/api/mobile'
 
 type ViewState = 'loading' | 'no_session' | 'claimed' | 'read_only' | 'ended' | 'error'
 
+// v3.43 — nullable, because a QR code can now be on a water outlet. Exactly one pair
+// carries figures; null means this outlet does not measure that quantity, which is not
+// the same as measuring zero.
 interface LiveMetrics {
   duration_seconds: number
-  energy_kwh: number
-  power_kw: number
+  energy_kwh: number | null
+  power_kw: number | null
+  water_liters: number | null
+  flow_lpm: number | null
 }
+
+const fmt = (v: number | null, digits: number, unit: string): string =>
+  v == null ? '—' : `${v.toFixed(digits)} ${unit}`
 
 
 export default function QrSocketLanding() {
@@ -58,12 +73,14 @@ export default function QrSocketLanding() {
             duration_seconds: res.duration_seconds,
             energy_kwh: res.energy_kwh,
             power_kw: res.power_kw,
+            water_liters: res.water_liters,
+            flow_lpm: res.flow_lpm,
           })
           setView(res.status === 'read_only' ? 'read_only' : 'claimed')
         }
       })
       .catch((e) => {
-        const detail = e?.response?.data?.detail ?? 'Could not claim this socket'
+        const detail = e?.response?.data?.detail ?? 'Could not open this outlet'
         setErrMsg(typeof detail === 'string' ? detail : 'Error')
         setView('error')
       })
@@ -84,12 +101,19 @@ export default function QrSocketLanding() {
         if (msg?.event === 'session_telemetry' && msg?.data) {
           setMetrics({
             duration_seconds: msg.data.duration_seconds,
-            energy_kwh: msg.data.energy_kwh,
-            power_kw: msg.data.power_kw,
+            energy_kwh: msg.data.energy_kwh ?? null,
+            power_kw: msg.data.power_kw ?? null,
+            water_liters: msg.data.water_liters ?? null,
+            flow_lpm: msg.data.flow_lpm ?? null,
           })
         } else if (msg?.event === 'session_ended') {
           setView('ended')
-          setMetrics((m) => m && { ...m, power_kw: 0 })
+          // Zero the RATE, not the total, and only the rate this outlet actually has.
+          setMetrics((m) => m && {
+            ...m,
+            power_kw: m.power_kw == null ? null : 0,
+            flow_lpm: m.flow_lpm == null ? null : 0,
+          })
           ws.close()
         } else if (msg?.event === 'socket_state_changed' && msg?.data?.state) {
           // no-op for now; useful if we later surface fault → error state.
@@ -111,6 +135,8 @@ export default function QrSocketLanding() {
           duration_seconds: m.duration_seconds,
           energy_kwh: m.energy_kwh,
           power_kw: m.power_kw,
+          water_liters: m.water_liters,
+          flow_lpm: m.flow_lpm,
         }))
         .catch(() => { /* non-fatal; WS may still be delivering */ })
     }, 5000)
@@ -132,6 +158,8 @@ export default function QrSocketLanding() {
             duration_seconds: res.duration_seconds,
             energy_kwh: res.energy_kwh,
             power_kw: res.power_kw,
+            water_liters: res.water_liters,
+            flow_lpm: res.flow_lpm,
           })
           setView(res.status === 'read_only' ? 'read_only' : 'claimed')
         }
@@ -148,15 +176,25 @@ export default function QrSocketLanding() {
   if (view === 'error') {
     return <Center><Text style={styles.err}>{errMsg}</Text></Center>
   }
+  // v3.43 — which kind of outlet this code is on. Taken from the server's answer, never
+  // inferred from the label: a bare digit is ambiguous between socket 1 and valve 1.
+  const isWater = claim?.session_type === 'water'
+  const outletWord = isWater ? 'Water outlet' : 'Socket'
+
   if (view === 'no_session' && claim?.status === 'no_session') {
     return (
       <Center>
-        <Text style={styles.title}>{`Socket ${socketId}`}</Text>
+        <Text style={styles.title}>{`${outletWord} ${socketId}`}</Text>
         <Text style={styles.sub}>{`Pedestal ${pedestalId}`}</Text>
         <Text style={styles.state}>
-          {claim.socket_state === 'pending'
-            ? 'Cable detected — awaiting activation'
-            : 'No session on this socket yet. Plug in a cable to start.'}
+          {isWater
+            /* No 'pending' branch for water: the firmware sends no valve state, so the
+               server answers 'unknown' and there is nothing to report between idle and
+               awaiting-activation. Inventing one would be a guess shown as a reading. */
+            ? 'No session on this water outlet yet. Open the tap to start.'
+            : claim.socket_state === 'pending'
+              ? 'Cable detected — awaiting activation'
+              : 'No session on this socket yet. Plug in a cable to start.'}
         </Text>
         <Text style={styles.hint}>Checking every 5 s…</Text>
       </Center>
@@ -168,31 +206,48 @@ export default function QrSocketLanding() {
         <Text style={styles.title}>Session ended</Text>
         {metrics && (
           <>
-            <Metric label="Total energy" value={`${metrics.energy_kwh.toFixed(3)} kWh`} />
+            {isWater
+              ? <Metric label="Total water" value={fmt(metrics.water_liters, 1, 'L')} />
+              : <Metric label="Total energy" value={fmt(metrics.energy_kwh, 3, 'kWh')} />}
             <Metric label="Duration" value={formatDuration(metrics.duration_seconds)} />
           </>
         )}
-        <Text style={styles.hint}>Thank you. Unplug the cable to finalise.</Text>
+        <Text style={styles.hint}>
+          {isWater
+            ? 'Thank you. Close the tap to finalise.'
+            : 'Thank you. Unplug the cable to finalise.'}
+        </Text>
       </Center>
     )
   }
   const readOnly = view === 'read_only'
   return (
     <Center>
-      <Text style={styles.title}>{`Socket ${socketId}`}</Text>
+      <Text style={styles.title}>{`${outletWord} ${socketId}`}</Text>
       <Text style={styles.sub}>{`Pedestal ${pedestalId}`}</Text>
       {readOnly && (
         <Text style={styles.warn}>This session is managed by another user.</Text>
       )}
       {metrics && (
         <>
-          <Metric label="Power" value={`${metrics.power_kw.toFixed(2)} kW`} />
-          <Metric label="Energy" value={`${metrics.energy_kwh.toFixed(3)} kWh`} />
+          {isWater ? (
+            <>
+              <Metric label="Flow" value={fmt(metrics.flow_lpm, 1, 'L/min')} />
+              <Metric label="Water" value={fmt(metrics.water_liters, 1, 'L')} />
+            </>
+          ) : (
+            <>
+              <Metric label="Power" value={fmt(metrics.power_kw, 2, 'kW')} />
+              <Metric label="Energy" value={fmt(metrics.energy_kwh, 3, 'kWh')} />
+            </>
+          )}
           <Metric label="Duration" value={formatDuration(metrics.duration_seconds)} />
         </>
       )}
       <Text style={styles.hint}>
-        {'Unplug the cable when you are finished — operator-stop is also available from the dashboard.'}
+        {isWater
+          ? 'Close the tap when you are finished — operator-stop is also available from the dashboard.'
+          : 'Unplug the cable when you are finished — operator-stop is also available from the dashboard.'}
       </Text>
     </Center>
   )

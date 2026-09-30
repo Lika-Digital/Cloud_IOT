@@ -156,12 +156,17 @@ export default function NfcProvisioningTable({ cabinetId, pedestalId, isAdmin, o
         </td>
         <td className="py-2 pr-2">
           {isValve ? (
-            /* The firmware publishes no per-valve state equivalent to a socket's, so there is
-               nothing to show. A dash says that; borrowing the socket badge would show a
-               green "idle" that no signal supports. */
+            /* A dash, because this table has no valve state to read.
+               NOT because the firmware sends none — it sends `state` and `hw_status` on
+               opta/water/V{n}/status, and v3.43 persists them. The gap is this component's:
+               `socketComputedStates` is the electricity store, keyed by socket number, so
+               `computed['3-1']` would answer for socket 1 when asked about V1 — a plausible
+               wrong answer, which is the dangerous kind. Wiring the valve store in is a UI v2
+               item; until then a dash says "not shown here" and nothing borrows a number that
+               belongs to another outlet. */
             <span
               className="text-[11px] text-gray-500"
-              title="The cabinet does not report a state for water outlets"
+              title="Water outlet state is not shown in this table — see the Control Center"
             >
               —
             </span>

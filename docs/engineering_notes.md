@@ -186,6 +186,51 @@ zero tells ERP the customer used nothing, and they would bill accordingly.
 
 ---
 
+## 9. A broad `git add` is not a shortcut, it is an unreviewed commit
+
+**v3.43.** `git add -A backend frontend mobile docs tests` staged 42 generated files alongside
+a nine-file change: a QR PNG per test cabinet, berth background images, the status JSON the
+app writes while running, Playwright's `test-results/`, and `backend/data/` — which is where
+the **auth database** lives.
+
+The gate passed. Every check was green, because nothing in the suite has an opinion about what
+is *in* a commit. It was harmless this time. The same command on a machine that had once run
+against production credentials would have published them, and the diff was too large to notice
+by eye — which is the actual mechanism: the noise is what hides the one file that matters.
+
+> **Stage the paths you edited.** `git add -A <dir>` means "and whatever else happens to be
+> there", which on a working machine is runtime output, local databases and test artefacts.
+> If a broad add is genuinely wanted, read `git status --short` before committing, not after.
+
+**Enforced by:** `.gitignore` entries for the four directories involved — which closes those
+four, not the class. The habit is the control.
+
+---
+
+## 10. A broken typecheck baseline hides the next break
+
+**v3.43.** `mobile/app/(app)/mobile/socket/[pedestal_id]/[socket_id].tsx` imported
+`../../../../src/api/mobile` — four levels up from its directory, which resolves to
+`app/src/api/mobile` and does not exist. Five are needed. The module never resolved, so the
+**entire QR landing flow could not build**, and had not for some time.
+
+`tsc --noEmit` reported it. It also reported three unrelated errors in `chat.tsx` and one from
+a package that was in `package.json` but not installed locally. Four expected errors is a
+baseline nobody reads, so the fifth arrived unread.
+
+This is the same shape as rule 4 — a skipped test has not verified the claim — one level up: a
+check whose output is known to be noisy has stopped being a check.
+
+> **A non-zero baseline must be zero or tracked.** Either fix the known errors, or record the
+> exact expected set so a new one stands out. "It always prints some errors" means the tool is
+> off.
+
+**Enforced by:** nothing yet. Recorded as a known limitation: the four remaining mobile errors
+are unrelated to this change and are not fixed here. The gate does not run `tsc` on the mobile
+package at all, which is why the count could drift unobserved.
+
+---
+
 ## Appendix — things that look like over-engineering and are not
 
 One line each on what they prevent, for whoever maintains this next. Each looks like needless
@@ -203,6 +248,11 @@ complication; removing any of them restores a specific, previously-observed fail
 | **Three** divergence states, not two | "ERP stopped reconciling" and "nothing happened worth reconciling" need different responses. One alarm for both gets muted, and then the first goes unnoticed too. |
 | Ownership is checked **before** the already-ended check | Otherwise a 409 tells a stranger the session exists and what state it is in. |
 | `provisioned_by` **raises** instead of defaulting to "(unknown)" | A caller with no actor has a bug; a default hides it, and an unattributable NFC mapping decides who pays. |
+| A valve reads its **own** state and never `socket_states`, and reports **"unknown"** when that state is stale | `socket_states` is keyed by outlet number alone, so consulting it for a valve returns the ELECTRICITY socket of the same number — "cable detected" on a tap, or "idle" while water ran. A *plausible* wrong answer, which is the dangerous kind. The staleness check is the same rule as 1: a stored state three days old is not a reading. |
+| A valve has **no "pending"** state, and the fault check is **skipped** for one | "Pending" means physically connected and awaiting activation, which comes from the socket's plug-in detection; the firmware has no valve analogue, so the state does not exist rather than being unread. And no valve **fault** vocabulary has ever been observed, so a fault check would be asserting a value we have never seen — a passing answer indistinguishable from a real one. |
+| A water tag is refused on a mode-2 site until a flag says the app shipped | The refusal looks like an obstacle to whoever is holding the tag. An app build from before v3.43 cannot resolve `V1`, and its adoption check treats an unresolved outlet as "matches anything" — so the next customer to scan water is shown, and billed for, a stranger's electricity session. A procedure that depends on remembering will be forgotten at the next site. |
+| The outlet **type** is stored on the tag rather than derived from its name | Both inbound name vocabularies accept bare digits, so `"1"` cannot distinguish socket 1 from valve 1. There is no function that could recover it later. |
+| `V1` declared as a socket is **refused**, not corrected to a valve | Either the name or the type is wrong and nothing on the server knows which. Picking one writes a mapping nobody asked for, and this mapping decides which outlet a customer's tap energises. |
 
 ---
 

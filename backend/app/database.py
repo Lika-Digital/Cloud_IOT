@@ -214,6 +214,13 @@ def _migrate_schema():
         # v3.43 — valve hardware facts from opta/config/hardware, which enumerates V1/V2
         # with their rated flow. Previously the valves array was parsed and discarded.
         ("valve_configs",  "rated_liters_per_min", "REAL"),
+        # v3.43 — the valve's last reported state. The firmware has always sent `state` and
+        # `hw_status` on opta/water/V{n}/status; the handler broadcast them and stored nothing,
+        # so nothing could answer "what is V1 doing" outside the moment the message arrived.
+        # NULL = never reported, which is honest for every row that predates this.
+        ("valve_configs",  "last_state",       "TEXT"),
+        ("valve_configs",  "last_hw_status",   "TEXT"),
+        ("valve_configs",  "state_updated_at", "DATETIME"),
         # v3.43 — when the ERP last read this session for reconciliation. NULL = never, which
         # is the honest value for every row that predates this and for every new session.
         ("sessions",       "last_reconciled_at", "DATETIME"),

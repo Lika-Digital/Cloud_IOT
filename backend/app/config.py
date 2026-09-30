@@ -154,6 +154,28 @@ class Settings(BaseSettings):
     # berths, which is not a configuration anyone should be able to reach by accident.
     nfc_direct_client_mode: bool = False
 
+    # v3.43 — DOES THE MOBILE APP AT THIS SITE UNDERSTAND WATER NFC TAGS?
+    #
+    # A cabinet carries six tags, two of them on water outlets. The app builds shipped before
+    # v3.43 cannot resolve a `V1` label: `outletLabelToNumber` returned null for it, and the
+    # websocket adoption check treats null as "matches anything". So an old app, on a customer
+    # who scans a water tag, adopts whatever ELECTRICITY session arrives next under their user
+    # id — someone else's charge, displayed as theirs, and billed to them in MODE 2.
+    #
+    # That is a wrong charge, not an inconvenience, which is why it is enforced rather than
+    # documented. `provision_tag` REFUSES a valve tag while this is False and the site is in
+    # MODE 2. Set it to true once the updated app is actually deployed to customers, not when
+    # the build exists.
+    #
+    # MODE 1 is unaffected and needs no flag: there the ERP resolves the outlet and calls
+    # /api/nfc/scan itself, so the app is not in the resolution path at all. The gate below
+    # checks the mode first for exactly that reason — a mode-1 site must not be asked to set a
+    # flag about a dependency it does not have.
+    #
+    # A procedure that depends on remembering will eventually be forgotten: whoever provisions
+    # tags at a new site will not have read the commit that introduced them.
+    mobile_app_supports_water_nfc: bool = False
+
     # v3.43 — NFC tag/socket cross-check (double-bookkeeping). ERP resolves the tag to a socket
     # and sends BOTH; we hold the same mapping and check they agree before switching power. Two
     # independent records mean a disagreement exposes a tag stuck on the wrong socket, labels

@@ -37,6 +37,8 @@ requires that one does not block the other — the previous unfiltered lookup wo
   TC-SIX-11  /outlets reports the cabinet's own account, ratings and all, once it has spoken
   TC-SIX-12  a truncated hardware config does not erase the valves it could not carry
   TC-SIX-13  the ERP payload for a water session reports V-names and litres, not Q-names and kWh
+  TC-SIX-14  a water tag is refused on a mode-2 site until the app has shipped
+  TC-SIX-15  valve state is persisted, is never read from the socket table, and expires
 """
 from __future__ import annotations
 
@@ -660,3 +662,300 @@ def test_tc_six_13b_erp_payload_for_an_electricity_session_is_unchanged(
     assert body["water_liters"] is None, (
         "an electricity session must not carry a litre figure, not even 0.0"
     )
+
+
+# ═══ TC-SIX-14 ════════════════════════════════════════════════════════════════
+#
+# The app-version gate. A procedure that depends on remembering will eventually be forgotten,
+# so the dependency is enforced rather than written down: whoever provisions tags at a new
+# site will not have read the commit that introduced them.
+#
+# What it prevents: an app build from before v3.43 cannot resolve a "V1" outlet label, and its
+# session-adoption check treats an unresolved outlet as "matches anything". A customer who
+# scans a water tag therefore adopts the next electricity session broadcast under their user
+# id. In MODE 2 the pedestal IS the billing system, so that is another customer's consumption
+# on their invoice — a wrong charge, not a degraded experience.
+
+import contextlib
+
+
+@contextlib.contextmanager
+def _site_mode(direct_client: bool, app_ready: bool):
+    from app.config import settings
+    prev = (settings.nfc_direct_client_mode, settings.mobile_app_supports_water_nfc)
+    settings.nfc_direct_client_mode = direct_client
+    settings.mobile_app_supports_water_nfc = app_ready
+    try:
+        yield
+    finally:
+        settings.nfc_direct_client_mode, settings.mobile_app_supports_water_nfc = prev
+
+
+def test_tc_six_14_water_tag_refused_in_mode_2_before_the_app_ships(
+        client, auth_headers, six_pid):
+    """MODE 2, app not updated: a valve tag is refused, and the reason is actionable."""
+    _clear(six_pid)
+
+    with _site_mode(direct_client=True, app_ready=False):
+        r = _provision(client, auth_headers, "SIX-GATE-V1", "V1", "valve")
+
+    assert r.status_code == 409, (
+        f"a water tag was provisioned on a mode-2 site with an un-updated app "
+        f"({r.status_code}); the next customer to scan it gets someone else's charge"
+    )
+    detail = r.json()["detail"]
+    assert "MOBILE_APP_SUPPORTS_WATER_NFC" in detail, (
+        f"the refusal must name the flag to set — an installer cannot act on 'not permitted'; "
+        f"got {detail!r}"
+    )
+
+    from app.models.nfc_tag import NfcTag
+    db = _S()
+    try:
+        assert db.query(NfcTag).filter(NfcTag.nfc_tag_id == "SIX-GATE-V1").first() is None
+    finally:
+        db.close()
+
+
+def test_tc_six_14b_electricity_is_never_gated(client, auth_headers, six_pid):
+    """The gate is about water only. Blocking Q1-Q4 would make it a site-wide outage.
+
+    Worth asserting rather than assuming: a guard placed one line too early — before the
+    outlet kind is known — would refuse everything, and the symptom would be "NFC stopped
+    working at this marina" with nothing pointing at a water flag.
+    """
+    _clear(six_pid)
+
+    with _site_mode(direct_client=True, app_ready=False):
+        r = _provision(client, auth_headers, "SIX-GATE-Q1", "Q1", "socket")
+
+    assert r.status_code == 200, r.text
+
+
+def test_tc_six_14c_mode_1_is_exempt_without_setting_the_flag(client, auth_headers, six_pid):
+    """MODE 1 needs no flag: the ERP resolves the tag and calls /scan itself.
+
+    The order of the two checks matters. If the flag were tested first, every mode-1 site
+    would have to set a flag about a dependency it does not have — and a flag you set to make
+    an error go away stops meaning anything.
+    """
+    _clear(six_pid)
+
+    with _site_mode(direct_client=False, app_ready=False):
+        r = _provision(client, auth_headers, "SIX-GATE-M1", "V1", "valve")
+
+    assert r.status_code == 200, (
+        f"mode 1 was gated on an app version that is not in its path: {r.text}"
+    )
+
+
+def test_tc_six_14d_flag_lifts_the_gate(client, auth_headers, six_pid):
+    """Once the app is deployed, water provisioning proceeds."""
+    _clear(six_pid)
+
+    with _site_mode(direct_client=True, app_ready=True):
+        r = _provision(client, auth_headers, "SIX-GATE-OK", "V2", "valve")
+
+    assert r.status_code == 200, r.text
+    assert r.json()["outlet_type"] == "valve"
+
+
+def test_tc_six_14e_bulk_is_gated_in_the_prepass_not_mid_loop(
+        client, auth_headers, six_pid):
+    """A batch with a water tag must fail before any of its electricity tags commit.
+
+    Each provision commits individually, so a gate discovered inside the write loop would
+    leave the tags before it applied and the ones after it not — a half-provisioned cabinet
+    reported as a single failure.
+    """
+    _clear(six_pid)
+
+    with _site_mode(direct_client=True, app_ready=False):
+        r = client.post("/api/nfc/tags/bulk", headers=auth_headers, json={
+            "cabinet_id": CAB,
+            "items": [
+                {"socket_id": "Q1", "nfc_tag_id": "SIX-GATE-B1", "outlet_type": "socket"},
+                {"socket_id": "V1", "nfc_tag_id": "SIX-GATE-B2", "outlet_type": "valve"},
+            ],
+        })
+
+    assert r.status_code == 409, r.text
+
+    from app.models.nfc_tag import NfcTag
+    db = _S()
+    try:
+        assert db.query(NfcTag).filter(NfcTag.nfc_tag_id == "SIX-GATE-B1").first() is None, (
+            "the electricity tag committed before the batch was refused"
+        )
+    finally:
+        db.close()
+
+
+def test_tc_six_14f_the_gate_lives_at_the_write_site(six_pid):
+    """Calling the service directly must be gated too, not just the HTTP routes.
+
+    A route-level check protects the routes that existed when it was written. This asserts the
+    guard is where the row is created, so a future endpoint, a script, or a migration helper
+    cannot bypass it by not knowing about it.
+    """
+    from app.services import nfc_service
+    from app.services.nfc_service import WaterTagBlockedByAppVersion
+
+    _clear(six_pid)
+    db = _S()
+    try:
+        with _site_mode(direct_client=True, app_ready=False):
+            with pytest.raises(WaterTagBlockedByAppVersion):
+                nfc_service.provision_tag(db, "SIX-GATE-DIRECT", CAB, "V1",
+                                          provisioned_by="test@local", outlet_type="valve")
+    finally:
+        db.close()
+
+# ═══ TC-SIX-15 ════════════════════════════════════════════════════════════════
+#
+# Valve state, persisted — and the correction that produced it.
+#
+# I claimed the firmware publishes no valve state, and wrote that into code comments and two
+# documents. It was WRONG. `opta/water/V{n}/status` has always carried `state` and
+# `hw_status`; the real payload is
+#     {"id":"V1","state":"idle","hw_status":"off","ts":…,"total_l":…,"session_l":…}
+# The handler broadcast both over the websocket and stored NEITHER, so anything not listening
+# at that instant had nowhere to ask — and both the QR landing and the session-live endpoint
+# fell back to `socket_states`, which is keyed by outlet number alone and therefore answered
+# with the ELECTRICITY socket sharing the valve's number.
+#
+# That is the failure worth testing: not a missing answer but a plausible WRONG one. "Cable
+# detected" on a tap, or "idle" while water ran.
+
+
+def test_tc_six_15_valve_status_message_is_persisted(six_pid):
+    """The state and hw_status in the payload reach the database."""
+    import asyncio
+    import json
+    from unittest.mock import patch, AsyncMock
+    from app.services.mqtt_handlers import _handle_marina_water
+    from app.models.valve_config import ValveConfig
+
+    with (
+        patch("app.services.mqtt_handlers.SessionLocal", _S),
+        patch("app.services.mqtt_handlers.ws_manager.broadcast", new=AsyncMock()),
+    ):
+        asyncio.run(_handle_marina_water(CAB, "V1", json.dumps({
+            "id": "V1", "state": "idle", "hw_status": "off",
+            "ts": 118475996, "total_l": 12.5, "session_l": 0, "session": None,
+        })))
+
+    db = _S()
+    try:
+        vc = db.query(ValveConfig).filter(
+            ValveConfig.pedestal_id == six_pid, ValveConfig.valve_id == 1).first()
+        assert vc is not None
+        assert vc.last_state == "idle", (
+            f"got {vc.last_state!r}. The firmware sent it; broadcasting it and keeping "
+            f"nothing is what forced every later reader onto the socket table"
+        )
+        assert vc.last_hw_status == "off"
+        assert vc.state_updated_at is not None, (
+            "the age is what says whether the stored state is still worth believing"
+        )
+    finally:
+        db.close()
+
+
+def test_tc_six_15b_a_valve_never_reports_the_socket_state(client, cust_headers, six_pid):
+    """The defect itself: V1 must not be answered from socket 1's plug-in signal.
+
+    Socket 1 is marked physically connected, which makes the electricity answer "pending".
+    V1 is given its own stored state of "idle". A reader that consults `socket_states` by
+    number returns "pending" — "cable detected" on a water outlet.
+    """
+    from datetime import timedelta
+    from app.models.pedestal_config import SocketState
+    from app.models.valve_config import ValveConfig
+    from app.routers.mobile import _outlet_state_str
+    from app.services.nfc_service import OUTLET_SOCKET, OUTLET_VALVE
+
+    _clear(six_pid)
+    db = _S()
+    try:
+        row = db.query(SocketState).filter(
+            SocketState.pedestal_id == six_pid, SocketState.socket_id == 1).first()
+        if row is None:
+            row = SocketState(pedestal_id=six_pid, socket_id=1)
+            db.add(row)
+        row.connected = True
+
+        vc = db.query(ValveConfig).filter(
+            ValveConfig.pedestal_id == six_pid, ValveConfig.valve_id == 1).first()
+        vc.last_state = "idle"
+        vc.last_hw_status = "off"
+        vc.state_updated_at = datetime.utcnow()
+        db.commit()
+
+        assert _outlet_state_str(db, six_pid, 1, OUTLET_SOCKET) == "pending"
+        valve_state = _outlet_state_str(db, six_pid, 1, OUTLET_VALVE)
+    finally:
+        db.close()
+
+    assert valve_state == "idle", (
+        f"V1 reported {valve_state!r} while socket 1 was 'pending'. A valve answered from the "
+        f"socket table is a plausible wrong answer, which is worse than no answer"
+    )
+
+
+def test_tc_six_15c_a_stale_valve_state_is_unknown_not_idle(six_pid):
+    """A state from before the cabinet went quiet is not a current reading.
+
+    Same rule as a retained MQTT replay: a value that merely exists is not evidence of now.
+    Reporting the last thing V1 said three days ago as "idle" would tell a customer the outlet
+    is free when nothing has been heard from the cabinet since.
+    """
+    from datetime import timedelta
+    from app.models.valve_config import ValveConfig
+    from app.routers.mobile import _outlet_state_str, VALVE_STATE_MAX_AGE_S
+    from app.services.nfc_service import OUTLET_VALVE
+
+    _clear(six_pid)
+    db = _S()
+    try:
+        vc = db.query(ValveConfig).filter(
+            ValveConfig.pedestal_id == six_pid, ValveConfig.valve_id == 2).first()
+        vc.last_state = "idle"
+        vc.state_updated_at = datetime.utcnow() - timedelta(seconds=VALVE_STATE_MAX_AGE_S + 5)
+        db.commit()
+        stale = _outlet_state_str(db, six_pid, 2, OUTLET_VALVE)
+
+        vc.state_updated_at = datetime.utcnow()
+        db.commit()
+        fresh = _outlet_state_str(db, six_pid, 2, OUTLET_VALVE)
+    finally:
+        db.close()
+
+    assert stale == "unknown", f"a {VALVE_STATE_MAX_AGE_S + 5}s-old state reported as {stale!r}"
+    assert fresh == "idle", "a fresh state must be reported as itself, not suppressed"
+
+
+def test_tc_six_15d_never_reported_is_unknown(six_pid):
+    """A valve the cabinet has never described is unknown, not idle.
+
+    Zero and unknown are different values (rule 8); so are "reported idle" and "never
+    reported". A customer told "free" about an outlet we know nothing about will walk to it.
+    """
+    from app.models.valve_config import ValveConfig
+    from app.routers.mobile import _outlet_state_str
+    from app.services.nfc_service import OUTLET_VALVE
+
+    _clear(six_pid)
+    db = _S()
+    try:
+        vc = db.query(ValveConfig).filter(
+            ValveConfig.pedestal_id == six_pid, ValveConfig.valve_id == 2).first()
+        vc.last_state = None
+        vc.last_hw_status = None
+        vc.state_updated_at = None
+        db.commit()
+        state = _outlet_state_str(db, six_pid, 2, OUTLET_VALVE)
+    finally:
+        db.close()
+
+    assert state == "unknown", f"an undescribed valve reported {state!r}"

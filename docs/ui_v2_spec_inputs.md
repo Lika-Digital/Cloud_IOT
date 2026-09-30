@@ -94,9 +94,22 @@ by outlet must filter on the type, and the mobile adoption check now matches on 
   cabinet has never published its hardware config and the server fell back to the canonical
   six. **The UI must surface that**, because "never heard from this cabinet" and "this cabinet
   has no water outlets" are different situations that six identical rows cannot tell apart.
-- **Valves have no state badge.** The firmware publishes no per-valve equivalent of a socket's
-  status, so the provisioning table renders a dash with a tooltip rather than a green "idle"
-  that no signal supports. Any water row in UI v2 faces the same absence.
+- **Valve state exists, and now persists — but it is narrower than a socket's.**
+  *Corrected 2026-09-30: an earlier version of this note said the firmware publishes no valve
+  state. It does.* `opta/water/V{n}/status` carries `state` and `hw_status`; the handler
+  broadcast them over the websocket and stored nothing, so anything not listening at that
+  instant fell back to `socket_states` — which is keyed by outlet number alone and therefore
+  answered with the **electricity** socket of the same number ("cable detected" on a tap).
+  v3.43 persists both on `valve_configs` and reports **`unknown`** when the stored value is
+  missing or older than 60 s.
+
+  What a valve genuinely lacks is narrower: **no `pending`** — that state means "physically
+  connected, awaiting activation" and comes from plug-in detection, which has no valve
+  analogue — and **no observed fault vocabulary**, so no fault check exists for one.
+
+  **For the spec:** a water row has four states (`idle` / `active` / `unknown` / offline), not
+  the socket's five, and `unknown` must render as visibly distinct from `idle` — the same rule
+  as item 3.
 - The session payload now carries `session_type`, and exactly one of `energy_kwh` /
   `water_liters` — the other is **`None`, not `0.0`**. Same rule as item 3.
 

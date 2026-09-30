@@ -35,6 +35,8 @@ import json
 from datetime import datetime
 from unittest.mock import patch
 
+import contextlib
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -149,16 +151,55 @@ def test_qr_claim_404_pedestal_not_found(client, cust_headers):
     assert "pedestal not found" in r.json()["detail"].lower()
 
 
-def test_qr_claim_404_invalid_socket(client, cust_headers):
-    """TC-QR-03 — Q9 is not a valid socket id."""
+@pytest.mark.parametrize("outlet", ["Q9", "Q0", "V3", "V0", "WTR-1", "1", "q1"])
+def test_qr_claim_404_invalid_outlet(client, cust_headers, outlet):
+    """TC-QR-03 — an outlet this hardware does not have is 404.
+
+    Rewritten at v3.43 rather than adjusted to pass. The rule it encodes changed: the QR path
+    now addresses all SIX outlets, so "not a valid socket" is no longer the question being
+    asked — "not an outlet this cabinet has" is. The message says `outlet` for the same
+    reason, and a customer who scanned a damaged water code should not be told about sockets.
+
+    `V3`/`V0` are new and matter: they are valve-shaped but out of range, and a naive
+    `int(name[1:])` would have accepted them and looked up valve 3 on a two-valve cabinet.
+    `WTR-1` is here because it lived in an MQTT allowlist for months on the strength of a
+    docstring; `q1` catches case-insensitivity, which would make one outlet reachable under
+    two spellings.
+    """
     _seed_pedestal_with_cabinet()
     r = client.post(
         "/api/mobile/qr/claim",
-        json={"pedestal_id": "TEST_MOBILE_QR", "socket_id": "Q9"},
+        json={"pedestal_id": "TEST_MOBILE_QR", "socket_id": outlet},
         headers=cust_headers,
     )
-    assert r.status_code == 404
-    assert "socket not found" in r.json()["detail"].lower()
+    assert r.status_code == 404, f"{outlet!r} returned {r.status_code}"
+    assert "outlet not found" in r.json()["detail"].lower(), r.json()["detail"]
+
+
+def test_qr_claim_accepts_a_water_outlet(client, cust_headers):
+    """TC-QR-03b — V1 is a real outlet and must resolve, not 404.
+
+    The parity change. Six outlets reachable by NFC and four by QR is a difference nobody can
+    explain to a customer standing at a water outlet with no code on it.
+    """
+    _seed_pedestal_with_cabinet()
+    r = client.post(
+        "/api/mobile/qr/claim",
+        json={"pedestal_id": "TEST_MOBILE_QR", "socket_id": "V1"},
+        headers=cust_headers,
+    )
+    assert r.status_code == 200, (
+        f"a water outlet was rejected by the QR path: {r.status_code} {r.text}"
+    )
+    body = r.json()
+    assert body["outlet_type"] == "valve"
+    assert body["session_type"] == "water"
+    assert body["socket_state"] == "unknown", (
+        f"got socket_state={body['socket_state']!r}. The firmware sends no valve state — no "
+        f'"hose connected" signal and no valve state topic — so "idle" would be a '
+        f"socket-shaped answer to a question the hardware never answered, indistinguishable "
+        f"from a real reading"
+    )
 
 
 def test_qr_claim_no_session_returns_no_session(client, cust_headers):
@@ -350,6 +391,61 @@ def test_qr_image_forbidden_for_customer(client, cust_headers):
     _seed_pedestal_with_cabinet()
     r = client.get("/api/mobile/socket/TEST_MOBILE_QR/Q1/qr", headers=cust_headers)
     assert r.status_code in (401, 403)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# QR parity with NFC (v3.43) — TC-QR-13 / TC-QR-14
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@contextlib.contextmanager
+def _site_mode(direct_client: bool, app_ready: bool):
+    from app.config import settings
+    prev = (settings.nfc_direct_client_mode, settings.mobile_app_supports_water_nfc)
+    settings.nfc_direct_client_mode = direct_client
+    settings.mobile_app_supports_water_nfc = app_ready
+    try:
+        yield
+    finally:
+        settings.nfc_direct_client_mode, settings.mobile_app_supports_water_nfc = prev
+
+
+def test_tc_qr_13_water_outlet_gets_a_printable_code(client, auth_headers):
+    """TC-QR-13 — V1 produces a PNG, like every other outlet.
+
+    The parity change in its most concrete form: before this, a water outlet was the one
+    outlet on the cabinet with nothing to print.
+    """
+    _seed_pedestal_with_cabinet()
+    with _site_mode(direct_client=False, app_ready=False):
+        r = client.get("/api/mobile/socket/TEST_MOBILE_QR/V1/qr", headers=auth_headers)
+
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "image/png"
+    assert r.content.startswith(bytes([0x89, 0x50, 0x4E, 0x47])), "not a PNG"
+    assert r.headers["X-QR-URL"].endswith("/TEST_MOBILE_QR/V1"), r.headers["X-QR-URL"]
+
+
+def test_tc_qr_14_water_code_is_gated_by_the_app_version_in_mode_2(client, auth_headers):
+    """TC-QR-14 — no printable water code on a mode-2 site whose app cannot read one.
+
+    Stronger than the NFC case rather than merely consistent with it: a printed sticker is a
+    PHYSICAL artefact that outlives the deploy which produced it. An NFC mapping can be
+    un-pointed from the dashboard in a second; a code glued to a water outlet cannot.
+    """
+    _seed_pedestal_with_cabinet()
+    with _site_mode(direct_client=True, app_ready=False):
+        water = client.get("/api/mobile/socket/TEST_MOBILE_QR/V1/qr", headers=auth_headers)
+        elec = client.get("/api/mobile/socket/TEST_MOBILE_QR/Q1/qr", headers=auth_headers)
+
+    assert water.status_code == 409, (
+        f"a printable water code was generated for a site whose app cannot read one "
+        f"({water.status_code})"
+    )
+    assert "MOBILE_APP_SUPPORTS_WATER_NFC" in water.json()["detail"]
+    assert elec.status_code == 200, (
+        "the gate is about water only — blocking electricity codes would be a site-wide "
+        "outage with nothing pointing at a water flag"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -234,6 +234,61 @@ messages; the only downside is the 15 s blind window after a restart.
 
 ---
 
+## Open questions for the firmware team — nothing asked yet (2026-09-30)
+
+**Not requests.** A running list of things the backend would benefit from, kept here so that
+if we ever open a firmware conversation we bring the whole list rather than the one item that
+happened to be annoying that week. Each says what the backend does today without it, because
+the workaround is the honest measure of how much the change is worth.
+
+### 1. Packet timestamping we can trust
+
+`opta/status` and the per-outlet topics carry `ts` as a **`millis()` uptime**, not a wall
+clock. Two consequences:
+
+* It rolled over at **24.85 days** on a signed int32 and took the cabinet silent with it
+  (confirmed on MAR_KRK_ORM_01, firmware 3.0.0, 2026-09-20). The cabinet does not
+  self-recover; it needs a power cycle.
+* We cannot tell a **retained replay** from live traffic by the payload alone. Liveness has to
+  come from elsewhere entirely (`$SYS/broker/clients/connected`, or in-memory heartbeat
+  tracking) — see `docs/engineering_notes.md` rule 1, which exists because of this.
+
+**Ask:** an unsigned monotonic counter at minimum; a wall-clock stamp set from `opta/cmd/time`
+would let a replay be recognised on sight.
+
+### 2. A per-valve status equivalent to a socket's
+
+*Refined 2026-09-30 after checking the capture rather than the docstring.* The valve topic is
+**not** missing, which an earlier version of this list implied. `opta/water/V{n}/status`
+carries `state`, `hw_status`, `total_l` and `session_l`, and v3.43 persists the first two.
+
+Two specific things a socket has and a valve does not:
+
+| Socket has | Valve equivalent | What the backend does without it |
+|---|---|---|
+| **Plug-in detection** — `UserPluggedIn`, and a `connected` flag in `socket_states`, so "physically connected, awaiting activation" is a real state | none | a valve has no `pending` state. The QR landing tells a customer to open the tap rather than reporting what the outlet is waiting for. |
+| **Fault in the status topic**, so a fault is visible by polling | `STATE_FAULT` exists, but is reported only **reactively** — an attempt to open a faulted valve answers on `opta/acks` with `{"status":"error","reason":"outlet_fault"}` (v3.9 section above) | `/api/nfc/scan` runs before any open command, so it cannot pre-check a valve for faults the way it does a socket. A customer can be told "open your tap" at a faulted outlet and find out by trying. |
+
+**Ask:** surface `STATE_FAULT` in `opta/water/V{n}/status` as well as in the ACK. The ACK is
+the right place for the command result; it is the wrong and only place for a condition that
+persists.
+
+A "hose connected" sensor is hardware, not firmware, and is **not** being asked for — noted
+only so the absence reads as deliberate rather than overlooked.
+
+### 3. `opta/config/hardware` fits in one MQTT publish
+
+The firmware truncates this message at **~502 bytes**, severing the trailing `valves` array
+(fw 2.4.0/2.5.0; the tolerant parser in `_recover_truncated_hwconfig` reconstructs the sockets
+and loses the valves). v3.43 now persists valves from this message, so a truncated publish is
+handled by treating an **absent** `valves` key as "no news" rather than "no valves" — but that
+is a workaround for a payload that should simply arrive whole.
+
+**Ask:** a larger MQTT publish buffer, and `retain` on this topic so a late subscriber does
+not have to wait for a cabinet restart to learn what the cabinet has.
+
+---
+
 ## Backward context — topics in this contract
 
 ```

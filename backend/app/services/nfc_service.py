@@ -94,6 +94,45 @@ def outlet_type_for(outlet_name: str) -> str | None:
     return None
 
 
+class WaterTagBlockedByAppVersion(RuntimeError):
+    """A valve tag was refused because this site's mobile app cannot handle one yet.
+
+    Raised at the write site rather than checked in the router, so every path that provisions
+    a tag is covered — the single endpoint, the bulk endpoint, and anything added later. A
+    route-level check protects the routes that existed when it was written.
+    """
+
+
+def assert_valve_provisioning_allowed() -> None:
+    """Refuse a water tag on a MODE 2 site whose app has not been updated.
+
+    The failure this prevents is not a degraded experience. An app build from before v3.43
+    cannot resolve a `V1` outlet label, and its session-adoption check treats an unresolved
+    outlet as "matches anything" — so a customer who scans a water tag adopts the next
+    electricity session broadcast under their user id. In MODE 2 the pedestal IS the billing
+    system, so that is someone else's consumption on their invoice.
+
+    MODE 1 is checked first and exempted outright: the ERP resolves the tag and calls /scan
+    itself, so no app version is in the path. Asking a mode-1 site to set a flag about a
+    dependency it does not have is how a gate gets switched on to make an error go away.
+    """
+    from ..config import settings
+
+    if not getattr(settings, "nfc_direct_client_mode", False):
+        return
+    if getattr(settings, "mobile_app_supports_water_nfc", False):
+        return
+    raise WaterTagBlockedByAppVersion(
+        "Water NFC tags cannot be provisioned at this site yet. This marina runs in direct-"
+        "client mode (no ERP), where the pedestal is the billing system, and a mobile app "
+        "build from before v3.43 cannot tell a water outlet from an electricity socket — a "
+        "customer scanning a water tag would be shown, and charged for, another customer's "
+        "electricity session. Deploy the updated app to customers, then set "
+        "MOBILE_APP_SUPPORTS_WATER_NFC=true in the backend .env and restart. Electricity "
+        "tags (Q1-Q4) are unaffected and can be provisioned now."
+    )
+
+
 def session_type_for(outlet_type: str) -> str:
     """The session type an outlet kind produces.
 
@@ -135,6 +174,10 @@ def provision_tag(db, nfc_tag_id: str, cabinet_id: str, socket_id: str,
             f"{socket_id!r} is a {implied}, but outlet_type says {outlet_type!r}. A water tag "
             f"must never be provisioned against an electricity socket, or the reverse."
         )
+    if outlet_type == OUTLET_VALVE:
+        # Checked AFTER the name/type agreement, so a caller who mislabelled a socket is told
+        # that rather than being handed an app-version message about a valve they did not name.
+        assert_valve_provisioning_allowed()
     if not (provisioned_by or "").strip():
         raise ValueError(
             "provisioned_by is required — an NFC mapping must be attributable to the admin "

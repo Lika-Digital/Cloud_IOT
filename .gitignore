@@ -44,3 +44,12 @@ logs/
 /reports/
 backend/reports/
 tests/test_reports/
+
+# v3.43 — runtime output directories, none of which belong in the repo.
+# They were swept in by a `git add -A backend frontend mobile` in 41090ca and removed
+# again in the commit that added these lines. Ignored so the next broad add cannot
+# repeat it: a generated QR PNG per test cabinet is noise that hides the real diff.
+backend/static/qr/
+backend/backgrounds/
+backend/data/
+frontend/test-results/

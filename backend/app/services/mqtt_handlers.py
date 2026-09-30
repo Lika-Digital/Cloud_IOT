@@ -2739,6 +2739,7 @@ async def _handle_opta_hardware_config(payload: str) -> None:
 
 def _sanity_clamp_power_kw(
     reported_kw, *, voltage, current, power_factor, is_three_phase: bool, socket_name: str,
+    pedestal_id: int | None = None,
 ):
     """B4 (v3.21) — sanity-clamp the firmware's reported powerKw for DISPLAY/audit.
 
@@ -2775,11 +2776,22 @@ def _sanity_clamp_power_kw(
         computed = v * i * 0.001
 
     if computed > 0.0 and rep > computed * 50.0:
-        logger.warning(
-            "[Meter] %s powerKw sanity clamp fired: reported=%.3f kW computed=%.3f kW "
-            "(>50x) — using computed value for display/audit (raw value preserved)",
-            socket_name, rep, computed,
+        # v3.43 — this used to only log. A clamp that quietly fixes bad data is how the powerKw
+        # problem survived: it fired at 53x on Q4 at MAR_KRK_ORM_01 and nobody knew, because a
+        # corrected value looks exactly like a correct one. Now it alarms.
+        message = (
+            f"Socket {socket_name}: the meter reports {rep:.3f} kW but voltage x current gives "
+            f"{computed:.3f} kW — more than 50x apart. The reported power is not believable; "
+            f"the displayed value has been replaced with the computed one and the raw figure "
+            f"kept for audit. This is a meter or firmware fault to investigate."
         )
+        logger.warning("[Meter] %s", message)
+        try:
+            from .meter_register import raise_meter_alarm
+            raise_meter_alarm("meter_power_implausible", message, pedestal_id,
+                              severity="warning")
+        except Exception:
+            logger.exception("[Meter] could not raise the power-implausible alarm")
         return computed
     return reported_kw
 
@@ -2849,6 +2861,7 @@ async def _handle_opta_meter_telemetry(socket_name: str, payload: str) -> None:
             cfg.meter_power_kw = _sanity_clamp_power_kw(
                 reported_kw, voltage=v_single, current=i_single, power_factor=None,
                 is_three_phase=False, socket_name=socket_name,
+                pedestal_id=pedestal_id,
             )
         else:
             i_total     = data.get("currentAmpsTotal")
@@ -2878,6 +2891,7 @@ async def _handle_opta_meter_telemetry(socket_name: str, payload: str) -> None:
             cfg.meter_power_kw = _sanity_clamp_power_kw(
                 reported_kw, voltage=_avg_v, current=i_total, power_factor=pf_3ph,
                 is_three_phase=True, socket_name=socket_name,
+                pedestal_id=pedestal_id,
             )
         cfg.meter_load_updated_at = datetime.utcnow()
 
@@ -3408,6 +3422,25 @@ async def _handle_water_flow(
         # and rises, so max() == the session total. The legacy single-meter path
         # has no per-session counter, so fall back to total_liters (old behaviour).
         liters_for_session = session_liters if session_liters is not None else total_liters
+
+        # v3.43 — store the valve's CUMULATIVE register, mirroring socket_configs.meter_energy_kwh
+        # for electricity. This is what we forward to ERP as cumulative-per-outlet, and the
+        # source of a session's litres (end minus start) rather than any figure we derive.
+        # `total_liters` here is the meter's never-resetting counter; `liters_for_session` below
+        # is the firmware's per-session counter, kept only for comparison.
+        if valve_id is not None:
+            try:
+                from ..models.valve_config import ValveConfig
+                vc = db.query(ValveConfig).filter(
+                    ValveConfig.pedestal_id == pedestal_id,
+                    ValveConfig.valve_id == valve_id,
+                ).first()
+                if vc is not None:
+                    vc.meter_total_l = total_liters
+                    vc.meter_updated_at = datetime.utcnow()
+            except Exception:
+                logger.exception("[Water] could not store the cumulative register for valve %s",
+                                 valve_id)
 
         session_service.add_reading(db, session_id, pedestal_id, valve_id, "water_lpm", lpm, "L/min")
         session_service.add_reading(db, session_id, pedestal_id, valve_id, "total_liters", liters_for_session, "L")

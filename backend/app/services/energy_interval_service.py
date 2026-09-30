@@ -53,6 +53,32 @@ def _berth_ref(db, pedestal_id: int) -> str | None:
     return getattr(cfg, "berth_ref", None) if cfg else None
 
 
+def _register_session_to_date(db, session: SessionModel) -> float | None:
+    """Consumption so far this session, per the meter's own cumulative register.
+
+    `None` means the register is not readable — either it was never captured at activation
+    (a session that predates v3.43, or one where the read failed) or the socket's current
+    reading is missing. None is NOT zero, and callers must not coalesce them.
+    """
+    from ..models.socket_config import SocketConfig
+
+    start = session.meter_energy_start_kwh
+    if start is None or session.socket_id is None:
+        return None
+    sc = (
+        db.query(SocketConfig)
+        .filter(
+            SocketConfig.pedestal_id == session.pedestal_id,
+            SocketConfig.socket_id == session.socket_id,
+        )
+        .first()
+    )
+    reading = getattr(sc, "meter_energy_kwh", None)
+    if reading is None:
+        return None
+    return float(reading) - float(start)
+
+
 def flush_session_interval(
     db, session: SessionModel, *, now: datetime | None = None, final: bool = False
 ) -> EnergyInterval | None:
@@ -66,13 +92,58 @@ def flush_session_interval(
     if session.type != "electricity":
         return None
     now = now or datetime.utcnow()
-    current = float(session.energy_kwh or 0.0)
+
+    # v3.43 — EACH INTERVAL IS A REGISTER DELTA, not a slice of an integral.
+    #
+    # `current` used to be `session.energy_kwh`, which was accumulated live from powerKw. That
+    # made the ledger integral-derived while the session total became register-derived, so the
+    # financial record would have disagreed with its own session total. Both now come from the
+    # same place: session-to-date consumption per the meter's own cumulative register.
+    #
+    # Because every row is a delta of the same monotonic register, the SUM of a session's rows
+    # equals `end_register - start_register`, which is exactly the session's reported figure.
+    # They agree by construction rather than by care, and TC-EIV-10 asserts it.
+    from . import meter_register as mr
+
+    current = _register_session_to_date(db, session)
+    if current is None:
+        # UNREADABLE, which is not zero. One unreadable boundary makes the whole session's
+        # figure unknown, deliberately: the sum of a partial set is not the total, and
+        # presenting it as one would be a silent under-report. Sticky — once unknown, a later
+        # readable boundary cannot quietly restore it, because the missing window stays missing.
+        if session.consumption_source != mr.SOURCE_UNKNOWN:
+            session.consumption_source = mr.SOURCE_UNKNOWN
+            mr.raise_meter_alarm(
+                "meter_register_unreadable",
+                f"Session {session.id} on pedestal {session.pedestal_id}: the meter register "
+                f"could not be read at an interval boundary, so this session's consumption is "
+                f"UNKNOWN rather than zero. It cannot be billed from meter data.",
+                session.pedestal_id,
+            )
+        return None
+
     logged = float(session.energy_logged_kwh or 0.0)
     delta = current - logged
-    if delta < _MIN_LOG_KWH:
-        if final:
-            session.energy_logged_kwh = current
+
+    if delta < 0:
+        # The register went backwards mid-session: replacement, reset or rollover. Refuse the
+        # row rather than writing a negative one, and say so.
+        mr.raise_meter_alarm(
+            "meter_register_rejected",
+            f"Session {session.id} on pedestal {session.pedestal_id}: the register moved "
+            f"BACKWARDS between interval boundaries ({logged:.3f} -> {current:.3f} kWh). "
+            f"A meter replacement, firmware reset or counter rollover all look like this.",
+            session.pedestal_id, severity="critical",
+        )
+        session.consumption_source = mr.SOURCE_UNKNOWN
         return None
+
+    # A register that did not move is a REAL zero-consumption interval — a boat plugged in and
+    # drawing nothing. It is written, because it is an observation: it says the meter was read
+    # during this window and reported no draw. Suppressing it would make "zero" and "we could
+    # not read it" indistinguishable in the ledger, which is the one thing they must not be.
+    if delta < _MIN_LOG_KWH and not final:
+        delta = 0.0
 
     # Interval start = end of the previous checkpoint for this session (restart-
     # safe, read from the DB), else the session start.

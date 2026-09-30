@@ -387,7 +387,18 @@ def test_b4_clamp_fires_and_logs_when_reported_exceeds_50x(caplog):
     cfg = _get_socket_cfg(pid, 2)
     assert cfg.meter_power_kw_raw == pytest.approx(395.974)            # raw preserved
     assert cfg.meter_power_kw == pytest.approx(227.5 * 26.0 * 0.001)   # computed (no PF, 1-ph)
-    assert any("sanity clamp fired" in r.message for r in caplog.records)
+
+    # v3.43 — the clamp must now SAY SOMETHING, not just substitute a value. It fired at 53x on
+    # Q4 at MAR_KRK_ORM_01 and nobody knew, because a corrected value looks exactly like a
+    # correct one. The assertion is on the meaning rather than the old "sanity clamp fired"
+    # phrasing, so a reworded message does not fail while a silent clamp would.
+    logged = " ".join(r.message for r in caplog.records)
+    assert "50x" in logged and "not believable" in logged, (
+        f"the clamp did not explain itself in the log. A clamp that quietly fixes bad data is "
+        f"how the powerKw problem survived. Got: {logged[:400]}"
+    )
+    assert "meter_power_implausible" in logged or "Meter" in logged, \
+        "the clamp should be attributable to the meter subsystem in the log"
 
 
 def test_b4_raw_stored_alongside_clamped():

@@ -63,6 +63,39 @@ class Session(Base):
     # detector go quiet whenever a customer opened the app.
     last_reconciled_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
 
+    # v3.43 — METER REGISTER ENDPOINTS. What the outlet's cumulative register read when this
+    # session started and ended. `energy_kwh` / `water_liters` are now the DELTA of these, so
+    # what we report to ERP is the meter's own arithmetic rather than a figure we derived.
+    #
+    # BOTH endpoints are stored, not just the difference: if ERP ever queries a charge we must be
+    # able to show what the meter read at each end, rather than a number nobody can reconstruct.
+    # NULL at either end means the register was unreadable, and the session figure is then
+    # UNKNOWN (NULL) — never 0.0, which would claim nothing was used.
+    meter_energy_start_kwh: Mapped[float] = mapped_column(Float, nullable=True)
+    meter_energy_end_kwh: Mapped[float] = mapped_column(Float, nullable=True)
+    meter_water_start_l: Mapped[float] = mapped_column(Float, nullable=True)
+    meter_water_end_l: Mapped[float] = mapped_column(Float, nullable=True)
+
+    # The independently-derived figure, kept PERMANENTLY alongside the register delta so the two
+    # can be compared. Electricity: the power x time integral that used to BE the reported value
+    # (see meter_register.py for why it no longer is). Water: the firmware's own per-session
+    # counter, `session_l`. Never reported to ERP — a divergence between this and the register
+    # delta is a meter or firmware fault to surface, not a billing correction.
+    energy_kwh_integrated: Mapped[float] = mapped_column(Float, nullable=True)
+    water_liters_firmware: Mapped[float] = mapped_column(Float, nullable=True)
+
+    # v3.43 — HOW the reported figure was derived. Part of the ERP contract, permanently.
+    #   "register"          end - start of the meter's own cumulative register. Normal.
+    #   "integrated_legacy" the old power x time integral. CLOSED-ENDED: only sessions that
+    #                       were already running when v3.43 deployed, and therefore have no
+    #                       start reading. meter_register.assert_legacy_allowed() refuses it
+    #                       for any session started after the cutoff.
+    #   "unknown"           not derivable. NEVER 0.0 — zero would claim nothing was used.
+    #
+    # A figure that does not say how it was derived is how the June 2026 workaround survived
+    # three months: the number looked the same whether it came from a meter or an integral.
+    consumption_source: Mapped[str] = mapped_column(String(32), nullable=True)
+
     pedestal: Mapped["Pedestal"] = relationship("Pedestal", back_populates="sessions")  # noqa: F821
     sensor_readings: Mapped[list["SensorReading"]] = relationship(  # noqa: F821
         "SensorReading", back_populates="session"

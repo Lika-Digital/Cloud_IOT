@@ -1,4 +1,14 @@
-"""v3.35 — energy interval ledger + daily billing.
+"""v3.35 — energy interval ledger + daily billing. REGISTER-BASED since v3.43.
+
+Rewritten rather than adjusted. Each interval row is now a delta of the meter's own
+cumulative register, not a slice of a power x time integral — so the SUM of a session's
+rows equals its reported figure by construction (TC-EIV-10), instead of the ledger and
+the session total being derived from two different sources that could drift.
+
+`_mk_session(energy_kwh=X)` therefore means "the register has advanced X kWh since this
+session opened": it seeds the opening reading AND the socket's current reading. The
+delta arithmetic under test is unchanged; only where the numbers come from is.
+
 
 Covers the checkpoint math (delta vs energy_logged_kwh high-water mark, restart-
 safe & idempotent), empty-interval skipping, origin labelling, the immediate
@@ -36,6 +46,29 @@ def _isolate():
     yield
 
 
+# An arbitrary non-zero opening reading. Non-zero on purpose: a real cabinet's register is
+# never 0 (the capture showed 481.760 / 103.380 / 257.500), and a test that only ever starts
+# from 0 would pass even if the code forgot to subtract the opening value.
+REG_BASE = 500.0
+
+
+def _set_register(socket_id: int, value: float | None) -> None:
+    """Set the socket's cumulative register. None simulates an unreadable meter."""
+    from app.models.socket_config import SocketConfig
+    db = _S()
+    try:
+        cfg = db.query(SocketConfig).filter(
+            SocketConfig.pedestal_id == PID,
+            SocketConfig.socket_id == socket_id).first()
+        if cfg is None:
+            cfg = SocketConfig(pedestal_id=PID, socket_id=socket_id)
+            db.add(cfg)
+        cfg.meter_energy_kwh = value
+        db.commit()
+    finally:
+        db.close()
+
+
 def _mk_session(socket_id=1, *, energy_kwh=0.0, energy_logged_kwh=0.0,
                 customer_id=None, nfc_user_id=None, origin=None, status="active") -> int:
     db = _S()
@@ -45,11 +78,16 @@ def _mk_session(socket_id=1, *, energy_kwh=0.0, energy_logged_kwh=0.0,
             started_at=datetime.utcnow() - timedelta(hours=1),
             energy_kwh=energy_kwh, energy_logged_kwh=energy_logged_kwh,
             customer_id=customer_id, nfc_user_id=nfc_user_id, origin=origin,
+            # v3.43 — the opening register reading, captured at activation in production.
+            meter_energy_start_kwh=REG_BASE,
         )
         db.add(s); db.commit(); db.refresh(s)
-        return s.id
+        sid = s.id
     finally:
         db.close()
+    # The register now reads base + whatever this session has consumed.
+    _set_register(socket_id, REG_BASE + energy_kwh)
+    return sid
 
 
 def _intervals(session_id):
@@ -83,17 +121,28 @@ def test_flush_writes_delta_and_advances_mark():
     assert len(_intervals(sid)) == 1
 
 
-def test_flush_idempotent_when_no_new_energy():
+def test_flush_never_double_counts_when_no_new_energy():
+    """The high-water mark still prevents double-counting — what changed is the zero row.
+
+    Under the old integral-based logger a second flush with nothing new returned None. Now it
+    logs a MEASURED ZERO, because the register was readable and reported no further draw, and
+    that is an observation worth keeping (v3.43). The property that matters is unchanged and is
+    what this asserts: the energy is counted exactly once.
+    """
     sid = _mk_session(energy_kwh=2.5)
     db = _S()
     try:
         s = db.get(SModel, sid)
-        eis.flush_session_interval(db, s, now=datetime.utcnow()); db.commit()
+        first = eis.flush_session_interval(db, s, now=datetime.utcnow()); db.commit()
         second = eis.flush_session_interval(db, s, now=datetime.utcnow()); db.commit()
-        assert second is None
+        assert abs(first.kwh - 2.5) < 1e-6
+        assert second is not None and second.kwh == 0.0, \
+            "a readable register with no further draw is a measured zero, not a skipped row"
     finally:
         db.close()
-    assert len(_intervals(sid)) == 1
+    rows = _intervals(sid)
+    assert abs(sum(r.kwh for r in rows) - 2.5) < 1e-6, \
+        "the 2.5 kWh must be counted exactly once across all rows"
 
 
 def test_flush_logs_only_the_growth_delta():
@@ -102,7 +151,7 @@ def test_flush_logs_only_the_growth_delta():
     try:
         s = db.get(SModel, sid)
         eis.flush_session_interval(db, s, now=datetime.utcnow()); db.commit()
-        s.energy_kwh = 4.0; db.commit()
+        _set_register(1, REG_BASE + 4.0)   # the meter advanced, not a derived field
         row2 = eis.flush_session_interval(db, s, now=datetime.utcnow()); db.commit()
         assert row2 is not None and abs(row2.kwh - 1.5) < 1e-6
     finally:
@@ -110,26 +159,60 @@ def test_flush_logs_only_the_growth_delta():
     assert len(_intervals(sid)) == 2
 
 
-def test_flush_skips_empty_interval():
+def test_flush_writes_a_real_zero_interval():
+    """A register that did not move is a MEASUREMENT of zero, and gets a row (v3.43).
+
+    It says the meter was read during this window and reported no draw — a boat plugged
+    in and drawing nothing. Suppressing it would make "zero" indistinguishable from "we
+    could not read the meter" in the ledger, and those need different responses.
+    """
     sid = _mk_session(energy_kwh=0.0)
     db = _S()
     try:
         s = db.get(SModel, sid)
+        row = eis.flush_session_interval(db, s, now=datetime.utcnow())
+        db.commit()
+        assert row is not None, "a readable register reporting no draw must still be logged"
+        assert row.kwh == 0.0
+    finally:
+        db.close()
+    assert len(_intervals(sid)) == 1
+
+
+def test_flush_unreadable_register_writes_nothing_and_marks_unknown():
+    """And the other half of that distinction: unreadable is NOT zero.
+
+    No row is written, and the session is marked unknown — one unreadable boundary makes
+    the whole session unknown, because the sum of a partial set is not the total.
+    """
+    from app.services import meter_register as mr
+
+    sid = _mk_session(energy_kwh=1.0)
+    _set_register(1, None)                 # meter stopped reporting
+    db = _S()
+    try:
+        s = db.get(SModel, sid)
         assert eis.flush_session_interval(db, s, now=datetime.utcnow()) is None
+        assert s.consumption_source == mr.SOURCE_UNKNOWN
         db.commit()
     finally:
         db.close()
-    assert _intervals(sid) == []
+    assert _intervals(sid) == [], "an unreadable register must not produce a zero row"
 
 
-def test_flush_final_advances_mark_even_when_tiny():
-    sid = _mk_session(energy_kwh=0.0001)   # below _MIN_LOG_KWH
+def test_flush_final_keeps_a_tiny_delta_rather_than_rounding_it_away():
+    """A final flush logs the exact remainder, however small.
+
+    The sum of a session's rows must equal its reported figure (TC-EIV-10), so the last
+    fraction of a kWh cannot be dropped for being below the logging threshold.
+    """
+    sid = _mk_session(energy_kwh=0.0001)
     db = _S()
     try:
         s = db.get(SModel, sid)
         row = eis.flush_session_interval(db, s, now=datetime.utcnow(), final=True)
         db.commit()
-        assert row is None
+        assert row is not None and abs(row.kwh - 0.0001) < 1e-9
         assert abs(s.energy_logged_kwh - 0.0001) < 1e-9
     finally:
         db.close()
@@ -228,3 +311,54 @@ def test_daily_billing_readable_by_monitor(client):
     finally:
         db.close()
     assert client.get("/api/billing/daily", headers=hdr).status_code == 200
+
+
+# ── TC-EIV-10 — the property that keeps the two from drifting ─────────────────
+
+def test_tc_eiv_10_interval_sum_equals_the_session_figure():
+    """The sum of a session's interval rows equals its reported consumption.
+
+    This is the assertion that stops the ledger and the session total drifting apart when
+    someone changes one and not the other — which is exactly how they came to disagree: the
+    session total moved to register deltas while the intervals were still slicing an
+    integral. Both now derive from the same monotonic register, so this holds by
+    construction rather than by care, and this test is what notices if that stops being
+    true.
+    """
+    from app.services import meter_register as mr
+    from app.services.session_service import session_service
+
+    sid = _mk_session(energy_kwh=0.0)
+
+    # Three checkpoints while the meter climbs, then completion.
+    for reading in (REG_BASE + 1.5, REG_BASE + 4.25, REG_BASE + 4.25, REG_BASE + 7.0):
+        _set_register(1, reading)
+        db = _S()
+        try:
+            eis.flush_session_interval(db, db.get(SModel, sid), now=datetime.utcnow())
+            db.commit()
+        finally:
+            db.close()
+
+    db = _S()
+    try:
+        s = db.get(SModel, sid)
+        session_service.complete(db, s)
+        reported = s.energy_kwh
+        source = s.consumption_source
+    finally:
+        db.close()
+
+    assert source == mr.SOURCE_REGISTER, f"expected a register-derived figure, got {source}"
+    assert reported is not None and abs(reported - 7.0) < 1e-6, \
+        f"session figure {reported} is not the register delta of 7.0 kWh"
+
+    rows = _intervals(sid)
+    total = sum(r.kwh for r in rows)
+    assert abs(total - reported) < 1e-6, (
+        f"the ledger says {total} kWh across {len(rows)} interval(s) but the session reports "
+        f"{reported} kWh. The financial record must not contradict its own session total."
+    )
+    # One of those checkpoints saw no movement, and it is a real zero row, not a gap.
+    assert any(r.kwh == 0.0 for r in rows), \
+        "the unchanged checkpoint should appear as a measured zero"

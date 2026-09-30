@@ -210,6 +210,23 @@ def _migrate_schema():
         # v3.43 — when the ERP last read this session for reconciliation. NULL = never, which
         # is the honest value for every row that predates this and for every new session.
         ("sessions",       "last_reconciled_at", "DATETIME"),
+        # v3.43 — meter register endpoints per session, and the independently-derived figure
+        # kept for comparison. All nullable: rows that predate this have no register readings
+        # and NULL is the honest value — a backfilled guess would be indistinguishable from a
+        # real reading later.
+        ("sessions",       "meter_energy_start_kwh", "REAL"),
+        ("sessions",       "meter_energy_end_kwh",   "REAL"),
+        ("sessions",       "meter_water_start_l",    "REAL"),
+        ("sessions",       "meter_water_end_l",      "REAL"),
+        ("sessions",       "energy_kwh_integrated",  "REAL"),
+        ("sessions",       "water_liters_firmware",  "REAL"),
+        # v3.43 — provenance of the reported figure. NULL for rows that predate this, which
+        # is honest: we do not know how those were derived without reading the git history.
+        ("sessions",       "consumption_source",     "TEXT"),
+        # v3.43 — cumulative water register per valve, mirroring socket_configs.meter_energy_kwh
+        # for electricity. Forwarded to ERP as-is; also the source of the session delta.
+        ("valve_configs",  "meter_total_l",          "REAL"),
+        ("valve_configs",  "meter_updated_at",       "DATETIME"),
     ]
 
     with engine.connect() as conn:

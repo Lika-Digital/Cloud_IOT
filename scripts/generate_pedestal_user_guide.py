@@ -434,6 +434,67 @@ def build():
         "QR labels customers scan to claim a socket in MyMarina. Regenerating invalidates old codes.",
     ]))
 
+    # ── What's new (v3.19 – v3.24) ──────────────────────────────────────────
+    s.append(p("What&rsquo;s new (v3.19 &ndash; v3.24)", "H1"))
+    s.append(p("Recent operator-facing additions. Earlier features are covered in the "
+               "sections above."))
+
+    s.append(p("Two-factor sign-in (v3.19)", "H2"))
+    s.append(p("Operator sign-in always requires a second factor after email and password:"))
+    s.append(bullets([
+        "<b>Authenticator app (TOTP)</b> &mdash; a 6-digit code from Aegis / Google / "
+        "Microsoft Authenticator, fully offline. Enable in Settings &rarr; Two-Factor "
+        "Authentication (scan the QR, enter a code, Verify and Enable).",
+        "<b>One-time code (OTP) fallback</b> &mdash; always available; sent to the backend "
+        "log (or your email if SMTP is configured). On the second screen choose "
+        "&ldquo;Use backup code instead&rdquo;.",
+    ]))
+    s.append(note("First login: a brand-new account has no authenticator yet, so the first "
+                  "sign-in uses the OTP fallback; enable TOTP afterwards from Settings."))
+
+    s.append(p("Temperature sensor configuration (v3.22)", "H2"))
+    s.append(p("A networked Papouch TME temperature sensor can be added from the dashboard. "
+               "It is a separate device on the marina LAN &mdash; not part of the Arduino Opta "
+               "cabinet."))
+    s.append(steps([
+        "Open Settings &rarr; Device Configuration and pick the pedestal.",
+        "In the &ldquo;Temperature Sensor &mdash; Papouch TME&rdquo; card, click Scan Network "
+        "(enter the subnet, e.g. 192.168.1, then Assign a found sensor) or type the sensor IP "
+        "manually.",
+        "Set the port (default 80) and protocol (HTTP), then Save Device Configuration.",
+    ]))
+    s.append(note("If the scan finds nothing: on a NUC with both a 5G/WAN link and the marina "
+                  "LAN, auto-detect may scan the wrong network. Type the marina subnet "
+                  "(e.g. 192.168.1), or enter the sensor IP manually."))
+
+    s.append(p("Temperature alarms (v3.23)", "H2"))
+    s.append(p("Once a temperature sensor is configured and responding, the backend polls it "
+               "every 30 seconds and raises range alarms:"))
+    s.append(bullets([
+        "<b>Warning (yellow)</b>: temperature &ge; 45&deg;C or &le; 0&deg;C.",
+        "<b>Critical (red)</b>: temperature &ge; 60&deg;C or &le; &minus;10&deg;C.",
+        "Alarms escalate (warning &rarr; critical) and clear automatically when the "
+        "temperature returns to normal.",
+    ]))
+    s.append(p("The Device Configuration card shows the live reading coloured by band. A "
+               "configured sensor that stops responding raises a &ldquo;temperature sensor "
+               "offline&rdquo; warning."))
+
+    s.append(p("Active Alarms panel (v3.24)", "H2"))
+    s.append(p("System Health has an Active Alarms card listing every currently-triggered "
+               "alarm (temperature, fire, comm-loss, &hellip;) colour-coded by severity "
+               "(red = critical, yellow = warning). Click Acknowledge to clear one; "
+               "auto-resolving alarms disappear on their own."))
+
+    s.append(p("Truthful diagnostics &amp; socket status (v3.21)", "H2"))
+    s.append(bullets([
+        "Run Diagnostics reports what the cabinet actually returns. Sockets and water show "
+        "real OK / FAIL; Temperature and Moisture show N/A on Opta cabinets (no such sensors). "
+        "A timeout no longer shows a false &ldquo;all OK&rdquo;.",
+        "A socket shows FAULT (not ACTIVE) whenever the hardware reports a fault or its breaker "
+        "is tripped, regardless of any logical session.",
+    ]))
+
     s.append(PageBreak())
 
     # ════════════════════════════════════════════════════════════════════════

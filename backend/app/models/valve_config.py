@@ -12,7 +12,7 @@ skips that valve and the operator must open it manually via the Control Center.
 valve_id = 1 for V1, 2 for V2.
 """
 from datetime import datetime
-from sqlalchemy import Column, Integer, Boolean, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, Integer, Boolean, DateTime, Float, ForeignKey, UniqueConstraint
 from ..database import Base
 
 
@@ -24,6 +24,14 @@ class ValveConfig(Base):
     valve_id      = Column(Integer, nullable=False)   # 1 (V1) or 2 (V2)
     # Default True per v3.9 design decision — hardware is normally-closed.
     auto_activate = Column(Boolean, nullable=False, default=True)
+
+    # v3.43 — the valve's cumulative water register (`total_l` from
+    # opta/water/V{n}/status), mirroring socket_configs.meter_energy_kwh for electricity. This
+    # is what we forward to ERP as cumulative-per-outlet, and the source of a session's litres
+    # (end minus start) rather than any figure we derive.
+    meter_total_l    = Column(Float, nullable=True)
+    meter_updated_at = Column(DateTime, nullable=True)
+
     created_at    = Column(DateTime, default=datetime.utcnow)
     updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

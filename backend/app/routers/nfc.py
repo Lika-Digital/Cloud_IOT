@@ -37,14 +37,28 @@ from ..models.session import Session
 from ..models.pedestal_config import PedestalConfig
 from ..services.session_service import session_service
 from ..services import erp_reconciliation, nfc_service
-from ..services.nfc_service import DuplicateNfcTagError
+from ..services.nfc_service import (
+    DuplicateNfcTagError,
+    OUTLET_SOCKET,
+    OUTLET_VALVE,
+    VALID_OUTLETS,
+    outlet_type_for,
+    session_type_for,
+)
 from ..time_utils import iso_z
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/nfc", tags=["nfc"])
 
-_VALID_SOCKETS = {"Q1", "Q2", "Q3", "Q4"}
+# v3.43 — SIX outlets, not four. A cabinet with 4 sockets and 2 water outlets carries six
+# NFC tags, one per outlet, and water works exactly like electricity: the customer scans the
+# tag on the outlet they are about to use and the session belongs to whoever scanned. The
+# old `_VALID_SOCKETS = {Q1..Q4}` made the two water tags unprovisionable — 400 at the door.
+#
+# The vocabulary lives in nfc_service so there is one list, not a router copy that drifts.
+_ALL_OUTLETS = tuple(n for names in VALID_OUTLETS.values() for n in names)
+_OUTLETS_HELP = "outlet must be one of " + ", ".join(_ALL_OUTLETS)
 
 # Same threshold the comm-loss watchdog uses (main.COMM_LOSS_TIMEOUT_SECONDS). Imported by
 # value rather than from main to avoid a circular import; kept identical on purpose, because
@@ -60,6 +74,35 @@ def _resolve_pedestal(db: DBSession, cabinet_id: str) -> Optional[PedestalConfig
     return db.query(PedestalConfig).filter(
         PedestalConfig.opta_client_id == cabinet_id
     ).first()
+
+
+def _outlet_kind_or_400(outlet_name: str) -> str:
+    """The outlet kind for a name, or 400 if this hardware has no such outlet.
+
+    Replaces the Q1..Q4 set check. Note it returns the KIND rather than a boolean: every
+    caller downstream needs to know whether it is holding a socket or a valve, and deciding
+    that twice is how the two halves come to disagree.
+    """
+    kind = outlet_type_for(outlet_name)
+    if kind is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{_OUTLETS_HELP} (got {outlet_name})",
+        )
+    return kind
+
+
+def _outlet_str_to_id(outlet_name: str, kind: str) -> int:
+    """Outlet name → the numeric id sessions and configs are keyed by.
+
+    Q3 → 3 and V2 → 2. The numbers overlap between the two kinds by design — a water
+    session on V1 and an electricity session on Q1 are both socket_id=1, told apart by
+    Session.type — so the kind must be supplied rather than sniffed from the name.
+    """
+    from ..services.mqtt_handlers import _socket_name_to_id, _water_name_to_id
+    if kind == OUTLET_VALVE:
+        return _water_name_to_id(outlet_name)
+    return _socket_name_to_id(outlet_name)
 
 
 def _socket_str_to_id(socket_id: str) -> int:
@@ -81,13 +124,21 @@ class NfcScanBody(BaseModel):
 
 class NfcProvisionBody(BaseModel):
     cabinet_id: str = Field(..., min_length=1)
-    socket_id: str = Field(..., min_length=2, max_length=2)   # "Q1".."Q4"
+    # "Q1".."Q4" for a socket, "V1"/"V2" for a valve. Still 2 characters on today's
+    # hardware, but the field no longer pins it at exactly 2 — the outlet vocabulary is
+    # validated against nfc_service.VALID_OUTLETS, which is the list that actually knows.
+    socket_id: str = Field(..., min_length=2, max_length=8)
     nfc_tag_id: str = Field(..., min_length=1, max_length=256)
+    # Which kind of outlet the caller believes this is. Defaults to "socket" so every
+    # existing client keeps working unchanged; a water tag must state "valve" explicitly.
+    # The service refuses a mismatch (valve + Q3) rather than correcting it.
+    outlet_type: str = Field(OUTLET_SOCKET, pattern="^(socket|valve)$")
 
 
 class NfcBulkItem(BaseModel):
-    socket_id: str = Field(..., min_length=2, max_length=2)
+    socket_id: str = Field(..., min_length=2, max_length=8)
     nfc_tag_id: str = Field(..., min_length=1, max_length=256)
+    outlet_type: str = Field(OUTLET_SOCKET, pattern="^(socket|valve)$")
 
 
 class NfcBulkBody(BaseModel):
@@ -144,11 +195,99 @@ def set_provisioning_mode(cabinet_id: str, body: NfcModeBody,
 # Admin provisioning (JWT, require_admin)
 # ══════════════════════════════════════════════════════════════════════════════
 
+@router.get("/outlets/{cabinet_id}")
+def list_cabinet_outlets(cabinet_id: str, db: DBSession = Depends(get_db),
+                         _: User = Depends(require_any_role)):
+    """The outlets this cabinet actually has, for the provisioning UI to render.
+
+    v3.43. The UI used to render a fixed four rows, `['Q1','Q2','Q3','Q4']`, which was wrong
+    twice over: it omitted the two water outlets entirely, and it asserted four identical
+    sockets when `opta/config/hardware` says Q1 is three-phase 32 A and Q3/Q4 are 16 A.
+
+    The cabinet enumerates itself. This reads what it reported (persisted by
+    `_handle_opta_hardware_config`) rather than assuming.
+
+    `reported` says whether this is the cabinet's own account of itself or our fallback. It
+    matters: a cabinet that has never published its hardware config is a different situation
+    from one with no water outlets, and a UI that renders both as four rows cannot tell an
+    admin which it is looking at. The fallback list is the canonical six — printed tags exist
+    on the housing whether or not the cabinet has spoken since the last restart — but it is
+    labelled as a fallback so the UI can say so.
+    """
+    from ..models.socket_config import SocketConfig
+    from ..models.valve_config import ValveConfig
+
+    cfg = _resolve_pedestal(db, cabinet_id)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="Pedestal not found")
+
+    socket_rows = db.query(SocketConfig).filter(
+        SocketConfig.pedestal_id == cfg.pedestal_id
+    ).order_by(SocketConfig.socket_id).all()
+    valve_rows = db.query(ValveConfig).filter(
+        ValveConfig.pedestal_id == cfg.pedestal_id
+    ).order_by(ValveConfig.valve_id).all()
+
+    # "Reported" means the cabinet told us, not that a row exists — socket_configs rows are
+    # created by several other paths, so their presence proves nothing about hardware config.
+    reported = any(getattr(r, "hw_config_received_at", None) for r in socket_rows)
+
+    outlets: list[dict] = []
+    if reported:
+        for r in socket_rows:
+            outlets.append({
+                "outlet_name": f"Q{r.socket_id}",
+                "outlet_type": OUTLET_SOCKET,
+                "session_type": session_type_for(OUTLET_SOCKET),
+                "meter_type": r.meter_type,
+                "phases": r.phases,
+                "rated_amps": r.rated_amps,
+                "rated_liters_per_min": None,
+            })
+        for r in valve_rows:
+            outlets.append({
+                "outlet_name": f"V{r.valve_id}",
+                "outlet_type": OUTLET_VALVE,
+                "session_type": session_type_for(OUTLET_VALVE),
+                "meter_type": None,
+                "phases": None,
+                "rated_amps": None,
+                "rated_liters_per_min": r.rated_liters_per_min,
+            })
+    else:
+        for kind, names in VALID_OUTLETS.items():
+            for name in names:
+                outlets.append({
+                    "outlet_name": name,
+                    "outlet_type": kind,
+                    "session_type": session_type_for(kind),
+                    "meter_type": None,
+                    "phases": None,
+                    "rated_amps": None,
+                    "rated_liters_per_min": None,
+                })
+
+    tags = {t.socket_id: t for t in nfc_service.list_tags(db, cabinet_id)}
+    for o in outlets:
+        tag = tags.get(o["outlet_name"])
+        o["nfc_tag_id"] = tag.nfc_tag_id if tag else None
+
+    return {
+        "cabinet_id": cabinet_id,
+        "reported": reported,
+        "outlets": outlets,
+    }
+
+
 def _tag_out(tag) -> dict:
     return {
         "nfc_tag_id": tag.nfc_tag_id,
         "cabinet_id": tag.cabinet_id,
         "socket_id": tag.socket_id,
+        # v3.43 — "socket" or "valve". The UI cannot infer it from the name: both inbound
+        # vocabularies accept bare digits, so "1" is genuinely ambiguous.
+        "outlet_type": tag.outlet_type or OUTLET_SOCKET,
+        "session_type": session_type_for(tag.outlet_type or OUTLET_SOCKET),
         "provisioned_at": iso_z(tag.provisioned_at),
         "provisioned_by": tag.provisioned_by,
         "is_active": tag.is_active,
@@ -166,11 +305,12 @@ def list_nfc_tags(cabinet_id: str, db: DBSession = Depends(get_db),
     return [_tag_out(t) for t in nfc_service.list_tags(db, cabinet_id)]
 
 
-def _provision_one(db, cabinet_id: str, socket_id: str, nfc_tag_id: str, by: str):
-    if socket_id not in _VALID_SOCKETS:
-        raise HTTPException(status_code=400, detail="socket_id must be one of Q1..Q4")
+def _provision_one(db, cabinet_id: str, socket_id: str, nfc_tag_id: str, by: str,
+                   outlet_type: str = OUTLET_SOCKET):
+    _outlet_kind_or_400(socket_id)
     try:
-        return nfc_service.provision_tag(db, nfc_tag_id, cabinet_id, socket_id, provisioned_by=by)
+        return nfc_service.provision_tag(db, nfc_tag_id, cabinet_id, socket_id,
+                                         provisioned_by=by, outlet_type=outlet_type)
     except DuplicateNfcTagError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -184,7 +324,8 @@ def _provision_one(db, cabinet_id: str, socket_id: str, nfc_tag_id: str, by: str
 def provision_nfc_tag(body: NfcProvisionBody, db: DBSession = Depends(get_db),
                       admin: User = Depends(require_admin)):
     """Provision (or replace) the NFC tag for one socket."""
-    tag = _provision_one(db, body.cabinet_id, body.socket_id, body.nfc_tag_id, admin.email)
+    tag = _provision_one(db, body.cabinet_id, body.socket_id, body.nfc_tag_id, admin.email,
+                         outlet_type=body.outlet_type)
     return _tag_out(tag)
 
 
@@ -198,8 +339,7 @@ def provision_nfc_tags_bulk(body: NfcBulkBody, db: DBSession = Depends(get_db),
     # Pre-validate: reject in-batch duplicate tag ids and bad socket ids.
     seen: dict[str, str] = {}
     for it in body.items:
-        if it.socket_id not in _VALID_SOCKETS:
-            raise HTTPException(status_code=400, detail=f"socket_id must be one of Q1..Q4 (got {it.socket_id})")
+        _outlet_kind_or_400(it.socket_id)
         if it.nfc_tag_id in seen and seen[it.nfc_tag_id] != it.socket_id:
             raise HTTPException(
                 status_code=409,
@@ -208,7 +348,8 @@ def provision_nfc_tags_bulk(body: NfcBulkBody, db: DBSession = Depends(get_db),
         seen[it.nfc_tag_id] = it.socket_id
     out = []
     for it in body.items:
-        out.append(_tag_out(_provision_one(db, body.cabinet_id, it.socket_id, it.nfc_tag_id, admin.email)))
+        out.append(_tag_out(_provision_one(db, body.cabinet_id, it.socket_id, it.nfc_tag_id,
+                                           admin.email, outlet_type=it.outlet_type)))
     return {"cabinet_id": body.cabinet_id, "tags": out}
 
 
@@ -220,8 +361,7 @@ def remove_nfc_tag(cabinet_id: str, socket_id: str, db: DBSession = Depends(get_
     The actor is recorded from v3.43 — the dependency was `_: User` before, discarding the one
     piece of information the audit trail was missing.
     """
-    if socket_id not in _VALID_SOCKETS:
-        raise HTTPException(status_code=400, detail="socket_id must be one of Q1..Q4")
+    _outlet_kind_or_400(socket_id)
     cleared = nfc_service.remove_tag(db, cabinet_id, socket_id, removed_by=admin.email)
     if not cleared:
         raise HTTPException(status_code=404, detail="No active NFC tag for this socket")
@@ -424,20 +564,39 @@ def nfc_scan(body: NfcScanBody, db: DBSession = Depends(get_db),
     # Can the NUC act at all? Smart mode and liveness, neither of which was checked before.
     _require_pedestal_can_act(cfg)
 
-    socket_int = _socket_str_to_id(socket_id)
+    # v3.43 — WHAT KIND of outlet this tag is on, taken from the tag rather than assumed.
+    # This endpoint hardcoded session_type="electricity", so a water tag opened an
+    # ELECTRICITY session against socket N — and the litres it later drew were billed as
+    # kWh on an outlet the customer never touched. Rows written before the column exists
+    # default to "socket", which is what they all were.
+    outlet_type = tag.outlet_type or OUTLET_SOCKET
+    session_type = session_type_for(outlet_type)
+    is_valve = outlet_type == OUTLET_VALVE
+    outlet_word = "water outlet" if is_valve else "socket"
 
-    # Socket availability.
-    if _socket_display_state(db, cfg.pedestal_id, socket_int) == "fault":
+    outlet_int = _outlet_str_to_id(socket_id, outlet_type)
+    # Kept for the electricity path and for the response, which has always used this name.
+    socket_int = outlet_int
+
+    # Outlet availability. The fault check applies to electricity only: the display-state
+    # machine reads socket hardware status, and there is NO valve equivalent in the
+    # firmware payload today. Rather than pass a valve through a socket-shaped check and
+    # get a meaningless answer, the valve path skips it — stated here because a missing
+    # check that looks like a passing check is the failure mode worth naming.
+    if not is_valve and _socket_display_state(db, cfg.pedestal_id, outlet_int) == "fault":
         raise HTTPException(
             status_code=503,
             detail="This socket has a fault and cannot be used. Please contact the marina "
                    "office, or try another socket.",
         )
-    active = session_service.get_active_for_socket(db, cfg.pedestal_id, socket_int, session_type="electricity")
+    # Filtered by session_type, so a water session on V1 no longer blocks an electricity
+    # session on Q1 — they are different outlets that happen to share the number 1.
+    active = session_service.get_active_for_socket(db, cfg.pedestal_id, outlet_int,
+                                                  session_type=session_type)
     if active is not None and active.status == "active":
         raise HTTPException(
             status_code=409,
-            detail="This socket is already in use. Please use another socket.",
+            detail=f"This {outlet_word} is already in use. Please use another {outlet_word}.",
         )
 
     # A still-valid pending scan for this socket blocks a second one. DISTINCT from
@@ -448,23 +607,29 @@ def nfc_scan(body: NfcScanBody, db: DBSession = Depends(get_db),
     if live is not None:
         raise HTTPException(
             status_code=409,
-            detail="Someone else tapped this socket a moment ago and it is being held for "
-                   f"them until {iso_z(live.expires_at)}. Please wait, or use another socket.",
+            detail=f"Someone else tapped this {outlet_word} a moment ago and it is being "
+                   f"held for them until {iso_z(live.expires_at)}. Please wait, or use "
+                   f"another {outlet_word}.",
         )
 
     rec = nfc_service.create_pending(db, body.nfc_tag_id, user_id, cabinet_id, socket_id)
     # Log the resolved mapping and the authenticated principal, so an attribution dispute is
     # answerable from the journal rather than by inference.
-    logger.info("[NFC] scan pre-registered user=%s (principal=%s) cabinet=%s socket=%s "
-                "tag=%s expires=%s",
+    logger.info("[NFC] scan pre-registered user=%s (principal=%s) cabinet=%s outlet=%s "
+                "type=%s tag=%s expires=%s",
                 user_id, f"customer:{customer.id}" if customer else "erp-api-key",
-                cabinet_id, socket_id, body.nfc_tag_id, iso_z(rec.expires_at))
+                cabinet_id, socket_id, session_type, body.nfc_tag_id, iso_z(rec.expires_at))
 
     return {
         "status": "pending",
-        "message": "Please plug in your charger to activate the socket",
+        "message": ("Please open your tap to activate the water outlet" if is_valve
+                    else "Please plug in your charger to activate the socket"),
         "cabinet_id": cabinet_id,
         "socket_id": socket_id,
+        # v3.43 — so ERP and the app can tell an electricity scan from a water one without
+        # parsing the outlet name. Additive: existing fields are unchanged.
+        "outlet_type": outlet_type,
+        "session_type": session_type,
         "berth_id": getattr(cfg, "berth_ref", None),
         "expires_at": iso_z(rec.expires_at),
     }

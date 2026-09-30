@@ -67,8 +67,45 @@ def list_tags(db, cabinet_id: str) -> list[NfcTag]:
     )
 
 
+OUTLET_SOCKET = "socket"
+OUTLET_VALVE = "valve"
+
+# The outlet names each kind may legitimately carry, per the firmware capture. Deliberately NOT
+# derived from the MQTT resolver's allowlists: those accept unverified marina/* spellings for
+# inbound traffic, whereas a TAG we write ourselves has no such excuse and should only ever use
+# what the hardware actually publishes — Q1..Q4 and V1/V2.
+VALID_OUTLETS = {
+    OUTLET_SOCKET: ("Q1", "Q2", "Q3", "Q4"),
+    OUTLET_VALVE: ("V1", "V2"),
+}
+
+
+def outlet_type_for(outlet_name: str) -> str | None:
+    """Which kind of outlet this name belongs to, or None if it belongs to neither.
+
+    Used to CHECK a caller's stated type, never to replace it. The type is stored on the tag
+    because names are ambiguous in general — both inbound vocabularies accept bare digits, so
+    "1" cannot distinguish socket 1 from valve 1. This helper only catches a caller that says
+    "valve" while naming Q3.
+    """
+    for kind, names in VALID_OUTLETS.items():
+        if outlet_name in names:
+            return kind
+    return None
+
+
+def session_type_for(outlet_type: str) -> str:
+    """The session type an outlet kind produces.
+
+    `/scan` used to hardcode "electricity". Deriving it from the tag is what makes a water tag
+    open a WATER session rather than an electricity one on the same numeric socket.
+    """
+    return "water" if outlet_type == OUTLET_VALVE else "electricity"
+
+
 def provision_tag(db, nfc_tag_id: str, cabinet_id: str, socket_id: str,
-                  provisioned_by: str | None = None) -> NfcTag:
+                  provisioned_by: str | None = None,
+                  outlet_type: str = OUTLET_SOCKET) -> NfcTag:
     """Map an NFC tag to a socket, replacing any previous active tag on that
     socket. Raises DuplicateNfcTagError if the tag is already active elsewhere.
 
@@ -81,6 +118,23 @@ def provision_tag(db, nfc_tag_id: str, cabinet_id: str, socket_id: str,
     nfc_tag_id = (nfc_tag_id or "").strip()
     if not nfc_tag_id:
         raise ValueError("nfc_tag_id is required")
+    if outlet_type not in VALID_OUTLETS:
+        raise ValueError(
+            f"outlet_type must be one of {sorted(VALID_OUTLETS)}, got {outlet_type!r}"
+        )
+    implied = outlet_type_for(socket_id)
+    if implied is None:
+        raise ValueError(
+            f"{socket_id!r} is not an outlet this hardware has. Expected one of "
+            f"{list(VALID_OUTLETS[outlet_type])} for a {outlet_type}."
+        )
+    if implied != outlet_type:
+        # Refused rather than silently corrected: a caller that says "valve" while naming Q3
+        # has a bug, and choosing one of the two for them would hide which one.
+        raise ValueError(
+            f"{socket_id!r} is a {implied}, but outlet_type says {outlet_type!r}. A water tag "
+            f"must never be provisioned against an electricity socket, or the reverse."
+        )
     if not (provisioned_by or "").strip():
         raise ValueError(
             "provisioned_by is required — an NFC mapping must be attributable to the admin "
@@ -111,6 +165,7 @@ def provision_tag(db, nfc_tag_id: str, cabinet_id: str, socket_id: str,
         existing.is_active = True
         existing.provisioned_at = now
         existing.provisioned_by = provisioned_by
+        existing.outlet_type = outlet_type
         tag = existing
     else:
         tag = NfcTag(
@@ -119,6 +174,7 @@ def provision_tag(db, nfc_tag_id: str, cabinet_id: str, socket_id: str,
             socket_id=socket_id,
             provisioned_at=now,
             provisioned_by=provisioned_by,
+            outlet_type=outlet_type,
             is_active=True,
         )
         db.add(tag)
@@ -209,35 +265,67 @@ def build_session_payload(db, user_db, session) -> dict:
     the ERP webhook. `db` = pedestal.db session, `user_db` = users.db session.
 
     estimated_cost uses the global BillingConfig.kwh_price_eur (energy_kwh * price);
-    None when no BillingConfig row exists.
+    None when no BillingConfig row exists, and None for a water session (see below).
+
+    v3.43 — WATER SESSIONS REACH THIS FUNCTION NOW, and it assumed electricity throughout.
+    Since a water session on V1 and an electricity session on Q1 are both `socket_id=1`,
+    every socket-keyed lookup here silently returned the WRONG OUTLET'S figures for a
+    water session: the outlet was reported as "Q1", and `energy_kwh` fell back to socket 1's
+    cumulative electricity register. ERP would have received a plausible kWh number for a
+    session that drew litres, attributed to an outlet the customer never touched.
+
+    It was unreachable before only because water tags could not be provisioned. Enabling
+    the six-tag model is what made it reachable, which is why it is fixed in the same
+    change rather than left as a follow-up.
     """
     from ..models.pedestal_config import PedestalConfig
     from ..models.socket_config import SocketConfig
+    from ..models.valve_config import ValveConfig
 
     cfg = db.query(PedestalConfig).filter(
         PedestalConfig.pedestal_id == session.pedestal_id
     ).first()
     cabinet_id = getattr(cfg, "opta_client_id", None) if cfg else None
 
-    sc = None
+    is_water = getattr(session, "type", None) == "water"
+
+    sc = vc = None
     if session.socket_id is not None:
-        sc = db.query(SocketConfig).filter(
-            SocketConfig.pedestal_id == session.pedestal_id,
-            SocketConfig.socket_id == session.socket_id,
-        ).first()
+        if is_water:
+            vc = db.query(ValveConfig).filter(
+                ValveConfig.pedestal_id == session.pedestal_id,
+                ValveConfig.valve_id == session.socket_id,
+            ).first()
+        else:
+            sc = db.query(SocketConfig).filter(
+                SocketConfig.pedestal_id == session.pedestal_id,
+                SocketConfig.socket_id == session.socket_id,
+            ).first()
 
     is_active = session.status == "active"
-    # Energy: final value once the session is completed; live meter total while active.
-    energy_kwh = session.energy_kwh
-    if energy_kwh is None and sc is not None:
+
+    # Energy and litres are reported in their own fields and never substituted for one
+    # another. A water session has energy_kwh = None, not 0.0 — the same distinction the
+    # register work drew: zero means measured zero, and this outlet measures no kWh at all.
+    energy_kwh = None if is_water else session.energy_kwh
+    if not is_water and energy_kwh is None and sc is not None:
+        # Live register total while the session runs; the session field once it completes.
         energy_kwh = sc.meter_energy_kwh
     energy_kwh = round(energy_kwh, 4) if energy_kwh is not None else None
+
+    water_liters = getattr(session, "water_liters", None) if is_water else None
+    if is_water and water_liters is None and vc is not None:
+        water_liters = vc.meter_total_l
+    water_liters = round(water_liters, 3) if water_liters is not None else None
 
     power_kw_current = (sc.meter_power_kw if (is_active and sc is not None) else 0.0) or 0.0
 
     end = session.ended_at or datetime.utcnow()
     duration_minutes = round(max(0.0, (end - session.started_at).total_seconds()) / 60.0, 2)
 
+    # Priced from the kWh tariff, so it applies to electricity only. A water session gets
+    # None rather than a euro figure derived from the wrong tariff — and in MODE 1 ERP
+    # prices everything anyway; this field is an estimate for display, never the invoice.
     estimated_cost = None
     try:
         from ..auth.customer_models import BillingConfig
@@ -247,15 +335,26 @@ def build_session_payload(db, user_db, session) -> dict:
     except Exception:
         estimated_cost = None
 
+    # The outlet name follows the session TYPE. The numbers overlap between the two kinds
+    # (V1 and Q1 are both 1), so the prefix is the only thing that says which outlet this
+    # is — and ERP reconciles on this string.
+    outlet_prefix = "V" if is_water else "Q"
+
     return {
         "session_id": session.id,
         "cabinet_id": cabinet_id,
-        "socket_id": f"Q{session.socket_id}" if session.socket_id is not None else None,
+        "socket_id": (f"{outlet_prefix}{session.socket_id}"
+                      if session.socket_id is not None else None),
+        # v3.43, additive: which kind of outlet, so ERP does not have to parse the name.
+        "session_type": "water" if is_water else "electricity",
         "customer_id": session.nfc_user_id,
         "status": "active" if is_active else "ended",
         "activated_at": iso_z(session.started_at),
         "duration_minutes": duration_minutes,
+        # Exactly one of these carries a figure. The other is None — NOT 0.0, which would
+        # read as "measured nothing" for a quantity this outlet does not measure.
         "energy_kwh": energy_kwh,
+        "water_liters": water_liters,
         "power_kw_current": round(power_kw_current, 3),
         "estimated_cost": estimated_cost,
     }

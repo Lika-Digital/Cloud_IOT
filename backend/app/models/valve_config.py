@@ -25,6 +25,11 @@ class ValveConfig(Base):
     # Default True per v3.9 design decision — hardware is normally-closed.
     auto_activate = Column(Boolean, nullable=False, default=True)
 
+    # v3.43 — from opta/config/hardware, which enumerates the cabinet's own valves
+    # (V1 and V2, both 20 L/min on MAR_KRK_ORM_01). The cabinet tells us what it has;
+    # provisioning reads this rather than assuming a fixed outlet list.
+    rated_liters_per_min = Column(Float, nullable=True)
+
     # v3.43 — the valve's cumulative water register (`total_l` from
     # opta/water/V{n}/status), mirroring socket_configs.meter_energy_kwh for electricity. This
     # is what we forward to ERP as cumulative-per-outlet, and the source of a session's litres

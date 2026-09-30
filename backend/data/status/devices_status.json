@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-09-30T13:41:56.404366Z",
+  "pedestals": [
+    {
+      "pedestal_id": 1,
+      "cabinet_id": "TST_SIXTAG_CAB",
+      "cabinet": {
+        "connected": false,
+        "status": "offline",
+        "last_heartbeat": null,
+        "door_state": "unknown",
+        "first_seen_at": "2026-09-30T13:24:45.893471Z"
+      },
+      "camera": {
+        "reachable": false,
+        "last_check": null
+      },
+      "temp_sensor": {
+        "reachable": false,
+        "last_check": null
+      },
+      "sockets": []
+    }
+  ]
+}

@@ -7,12 +7,19 @@ import { useSessionStore } from '../../src/store/sessionStore'
 import { useTheme } from '../../src/hooks/useTheme'
 import { useNfc } from '../../src/hooks/useNfc'
 import {
-  nfcScan, stopNfcSession, getNfcSession, erpApiKeyConfigured, socketLabelToNumber,
+  nfcScan, stopNfcSession, getNfcSession, erpApiKeyConfigured, outletLabelToNumber,
   type NfcScanResult,
 } from '../../src/api/nfc'
 
-// NFC charging — Scan tab.
-// 1) Tap "Scan tag" → read the pedestal socket's NFC tag UID.
+// NFC — Scan tab. Electricity AND water (v3.43).
+//
+// A cabinet carries SIX tags: one per electricity socket (Q1..Q4) and one per water
+// outlet (V1/V2). Water works exactly like electricity — the customer scans the tag on the
+// outlet they are about to use, and the session belongs to whoever scanned. The screen
+// therefore has to speak about whichever outlet the tag turned out to be on; it is not
+// known until /api/nfc/scan answers.
+//
+// 1) Tap "Scan tag" → read the outlet's NFC tag UID.
 // 2) POST /api/nfc/scan (ERP key) pre-registers the charge (5-min window).
 // 3) Plug in the cable → backend activates (Smart Mode ON) and broadcasts
 //    session_created; the WS hook adopts it into the session store.
@@ -27,8 +34,8 @@ function fmtCountdown(ms: number): string {
 export default function ScanScreen() {
   const t = useTheme()
   const profile = useAuthStore((s) => s.profile)
-  const { activeSession, liveWatts, liveKwh, nfcPending, setNfcPending, setActiveSession, clearLive } =
-    useSessionStore()
+  const { activeSession, liveWatts, liveKwh, liveLpm, liveLiters, nfcPending, setNfcPending,
+          setActiveSession, clearLive } = useSessionStore()
   const { supported, scanning, readTagUid, cancel } = useNfc()
 
   const [busy, setBusy] = useState(false)
@@ -98,17 +105,25 @@ export default function ScanScreen() {
       const res: NfcScanResult = await nfcScan(uid, userId)
       setNfcPending({
         cabinet_id: res.cabinet_id,
-        socket_id: res.socket_id,
-        socketNum: socketLabelToNumber(res.socket_id),
+        outlet_id: res.socket_id,
+        outletNum: outletLabelToNumber(res.socket_id),
+        // Trust the server's answer; fall back to electricity only for a pre-v3.43 backend
+        // that does not send the field. Never inferred from the outlet name — a bare digit
+        // is ambiguous between socket 1 and valve 1, which is the whole reason the tag
+        // carries a stored type.
+        sessionType: res.session_type ?? 'electricity',
         user_id: userId,
         expires_at: res.expires_at,
       })
     } catch (e: any) {
       const status = e?.response?.status
       const detail = e?.response?.data?.detail
-      if (status === 404) setError(`Tag not provisioned (UID ${uid}). Ask an operator to register it to a socket.`)
-      else if (status === 409) setError('That socket is already in use. Try another, or wait.')
-      else if (status === 503) setError('Socket unavailable (fault or service down). Try again later.')
+      // The backend's messages are written for the customer and name the outlet kind
+      // (v3.43), so prefer `detail` over a local string that says "socket" to someone
+      // standing at a tap. The fallbacks stay for a pre-v3.43 backend.
+      if (status === 404) setError(detail ?? `Tag not registered (UID ${uid}). Ask the marina office to register it.`)
+      else if (status === 409) setError(detail ?? 'That outlet is already in use. Try another, or wait.')
+      else if (status === 503) setError(detail ?? 'Outlet unavailable (fault or service down). Try again later.')
       else if (status === 401) setError('ERP API key rejected — check EXPO_PUBLIC_ERP_API_KEY.')
       else setError(detail ?? 'Scan failed. Check connection to the NUC and try again.')
     } finally {
@@ -137,26 +152,48 @@ export default function ScanScreen() {
 
   // ── Active session ──────────────────────────────────────────────────────────
   if (activeSession) {
+    // v3.43 — a water session is now reachable from this screen, so the card cannot assume
+    // electricity. Showing "0 W / 0.0000 kWh" to someone filling a tank is not a cosmetic
+    // problem: those are the numbers they would check to see whether anything is happening.
+    const isWater = activeSession.type === 'water'
     return (
       <ScrollView style={s.screen} contentContainerStyle={s.content}>
-        <Text style={s.h1}>Charging</Text>
+        <Text style={s.h1}>{isWater ? 'Water running' : 'Charging'}</Text>
         <View style={[s.card, { borderColor: t.success, borderWidth: 1 }]}>
           <View style={s.row}>
             <View style={[s.dot, { backgroundColor: t.success }]} />
             <Text style={[s.cardTitle, { color: t.success }]}>Session active</Text>
           </View>
           <Text style={s.muted}>
-            Socket {activeSession.socket_id ?? '—'} · pedestal {activeSession.pedestal_id}
+            {isWater ? 'Water outlet' : 'Socket'} {activeSession.socket_id ?? '—'} · pedestal {activeSession.pedestal_id}
           </Text>
           <View style={s.metricsRow}>
-            <Metric t={t} label="Power" value={`${liveWatts.toFixed(0)} W`} />
-            <Metric t={t} label="Energy" value={`${liveKwh.toFixed(4)} kWh`} />
-            <Metric t={t} label="Est. cost" value={estCost != null ? `€${estCost.toFixed(2)}` : '—'} />
+            {isWater ? (
+              <>
+                <Metric t={t} label="Flow" value={`${liveLpm.toFixed(1)} L/min`} />
+                <Metric t={t} label="Volume" value={`${liveLiters.toFixed(1)} L`} />
+              </>
+            ) : (
+              <>
+                <Metric t={t} label="Power" value={`${liveWatts.toFixed(0)} W`} />
+                <Metric t={t} label="Energy" value={`${liveKwh.toFixed(4)} kWh`} />
+              </>
+            )}
+            {/* The estimated cost comes from GET /api/nfc/session, which prices kWh only.
+                A water session therefore has no figure to show, and a euro amount computed
+                from an electricity tariff would be worse than a dash. */}
+            <Metric
+              t={t}
+              label="Est. cost"
+              value={!isWater && estCost != null ? `€${estCost.toFixed(2)}` : '—'}
+            />
           </View>
           <TouchableOpacity style={[s.btn, { backgroundColor: t.danger }]} onPress={handleStop} disabled={stopping}>
             {stopping ? <ActivityIndicator color="#fff" /> : <Text style={s.btnText}>Stop session</Text>}
           </TouchableOpacity>
-          <Text style={s.hint}>Unplugging the cable also ends the session.</Text>
+          <Text style={s.hint}>
+            {isWater ? 'Closing the tap also ends the session.' : 'Unplugging the cable also ends the session.'}
+          </Text>
         </View>
       </ScrollView>
     )
@@ -165,19 +202,23 @@ export default function ScanScreen() {
   // ── Waiting for plug-in ─────────────────────────────────────────────────────
   if (nfcPending) {
     const left = new Date(nfcPending.expires_at).getTime() - now
+    const isWater = nfcPending.sessionType === 'water'
     return (
       <ScrollView style={s.screen} contentContainerStyle={s.content}>
         <Text style={s.h1}>Tag accepted</Text>
         <View style={[s.card, { borderColor: t.warning, borderWidth: 1 }]}>
           <ActivityIndicator color={t.warning} size="large" />
-          <Text style={[s.cardTitle, { color: t.warning }]}>Plug in your cable</Text>
+          <Text style={[s.cardTitle, { color: t.warning }]}>
+            {isWater ? 'Open your tap' : 'Plug in your cable'}
+          </Text>
           <Text style={s.muted}>
-            Socket {nfcPending.socket_id} · {nfcPending.cabinet_id}
+            {isWater ? 'Water outlet' : 'Socket'} {nfcPending.outlet_id} · {nfcPending.cabinet_id}
           </Text>
           <Text style={s.countdown}>{fmtCountdown(left)}</Text>
           <Text style={s.hint}>
-            Connect the cable to start charging. Activation needs the pedestal in Smart Mode — if nothing
-            happens, the operator may have Smart Mode off.
+            {isWater
+              ? 'Connect your hose and open the tap to start. Activation needs the pedestal in Smart Mode — if nothing happens, the operator may have Smart Mode off.'
+              : 'Connect the cable to start charging. Activation needs the pedestal in Smart Mode — if nothing happens, the operator may have Smart Mode off.'}
           </Text>
           <TouchableOpacity style={[s.btnOutline, { borderColor: t.border }]} onPress={() => setNfcPending(null)}>
             <Text style={[s.btnText, { color: t.textSecondary }]}>Cancel</Text>

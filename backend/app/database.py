@@ -207,6 +207,13 @@ def _migrate_schema():
         # backfilling a guess would be worse than an honest NULL.
         ("nfc_tags",       "removed_at",  "DATETIME"),
         ("nfc_tags",       "removed_by",  "TEXT"),
+        # v3.43 — six-tag model: which kind of outlet a tag is stuck to. Existing rows are
+        # all sockets (valves could not be provisioned before this), so the default is
+        # correct for them rather than a guess.
+        ("nfc_tags",       "outlet_type", "TEXT NOT NULL DEFAULT 'socket'"),
+        # v3.43 — valve hardware facts from opta/config/hardware, which enumerates V1/V2
+        # with their rated flow. Previously the valves array was parsed and discarded.
+        ("valve_configs",  "rated_liters_per_min", "REAL"),
         # v3.43 — when the ERP last read this session for reconciliation. NULL = never, which
         # is the honest value for every row that predates this and for every new session.
         ("sessions",       "last_reconciled_at", "DATETIME"),

@@ -40,14 +40,19 @@ export function useWebSocket(
           if (!nfcPending) break
           const nfcUser = (msg.data.nfc_user_id as string | null) ?? null
           const sock = (msg.data.socket_id as number | null) ?? null
+          const sessionType = ((msg.data.type as string) === 'water' ? 'water' : 'electricity')
           const userMatches = nfcUser != null && nfcUser === nfcPending.user_id
-          const socketMatches = nfcPending.socketNum == null || sock === nfcPending.socketNum
-          if (userMatches && socketMatches) {
+          const outletMatches = nfcPending.outletNum == null || sock === nfcPending.outletNum
+          // v3.43 — the type is part of the match, because the number is not enough. V1 and Q1
+          // both broadcast socket_id=1, so someone who scanned the water tag would otherwise
+          // adopt an electricity session on socket 1 and watch its kWh as if it were theirs.
+          const typeMatches = sessionType === nfcPending.sessionType
+          if (userMatches && outletMatches && typeMatches) {
             setActiveSession({
               id: msg.data.session_id as number,
               pedestal_id: msg.data.pedestal_id as number,
               socket_id: sock,
-              type: ((msg.data.type as string) === 'water' ? 'water' : 'electricity'),
+              type: sessionType,
               status: 'active',
               started_at: msg.data.started_at as string,
               customer_id: null,

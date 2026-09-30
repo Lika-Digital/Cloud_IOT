@@ -58,14 +58,31 @@ of a session's rows equals its reported figure by construction (`TC-EIV-10`).
 history or analytics view should aggregate interval rows, not session fields — the session field
 is a summary of the ledger, not a second source.
 
-## 5. Six NFC tags per cabinet, not four — **NOT YET BUILT**
+## 5. Six NFC tags per cabinet, not four
 
-**Pending (next item).** A cabinet with 4 sockets and 2 water outlets has **six** tags: one per
+**Landed (v3.43).** A cabinet with 4 sockets and 2 water outlets has **six** tags: one per
 socket, one per water outlet. Water works exactly like electricity — the customer scans the tag
 on the outlet they are about to use.
 
-Today the code supports **four** (`_VALID_SOCKETS = {Q1..Q4}`), `/scan` hardcodes
-`session_type="electricity"`, and the provisioning UI renders a fixed four rows.
+What was there before, and what each cost:
+
+| Was | Consequence |
+|---|---|
+| `_VALID_SOCKETS = {Q1..Q4}` on provision, bulk and delete | the two water tags were **unprovisionable** — 400 at the door |
+| `/scan` hardcoded `session_type="electricity"` | a water scan would have opened an electricity session on socket N |
+| `build_session_payload` assumed electricity throughout | a water session was reported to ERP as outlet `"Q1"` with socket 1's cumulative **electricity** register as its `energy_kwh`, priced at the kWh tariff |
+| mobile `/^Q?(\d)$/` returned null for `V1` | and the websocket adoption check treats null as "matches anything", so the app would have adopted whatever electricity session appeared next under that user |
+
+The last two were unreachable only because water tags could not be provisioned. Enabling the
+model is what made them reachable, which is why they are fixed in the same change.
+
+**`outlet_type` is a stored dimension, not a derived one.** Both inbound name vocabularies
+accept bare digits, so `"1"` cannot distinguish socket 1 from valve 1. A mismatch (`V1`
+declared a socket) is **refused**, not corrected — correcting it hides which half was wrong.
+
+**The numeric collision is load-bearing.** A water session on V1 and an electricity session on
+Q1 are both `socket_id=1`, separated only by `Session.type`. Everything that looks up a session
+by outlet must filter on the type, and the mobile adoption check now matches on it too.
 
 **For the spec:**
 - **Attribution is by scanned tag, never by berth.** The dashboard is organised by berth for
@@ -73,8 +90,25 @@ Today the code supports **four** (`_VALID_SOCKETS = {Q1..Q4}`), `/scan` hardcode
   and corrected once in this project.
 - A shared valve is therefore a **scheduling** constraint, not an attribution problem — and the
   "(shared with berth N)" label is a monitoring clarification, not a billing caveat.
-- The provisioning UI should be driven by `opta/config/hardware`, which enumerates the
-  cabinet's actual outlets (see item 7).
+- `GET /api/nfc/outlets/{cabinet}` is the outlet list. It carries `reported: false` when the
+  cabinet has never published its hardware config and the server fell back to the canonical
+  six. **The UI must surface that**, because "never heard from this cabinet" and "this cabinet
+  has no water outlets" are different situations that six identical rows cannot tell apart.
+- **Valves have no state badge.** The firmware publishes no per-valve equivalent of a socket's
+  status, so the provisioning table renders a dash with a tooltip rather than a green "idle"
+  that no signal supports. Any water row in UI v2 faces the same absence.
+- The session payload now carries `session_type`, and exactly one of `energy_kwh` /
+  `water_liters` — the other is **`None`, not `0.0`**. Same rule as item 3.
+
+## 5a. The QR path is still electricity-only, and that is now a question
+
+**Unchanged, deliberately.** `routers/mobile.py` keeps its own `_VALID_SOCKETS = {Q1..Q4}`, with
+the comment "water valves are out of scope for mobile monitoring per v3.6 spec". That was a
+decision, not an oversight — but it was taken before the six-tag model, and it means **a water
+outlet can carry an NFC tag but cannot carry a printed QR code.**
+
+**For the spec:** a numbered question. In QR mode a cabinet has four reachable outlets and in
+NFC mode six, which is a difference staff and customers both see.
 
 ## 6. **DECIDED** — UI v2 is written against `opta/*`
 

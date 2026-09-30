@@ -2616,12 +2616,86 @@ def _recover_truncated_hwconfig(payload: str) -> tuple[dict, int] | None:
         return None
 
 
+def _apply_valve_hw_config(db, pedestal_id: int, valves) -> list[dict]:
+    """Persist the `valves` array from opta/config/hardware. Returns the applied rows.
+
+    Shape per docs/firmware_requirements.md and consistent with the MAR_KRK_ORM_01
+    capture (firmware 3.1.0): `{"valveId": "V1", "ratedLitersPerMin": 20}`.
+
+    An entry this function cannot read is LOGGED, not skipped quietly. The requirements
+    document is what we asked the firmware for, not proof of what it sends — the same
+    reasoning that put `WTR-1` in an allowlist for six months on the strength of a
+    docstring. If the real key is spelled differently, this says so on the first message
+    instead of leaving the valves silently unprovisionable.
+    """
+    from ..models.valve_config import ValveConfig
+
+    if not isinstance(valves, list):
+        logger.warning("[HwConfig] valves field is not a list (%s); ignoring",
+                       type(valves).__name__)
+        return []
+
+    applied: list[dict] = []
+    for entry in valves:
+        if not isinstance(entry, dict):
+            logger.warning("[HwConfig] valve entry is not an object: %r", entry)
+            continue
+        name = entry.get("valveId")
+        if not name:
+            logger.warning(
+                "[HwConfig] valve entry has no valveId — keys present: %s. Expected the "
+                "documented shape {valveId, ratedLitersPerMin}; if the firmware spells it "
+                "differently the valves cannot be provisioned until this is reconciled.",
+                sorted(entry.keys()),
+            )
+            continue
+        try:
+            valve_id = _water_name_to_id(name)
+        except UnknownOutletName:
+            logger.warning(
+                "[HwConfig] cabinet reports a valve named %r, which is not an outlet this "
+                "system recognises. Real firmware uses V1/V2. Not stored.", name,
+            )
+            continue
+
+        cfg = db.query(ValveConfig).filter(
+            ValveConfig.pedestal_id == pedestal_id,
+            ValveConfig.valve_id == valve_id,
+        ).first()
+        if cfg is None:
+            # auto_activate defaults True for valves (v3.9) — the hardware is
+            # normally-closed, so a created row must not change behaviour.
+            cfg = ValveConfig(pedestal_id=pedestal_id, valve_id=valve_id, auto_activate=True)
+            db.add(cfg)
+            db.flush()
+
+        # Same no-overwrite-with-null rule as the sockets (D12): an explicit null IS a
+        # write ("the firmware says unknown now"); only an absent key is preserved.
+        if "ratedLitersPerMin" in entry:
+            try:
+                raw = entry["ratedLitersPerMin"]
+                cfg.rated_liters_per_min = float(raw) if raw is not None else None
+            except (TypeError, ValueError):
+                logger.warning("[HwConfig] valve %s ratedLitersPerMin is not a number: %r",
+                               name, entry.get("ratedLitersPerMin"))
+
+        applied.append({
+            "valve_id": valve_id,
+            "valve_name": name,
+            "rated_liters_per_min": cfg.rated_liters_per_min,
+        })
+
+    return applied
+
+
 async def _handle_opta_hardware_config(payload: str) -> None:
     """v3.11 — opta/config/hardware
 
     One-shot per cabinet: lists meter type, phases, ratedAmps, modbusAddress
-    per socket plus a `valves` array we currently stash but do not yet use
-    (placeholder for a future feature). Same `no-overwrite-with-null` rule
+    per socket plus a `valves` array. v3.43 PERSISTS the valves (it was parsed,
+    broadcast over the websocket and then discarded), because the six-tag NFC model
+    provisions water outlets too and the provisioning UI is driven by this message
+    rather than a hardcoded outlet list. Same `no-overwrite-with-null` rule
     as v3.8 breaker metadata — a missing key in a subsequent message
     preserves the previous value (D12).
     """
@@ -2715,13 +2789,26 @@ async def _handle_opta_hardware_config(payload: str) -> None:
                 "hw_config_received_at": iso_z(cfg.hw_config_received_at),
             })
 
+        # ── Valves (v3.43) ───────────────────────────────────────────────────────────
+        # Note the ABSENT-vs-EMPTY distinction. The firmware's 502-byte truncation severs
+        # the valves array entirely, and the recovery path reconstructs only the sockets —
+        # so on a truncated message the key is missing, and missing must mean "no news",
+        # never "this cabinet has no valves". Treating them the same would let one
+        # truncated publish erase the water half of the cabinet's provisioning.
+        if "valves" in data:
+            applied_valves = _apply_valve_hw_config(db, pedestal_id, data.get("valves"))
+        else:
+            applied_valves = None
+
         db.commit()
     finally:
         db.close()
 
     logger.info(
-        "[HwConfig] cabinet=%s pedestal=%d sockets=%d firmware=%s",
-        cabinet_id, pedestal_id, len(applied_sockets), data.get("firmwareVersion", "?"),
+        "[HwConfig] cabinet=%s pedestal=%d sockets=%d valves=%s firmware=%s",
+        cabinet_id, pedestal_id, len(applied_sockets),
+        len(applied_valves) if applied_valves is not None else "absent",
+        data.get("firmwareVersion", "?"),
     )
 
     await ws_manager.broadcast({
@@ -2731,7 +2818,11 @@ async def _handle_opta_hardware_config(payload: str) -> None:
             "cabinet_id": cabinet_id,
             "firmware_version": data.get("firmwareVersion"),
             "sockets": applied_sockets,
-            "valves": data.get("valves", []),
+            # v3.43 — the PERSISTED valve rows rather than the raw payload echo, so the
+            # websocket and the database cannot disagree about what the cabinet has. On a
+            # truncated message the key was absent, and the event says so with [] plus the
+            # log line above — it does not invent an empty cabinet.
+            "valves": applied_valves if applied_valves is not None else [],
             "timestamp": now_iso(),
         },
     })

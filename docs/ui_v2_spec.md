@@ -15,63 +15,13 @@ overruled, so a correction costs one line from you rather than a conversation.
 
 ---
 
-# 1. BLOCKING — four decisions, none of which I can make
+# 1. BLOCKING — two decisions, both awaiting facts only you have
 
-These are business rules or they change what a customer is charged. Everything else in this
-document proceeds without you.
+**Resolved 2026-10-01:** the original BLOCK-1 (water to the ERP) and BLOCK-2 (unmeasurable
+invoices) are answered and recorded in §1.3 and §1.4. The two below are renumbered and
+neither blocks the build — they block the first wizard run, and one field in CORE.
 
-### BLOCK-1 · Water now reaches the ERP. myMarina must be told before a water tag goes live.
-
-**What I found and fixed (v3.43, commit `4a203b0`):** all three ERP webhook call sites were
-guarded by `if not is_water:`. A water session was **never reported**. In MODE 1 the ERP bills,
-so a customer could draw 300 litres against a tag they scanned and myMarina would never learn
-the session existed — unbilled water.
-
-I removed the guard, because leaving it is a revenue hole and the six-tag model's whole premise
-is that water bills like electricity.
-
-**What I need from you:** myMarina now receives `session_activated` / `telemetry` /
-`session_ended` events with `session_type: "water"` and a `water_liters` figure, on a channel
-that has only ever carried electricity. **Someone has to tell them, and they may need to ship
-a change.** Until they confirm, provisioning a water tag at a MODE 1 site produces events their
-integration may reject or mis-post.
-
-| | |
-|---|---|
-| **If you say "hold"** | I add a `ERP_WATER_EVENTS_ENABLED` flag, default **false**, so the guard returns under a name that says what it is instead of looking like a tidy-up. One line, and the structural test (`TC-SIX-16b`) is amended to permit exactly that flag and nothing else. |
-| **If you say "go"** | nothing changes; the sequencing note goes in the deployment runbook. |
-
-### BLOCK-2 · An invoice for an unmeasurable session is currently written as €0.00
-
-**Not fixed, because the right answer is commercial.** `invoice_service.py:29-30`:
-
-```python
-energy_kwh  = session.energy_kwh  or 0.0
-water_liters = session.water_liters or 0.0
-```
-
-`None` means **we could not measure it** (`consumption_source == "unknown"`). `or 0.0` turns
-that into a measured zero, and the invoice is written for €0.00 with nothing recording that the
-figure was never known. That is the exact collapse you refused to allow in the ledger —
-"a financial record that contradicts itself is not a documented limitation, it is a defect we
-would be choosing to create" — surviving in the one place that produces the actual charge.
-
-Today it is rare and favours the customer. It is also silent, so nobody follows it up.
-
-**Four options. I recommend (b).**
-
-| | Behaviour |
-|---|---|
-| a | Keep €0.00. Cheapest; a customer who used power pays nothing and nobody notices. |
-| **b (recommended)** | **Write no invoice. Flag the session for manual review**, visible in the marina alarm list as "Consumption could not be measured — needs review". The charge becomes a human decision, which is what it is. |
-| c | Invoice an estimate from the integrated figure, clearly labelled "estimated". Defensible, but re-admits the method the register work exists to retire. |
-| d | Refuse to complete the session until a register reads. Not viable — the customer has already unplugged. |
-
-**If I am wrong:** (a) is one line; (c) reuses the comparison figure already stored alongside
-the register delta, so it is also small. Either way the UI needs no change beyond one alarm
-sentence, which is why this does not block anything else.
-
-### BLOCK-3 · Which berths share which valve at Krk, and how many berths per pedestal in practice
+### BLOCK-1 · Which berths share which valve at Krk, and how many berths per pedestal
 
 You have decided the model: **1–4 berths configurable, a berth maps to exactly one socket, a
 valve may be shared.** I am building for that and this does not block the spec.
@@ -84,7 +34,7 @@ L1 row loses a line of text.
 **If I am wrong about the shape:** I built for the shared case because it is the one that
 constrains; the single-berth case is a strict subset and renders correctly with no change.
 
-### BLOCK-4 · May marina staff see the customer's name on the dashboard?
+### BLOCK-2 · May marina staff see the customer's name on the dashboard?
 
 A marina `monitor` can already read `/api/pedestals/{id}/usage/history`, which returns
 `customer_name` and `nfc_user_id` (`usage_report_service.py:128-140`) — so the answer today is
@@ -100,6 +50,78 @@ a wall-mounted dashboard is a privacy exposure with no operational payoff.
 **If I am wrong:** add `customer_name` to CORE and one line on the berth detail header. Trivial
 either way — but it must be a decision, not a leak, and the `usage/history` docstring gets
 corrected to match whichever you choose.
+
+---
+
+## 1.3 DECIDED (by you, 2026-10-01) — water reporting is a toggle on the API configuration page
+
+Both myMarina and MarinaMaster can receive water sessions, so the guard removal stands and
+water is reported by default. **The on/off control is a UI setting, not an `.env` flag.**
+
+**WHY it belongs there rather than in config:** whoever integrates a site is sitting in front
+of the API configuration screen when they discover whether that ERP wants water events. An
+`.env` setting means a shell session, a service restart, and a decision recorded nowhere a
+later integrator will look. The screen already holds exactly this class of per-deployment
+choice — which endpoints are allowed, which events are pushed.
+
+**Spec — a fifth card on `/api-gateway`:**
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Card 5 — What this ERP receives                         │
+│                                                          │
+│  Electricity sessions      [●━━] on    (always on)       │
+│  Water sessions            [●━━] on                      │
+│                                                          │
+│  Water outlets report litres drawn against the tag the    │
+│  customer scanned, exactly as sockets report kWh. Turn    │
+│  this off only if this ERP cannot accept water sessions.  │
+│                                                          │
+│  Last water session sent:  2026-10-01 14:22               │
+└──────────────────────────────────────────────────────────┘
+```
+
+| | |
+|---|---|
+| **Storage** | `external_api_config.report_water_sessions INTEGER DEFAULT 1` — single-row table, ID always 1, same as every other setting on that screen. Default **1**, since both ERPs support it. |
+| **Endpoint** | the existing `PUT /api/admin/ext-api/config`. No new route. |
+| **Enforced at** | the three `erp_webhook` call sites in `mqtt_handlers.py`, via one predicate in `erp_webhook.py` so there is one place to read rather than three to keep in step. |
+| **Auth** | `require_api_config`, matching the rest of the page. |
+
+**One correction to the instruction, stated rather than silently applied:** you said "admin
+only, like everything else on that screen". **The screen is not admin-only today** — it is
+`require_api_config`, which admits `admin` **and** `monitor_control_api`
+(`auth/dependencies.py:18-22`). I have specified the toggle to match the page as it is, because
+one control on a screen with a different rule from its neighbours is how the next person
+misreads the whole screen. **If you meant the page should be admin-only**, say so and it
+becomes one change to `require_api_config`'s role set — which tightens five existing
+endpoints, not just this toggle, and is therefore your call rather than a detail of this card.
+
+**Electricity is shown but not switchable.** Turning off electricity reporting would silently
+stop the thing the integration exists for. If a site genuinely needs that, it has no ERP and
+the webhook URL is simply unset.
+
+**DECIDED — the toggle gates the webhook, not the recording.** Water sessions, registers and
+ledger rows are written regardless. Switching it off stops *reporting*, never *measuring*: a
+site that flips it on six months later must find the history intact, and consumption is also
+how the marina answers "what did berth 3 use".
+**IF I AM WRONG:** nothing else in the system would be simplified by not recording, so I would
+argue this one.
+
+**TC-SIX-16b amended:** the structural test that forbids a session-type guard on an ERP webhook
+call now permits exactly this named predicate and nothing else, so the toggle cannot be
+mistaken for the defect it replaces — and the defect cannot come back wearing its clothes.
+
+## 1.4 CLOSED (by you, 2026-10-01) — we do not issue invoices
+
+BLOCK-2 asked how to invoice a session whose consumption could not be measured. **The question
+does not arise: the pedestal reports consumption and the ERP bills.** `invoice_service` is not
+on a live path.
+
+**Action taken, and deliberately no more than this:** the `or 0.0` lines carry a comment saying
+they are dead code on an unused path rather than a tolerated defect, so the next person to read
+them starts from the right place instead of re-deriving the question. If MODE 2 ever makes us
+the biller, that comment is where the work begins.
 
 ---
 
@@ -227,7 +249,7 @@ entry to be added rather than letting a blank through.
 | Rank | `status_code` | `status` | `status_sentence` | Why it must exist |
 |---|---|---|---|---|
 | 2.5 | `outlet_silent` | unknown | **"This outlet has not reported recently"** | A valve's stored state expires at 60 s (§4.6). The cabinet can be reachable while one outlet is stale. Without this the row would show `idle` for a valve nobody has heard from — the precise defect §4.6 fixed one layer down. |
-| 7.5 | `measurement_missing` | attention | **"Consumption could not be measured — needs review"** | `consumption_source == "unknown"` on a session at this berth. Required by **BLOCK-2(b)**. Omit if you choose (a). |
+| 7.5 | `measurement_missing` | attention | **"Consumption could not be measured — needs review"** | `consumption_source == "unknown"` on a session at this berth. **Re-anchored 2026-10-01:** its original justification was the invoicing question, which is closed (§1.4) — but it stands on its own and is *more* necessary without an invoice step. We report the figure to the ERP and the ERP bills it; an `unknown` leaves the ERP with nothing to charge and nobody on our side aware. This sentence is the only thing that tells a human it happened. |
 
 **DECIDED — rank 1 and 2 are `unknown`, not `attention`.**
 **WHY:** "needs attention" means *go and do something about this berth*. A pedestal with no
@@ -629,7 +651,8 @@ exists.
 | `/berths` (`BerthOccupancy`) | **merged** into L1 + berth detail | berths *are* the dashboard now |
 | `/billing`, `/users`, `/contracts` | **kept, admin** | commercial, not marina monitoring |
 | `/system-health` | **kept, admin** | plus the alarm list gets a marina-scoped sibling |
-| `/api-gateway`, `/settings` | **kept, admin** | configuration |
+| `/api-gateway` | **kept**, plus one new card: "What this ERP receives" (§1.3) | the water-reporting toggle is a per-deployment integration choice, which is what this screen is for |
+| `/settings` | **kept, admin** | configuration |
 | `SocketQrGrid`, QR endpoints, QR landing | **not in UI v2. Dormant, not removed.** | decision of 2026-09-30 |
 | `PedestalControlCenter` (1 468 lines, 27 `useState`) | **not reused.** Stays for admin; the marina profile does not touch it | the audit's structural risk. Reusing it would import the whole admin surface into the simple profile |
 
@@ -710,6 +733,7 @@ exits 0 when the backend is not on `:8000`, and it did exactly that on the last 
 | 7 | L2 alarms + marina-scoped endpoint | alarm list visible to the marina at last |
 | 8 | L2 guard screen | guard gets its marina face |
 | 9 | Analytics demoted to L3, nav reduced to 4 | the simplicity counts met |
+| 9b | **Water-reporting toggle** — `report_water_sessions` column, one predicate in `erp_webhook`, Card 5 on `/api-gateway`, `TC-SIX-16b` amended to permit that named predicate and nothing else | per-site control over what the ERP receives, out of `.env` and onto a screen. Independent of the marina profile; can land at any point |
 | 10 | **One deployment runbook: guard + UI together**, acceptance measured on the NUC | numbers before the merge to `main`, not after |
 
 Step 1 before step 4 matters: with CORE answerable by `curl`, L1 is a rendering job against a
@@ -724,7 +748,7 @@ Found during the foundation work. **Yours to prioritise; none of it is in the bu
 | | Item | Why deferred |
 |---|---|---|
 | D1 | **ERP key rotation.** A 10-year `external_api` JWT, and the ERP `X-API-Key` is compiled into the mobile bundle (`EXPO_PUBLIC_ERP_API_KEY`) so it must be assumed known. Procedure written (`docs/erp_key_rotation.md`); precondition is that no shipped client depends on it. | sequenced behind ERP taking over `/scan` |
-| D2 | **`usage/history` docstring says admin-only; the code is `require_any_role`** and it returns `customer_name` and `nfc_user_id`. Doc/code drift of the same shape as the `require_control` finding. | resolved by **BLOCK-4** either way |
+| D2 | **`usage/history` docstring says admin-only; the code is `require_any_role`** and it returns `customer_name` and `nfc_user_id`. Doc/code drift of the same shape as the `require_control` finding. | resolved by **BLOCK-2** (§1, customer names) either way |
 | D3 | **The gateway self-proxy mints a real admin JWT** (5 min, first active admin's id and email) and `X-Ext-Api-Caller` is a provenance hint, not a boundary. Documented as such; worth a synthetic principal instead of a real user's identity. | works correctly; the objection is to the blast radius if the secret leaks |
 | D4 | **NFC is absent from the API catalog entirely**, so `/api/ext/nfc/...` always 403s. The ERP reaches NFC only on the direct `X-API-Key` channel. Intentional, undocumented. | now documented here; no change needed |
 | D5 | **`_make_internal_admin_jwt` is duplicated** byte-for-byte in `external_api_gateway.py` and `external_api_admin.py` | two copies of a token minter is one too many |
@@ -733,7 +757,7 @@ Found during the foundation work. **Yours to prioritise; none of it is in the bu
 | D8 | **Comm-loss watchdog misses cabinets already offline at backend restart**; stale sessions from that window need manual SQL | known since v3.39 |
 | D9 | **Nothing enforces that the git hooks are installed** (`core.hooksPath` can be unset) | accepted knowingly |
 | D10 | **Open firmware questions**: packet timestamping (the `millis()` rollover that silences a cabinet at 24.85 days), per-valve fault in the status topic, `config/hardware` fitting in one publish | a list for when a firmware conversation opens, not a request |
-| D11 | **Mobile app release** carrying the water-NFC fixes. Mode 2 is blocked on it; mode 1 is not | sequenced with BLOCK-1 |
+| D11 | **Mobile app release** carrying the water-NFC fixes. Mode 2 is blocked on it; mode 1 is not | sequenced with the water toggle (§1.3) |
 | D12 | **`PedestalControlCenter` is 1 468 lines with 27 `useState`** | the admin profile keeps it; the marina profile does not touch it |
 | **D13** | **The gate's eslint stage has never run, and could never have run.** eslint is not a devDependency of `frontend/` — it appears in the `lint` npm script and nowhere else — and there is no eslint config file. The stage took its "not found" branch on every invocation since it was written, silently until 2026-09-30, while the gate banner advertised eslint as part of the full gate. **Found 2026-10-01**; the gate now states the truth and the banner no longer claims it. Adopting it means installing eslint plus the TypeScript plugins, writing a config, and fixing whatever it finds on a codebase that has never been linted — **volume unknown and deliberately not measured**, because a count taken now would set an expectation before you have decided whether to adopt it. The colour-class rule that §5.1 and §9 depend on is specified as a **test** (`TC-UIR-01`, a source scan), not a lint rule, precisely so it does not inherit this. |
 

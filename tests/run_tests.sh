@@ -38,6 +38,18 @@ GATE_LEVEL="${GATE_LEVEL:-fast}"
 SEMGREP_TIMEOUT_S="${SEMGREP_TIMEOUT_S:-180}"
 PIP_AUDIT_TIMEOUT_S="${PIP_AUDIT_TIMEOUT_S:-90}"
 SKIPPED_STAGES=()
+# v3.43/2026-10-01 — WHY THIS EXISTS.
+#
+# Three times now a gate failure has been read through `tail -N` and the diagnosis lost,
+# because the failing test name sits thousands of lines above the final verdict. Twice the
+# result was reporting work as pushed when it had not landed. Engineering note 3 says do
+# not pipe a failure through something that discards it — which is a rule to REMEMBER, and
+# remembering it has now failed three times.
+#
+# So the fix is mechanical instead: every failing stage appends its reason here, and the
+# summary is printed as the LAST thing the script emits. `tail -3` now shows the cause.
+# Truncation becomes safe rather than forbidden.
+FAILED_STAGES=()
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -119,6 +131,28 @@ if [ $PYTEST_EXIT -eq 0 ]; then
     echo -e "${GREEN}[✔] pytest passed${NC}"
 else
     echo -e "${RED}[✘] pytest FAILED — fix before committing${NC}"
+    # Capture WHY, for the summary printed at the very end of this script.
+    #
+    # The verbose log writes the verdict at the END of the line:
+    #     tests/x.py::test_y FAILED [ 42%]
+    # There is no short-summary section to read, so anchoring on a line start finds
+    # nothing. Tested by deliberately failing two tests and reading `tail -10`.
+    #
+    # `grep -c` gets its own assignment with a separate fallback: it prints 0 AND exits
+    # non-zero when nothing matches, so a trailing `|| echo` would append a second line
+    # to the value instead of replacing it.
+    _nfail=$(grep -cE "(FAILED|ERROR)[[:space:]]+\[" "$PYTEST_LOG" 2>/dev/null)
+    [ -n "$_nfail" ] || _nfail=0
+    FAILED_STAGES+=("pytest: ${_nfail} test(s) failed")
+    _FAILING_LIST="${LOG_DIR}/_failing.txt"
+    grep -E "(FAILED|ERROR)[[:space:]]+\[" "$PYTEST_LOG" 2>/dev/null > "$_FAILING_LIST" || true
+    _shown=0
+    while IFS= read -r _l; do
+        [ "$_shown" -ge 5 ] && break
+        _name=${_l%%[[:space:]]FAILED*}
+        _name=${_name%%[[:space:]]ERROR*}
+        [ -n "$_name" ] && FAILED_STAGES+=("    $_name") && _shown=$((_shown + 1))
+    done < "$_FAILING_LIST"
     OVERALL_EXIT=1
 fi
 
@@ -187,6 +221,7 @@ PYEOF
         echo "$BANDIT_RESULTS" | grep "^ISSUE=" | sed 's/^ISSUE=/  ✘ /'
         echo ""
         echo -e "${RED}[✘] Bandit found ${HIGH_COUNT} high-severity issue(s) — fix before committing${NC}"
+        FAILED_STAGES+=("bandit: ${HIGH_COUNT} high-severity issue(s)")
         echo -e "    Full report: ${BANDIT_LOG}"
         BANDIT_EXIT=1
         OVERALL_EXIT=1
@@ -269,6 +304,7 @@ PYEOF
         echo "$SEMGREP_RESULTS" | grep "^ISSUE=" | sed 's/^ISSUE=/  ✘ /'
         echo ""
         echo -e "${RED}[✘] Semgrep found ${ERR_COUNT} error(s) — fix before committing${NC}"
+        FAILED_STAGES+=("semgrep: ${ERR_COUNT} error-level finding(s)")
         echo -e "    Full report: ${SEMGREP_LOG}"
         SEMGREP_EXIT=1
         OVERALL_EXIT=1
@@ -355,6 +391,7 @@ PYEOF
         echo "$ESLINT_RESULTS" | grep "^ISSUE=" | sed 's/^ISSUE=/  ✘ /'
         echo ""
         echo -e "${RED}[✘] ESLint found ${ERR_COUNT} error(s) — fix before committing${NC}"
+        FAILED_STAGES+=("eslint: ${ERR_COUNT} error(s)")
         echo -e "    Full report: ${ESLINT_LOG}"
         ESLINT_EXIT=1
         OVERALL_EXIT=1
@@ -406,6 +443,7 @@ elif [ -f "mobile/node_modules/typescript/bin/tsc" ]; then
     if [ $MOBILE_TSC_EXIT -ne 0 ]; then
         MOBILE_ERRS=$(grep -c "error TS" "$MOBILE_TSC_LOG" || true)
         echo -e "${RED}[X] mobile tsc: ${MOBILE_ERRS} error(s)${NC}"
+        FAILED_STAGES+=("mobile tsc: type error(s)")
         grep "error TS" "$MOBILE_TSC_LOG" | head -20
         echo -e "    Full report: ${MOBILE_TSC_LOG}"
         OVERALL_EXIT=1
@@ -435,6 +473,7 @@ if python "$GAP_DIR/gap_fe_be_session_schema.py" > /tmp/gap1.log 2>&1; then
     echo -e "  ${GREEN}[✔] GAP-1 passed${NC}"
 else
     echo -e "  ${RED}[✘] GAP-1 FAILED — schema mismatch detected${NC}"
+    FAILED_STAGES+=("GAP-1: FE/BE schema mismatch")
     cat /tmp/gap1.log
     OVERALL_EXIT=1
 fi
@@ -538,6 +577,7 @@ if [ $GAP4_EXIT -eq 0 ]; then
     echo -e "  ${GREEN}[✔] GAP-4 passed — migration is idempotent${NC}"
 else
     echo -e "  ${RED}[✘] GAP-4 FAILED — migration crashes on second run${NC}"
+    FAILED_STAGES+=("GAP-4: migration not idempotent")
     cat /tmp/gap4.log
     OVERALL_EXIT=1
 fi
@@ -558,5 +598,20 @@ else
     echo -e "${RED}${BOLD}✗ One or more checks FAILED — fix errors before committing.${NC}"
 fi
 echo ""
+
+# ─── WHY THIS IS LAST ────────────────────────────────────────────────────────
+# So that reading the output through `tail` cannot hide the cause. Everything
+# above may be thousands of lines; this is the final thing printed, and it names
+# the failing stage and up to five failing tests. See FAILED_STAGES at the top.
+if [ $OVERALL_EXIT -ne 0 ]; then
+    echo "=============== WHY IT FAILED ==============="
+    if [ ${#FAILED_STAGES[@]} -gt 0 ]; then
+        for f in "${FAILED_STAGES[@]}"; do echo "$f"; done
+    else
+        echo "a stage failed without registering a reason - see the full output above"
+    fi
+    echo "Full logs: ${LOG_DIR}"
+    echo "============================================="
+fi
 
 exit $OVERALL_EXIT

@@ -27,6 +27,29 @@ async def create_invoice_for_session(
     kwh_price = billing.kwh_price_eur if billing else 0.30
     liter_price = billing.liter_price_eur if billing else 0.015
 
+    # ── DEAD CODE ON AN UNUSED PATH (noted 2026-10-01) ──────────────────────────────────
+    #
+    # `or 0.0` collapses None into zero, and None means "we could not measure it"
+    # (consumption_source == "unknown"), not "the meter read zero". Writing a charge of
+    # EUR 0.00 for an unmeasurable session would be exactly the zero/unknown collapse that
+    # the register work was built to prevent — in the one place that produces an actual
+    # charge.
+    #
+    # It is NOT a defect we tolerated. THE PEDESTAL DOES NOT ISSUE INVOICES. It reports
+    # consumption and the ERP bills; this module is not on a live path, which is why the
+    # line was left exactly as it is rather than spending effort on a question that does
+    # not arise.
+    #
+    # If MODE 2 ever makes us the biller, START HERE. The decision needed is commercial,
+    # not technical, and there were four candidate answers:
+    #   (a) keep EUR 0.00 — the customer pays nothing and nobody notices;
+    #   (b) write no invoice and flag the session for review — recommended, because the
+    #       charge is a human decision at that point;
+    #   (c) invoice the integration-derived comparison figure, labelled "estimated" — it is
+    #       already stored alongside the register delta for exactly this kind of question;
+    #   (d) refuse to complete the session — not viable, the customer has already unplugged.
+    #
+    # See docs/ui_v2_spec.md §1.4 and docs/engineering_notes.md rule 8.
     energy_kwh = session.energy_kwh or 0.0
     water_liters = session.water_liters or 0.0
 

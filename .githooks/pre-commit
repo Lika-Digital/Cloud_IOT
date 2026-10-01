@@ -12,8 +12,9 @@ EXIT_CODE=$?
 if [ $EXIT_CODE -ne 0 ]; then
     echo ""
     echo "❌  Commit aborted — the fast gate failed."
-    echo "    Fix it and commit again. The full gate (semgrep, pip-audit, eslint,"
-    echo "    Playwright) runs on push."
+    echo "    The reason is in the WHY IT FAILED block above — it is printed last"
+    echo "    precisely so reading this output through 'tail' cannot hide it."
+    echo "    The full gate (semgrep, pip-audit, mobile tsc, Playwright) runs on push."
     echo ""
     exit 1
 fi

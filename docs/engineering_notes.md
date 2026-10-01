@@ -59,13 +59,17 @@ was four endpoints nobody had thought about, and per-endpoint assertions cannot 
 
 ## 3. Never pipe a failure you need to see through something that discards it
 
-**Twice, the same mistake in different clothes.**
+**Three times, the same mistake in different clothes.**
 
 - A test's failure message built the worker log with an **f-string argument**, evaluated before
   the wait began — so it always printed an empty log, and three runs were diagnosed blind.
 - A commit was piped through `tail -4`, which cut off *"Commit aborted — tests must pass"*, and
   `tail`'s own exit 0 masked the non-zero status. The commit was reported as running when it had
   already failed.
+- **2026-10-01, again:** a commit piped through `tail -3`. A guard smoke test had flaked under
+  full-suite load; the failing test name sat ~800 lines above the verdict, so all that survived
+  was *"Fix it and commit again"*. The work was reported as pushed when the commit had not
+  landed.
 
 > **Read the evidence at the moment of failure, through something that preserves it.** A lazily
 > evaluated callable, not an eager string. A captured file, not a truncating pipe.
@@ -74,7 +78,27 @@ was four endpoints nobody had thought about, and per-endpoint assertions cannot 
 2>&1; echo $?` rather than `cmd | tail`. In shell pipelines, `PIPESTATUS[0]` — the last command's
 status is not the one you care about.
 
-**Enforced by:** nothing automatic. This one is discipline.
+**Enforced by — MECHANICALLY, from 2026-10-01.** Three occurrences is enough to stop relying on
+remembering. The rule was "do not truncate"; the fix makes **truncation safe instead**.
+
+`tests/run_tests.sh` now collects a one-line reason from every failing stage into
+`FAILED_STAGES` and prints a `WHY IT FAILED` block as the **last thing the script emits** —
+naming the stage and up to five failing test ids. Eight stages are hooked. `tail -3` now shows
+the cause rather than the epitaph:
+
+```
+=============== WHY IT FAILED ===============
+pytest: 2 test(s) failed
+    tests/backend/test_zz_truncation_proof.py::test_first_deliberate_failure
+    tests/backend/test_zz_truncation_proof.py::test_second_deliberate_failure
+Full logs: /c/Users/dopse/Cloud_IOT/tests/logs
+=============================================
+```
+
+Verified by deliberately failing two tests and reading `tail -8` — not by inspection. The first
+attempt looked right and printed `pytest: 0` followed by `? test(s) failed`, because `grep -c`
+prints `0` **and** exits non-zero, so a trailing `|| echo "?"` appended a second line instead of
+replacing the value. A mechanism for reading failures has to be tested by failing.
 
 ---
 

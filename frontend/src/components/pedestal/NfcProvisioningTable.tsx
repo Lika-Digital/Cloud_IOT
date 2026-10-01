@@ -17,6 +17,10 @@ const STATUS_STYLE: Record<string, string> = {
   pending: 'bg-yellow-900/40 text-yellow-300 border-yellow-700/50',
   fault: 'bg-red-900/40 text-red-300 border-red-700/50',
   idle: 'bg-gray-800 text-gray-400 border-gray-700',
+  // v3.43 — `unknown` must not look like `idle`. 'The cabinet has not told us' and 'the
+  // outlet is free' lead to different actions, and a customer sent to an outlet we know
+  // nothing about will walk to the far end of the pontoon to find out.
+  unknown: 'bg-gray-900 text-gray-500 border-gray-700 border-dashed',
 }
 
 // v3.43 — the outlet list is no longer a constant in this file.
@@ -78,9 +82,20 @@ export default function NfcProvisioningTable({ cabinetId, pedestalId, isAdmin, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cabinetId])
 
-  /** Live state for an electricity socket. Valves have none — see the render below. */
-  const liveStatus = (outletName: string): string =>
-    computed[`${pedestalId}-${outletName.replace('Q', '')}`] ?? 'idle'
+  /** The state to show for one outlet, from whichever source actually knows.
+   *
+   * Electricity: the live websocket store, because plug-in state changes between refetches
+   * and a stale "idle" on a socket someone just plugged into is the thing operators notice
+   * first. Keyed by socket NUMBER, which is exactly why a valve must not read it — V1 and
+   * Q1 are both 1.
+   *
+   * Water: the server's answer, which already applies the 60 s staleness rule and returns
+   * `unknown` rather than repeating what the valve said before its cabinet went quiet.
+   */
+  const outletStatus = (o: CabinetOutlet): string => {
+    if (o.outlet_type === 'valve') return o.state ?? 'unknown'
+    return computed[`${pedestalId}-${o.outlet_name.replace('Q', '')}`] ?? 'idle'
+  }
 
   const provisionOne = async (o: CabinetOutlet) => {
     const name = o.outlet_name
@@ -155,26 +170,21 @@ export default function NfcProvisioningTable({ cabinetId, pedestalId, isAdmin, o
           {rating && <span className="ml-1.5 text-[10px] font-normal text-gray-500">{rating}</span>}
         </td>
         <td className="py-2 pr-2">
-          {isValve ? (
-            /* A dash, because this table has no valve state to read.
-               NOT because the firmware sends none — it sends `state` and `hw_status` on
-               opta/water/V{n}/status, and v3.43 persists them. The gap is this component's:
-               `socketComputedStates` is the electricity store, keyed by socket number, so
-               `computed['3-1']` would answer for socket 1 when asked about V1 — a plausible
-               wrong answer, which is the dangerous kind. Wiring the valve store in is a UI v2
-               item; until then a dash says "not shown here" and nothing borrows a number that
-               belongs to another outlet. */
-            <span
-              className="text-[11px] text-gray-500"
-              title="Water outlet state is not shown in this table — see the Control Center"
-            >
-              —
-            </span>
-          ) : (
-            <span className={`text-[11px] px-1.5 py-0.5 rounded border ${STATUS_STYLE[liveStatus(name)] ?? STATUS_STYLE.idle}`}>
-              {liveStatus(name)}
-            </span>
-          )}
+          {/* v3.43 — a valve shows its OWN state, from `opta/water/V{n}/status`.
+              The dash that used to be here was a workaround for a bug that no longer
+              exists: the state was published all along but never persisted, so the only
+              thing a reader could reach was `socketComputedStates` — keyed by socket
+              number, so V1 would have been answered with socket 1's plug-in state.
+              Electricity still reads the live websocket store, because plug-in changes
+              must appear without a refetch; a valve's state arrives with the outlet list. */}
+          <span
+            className={`text-[11px] px-1.5 py-0.5 rounded border ${STATUS_STYLE[outletStatus(o)] ?? STATUS_STYLE.idle}`}
+            title={isValve && outletStatus(o) === 'unknown'
+              ? 'The cabinet has not reported this water outlet recently'
+              : undefined}
+          >
+            {outletStatus(o)}
+          </span>
         </td>
         <td className="py-2 pr-2">
           <input

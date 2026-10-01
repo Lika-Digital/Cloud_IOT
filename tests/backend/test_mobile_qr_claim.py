@@ -1,10 +1,21 @@
 """
-Mobile QR-Claim + Per-Session Monitoring — Verification Tests (v3.6)
-====================================================================
+Mobile QR-Claim + Per-Session Monitoring — Verification Tests (v3.6) — DORMANT
+=============================================================================
 
-Covers the new `/api/mobile/` router, the `owner_claimed_at` session column,
-the short-lived `websocket_token`, and the session-scoped WebSocket fan-out
-(`broadcast_to_session`).
+**SKIPPED IN FULL FROM 2026-09-30. QR is not a supported path.**
+
+NFC was chosen as the provisioning and customer-entry mechanism. The QR code, the
+`/api/mobile/qr/*` router, the landing screen and this suite are **dormant, not removed** —
+nothing is deleted, and nothing here is maintained, extended or brought to parity with
+anything. Every test in this module carries the skip reason, so the count in the gate output
+shows how much is dormant rather than hiding it behind a single module-level skip.
+
+If QR is ever revived, this suite is the starting point and everything in it was passing on
+the day it was parked — including the v3.43 six-outlet parity work, which is finished and
+stays. What it does NOT cover is anything added after that date.
+
+Covers the `/api/mobile/` router, the `owner_claimed_at` session column, the short-lived
+`websocket_token`, and the session-scoped WebSocket fan-out (`broadcast_to_session`).
 
 Scope matches the v3.6 spec minus the marina-access test (marina access
 control is intentionally skipped — any authenticated customer may claim any
@@ -41,6 +52,13 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+
+# Marked on the module rather than skipped at import, so every test reports its own skip and
+# the gate output states the count and the reason. A single module-level skip would show one
+# line and let 21 dormant cases look like one.
+pytestmark = pytest.mark.skip(
+    reason="QR is not a supported path, decision of 2026-09-30"
+)
 
 TEST_DB = "sqlite:///./tests/test_pedestal.db"
 _test_engine = create_engine(TEST_DB, connect_args={"check_same_thread": False}, poolclass=StaticPool)

@@ -161,4 +161,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   sendText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  // Referenced by the load-error retry block since it was written; never defined, so the
+  // retry rendered unstyled — invisible against the dark background rather than absent.
+  errorContainer: {
+    marginTop: 40,
+    marginHorizontal: 24,
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#7f1d1d',
+    backgroundColor: '#1f2937',
+  },
+  errorText: { color: '#fca5a5', textAlign: 'center', fontSize: 14 },
 })

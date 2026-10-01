@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Platform, Alert } from 'react-native'
 import { useAuthStore } from '../store/authStore'
-import { useSessionStore } from '../store/sessionStore'
+import { useSessionStore, type IncomingChatMessage } from '../store/sessionStore'
 
 function resolveWsUrl(): string {
   if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location.hostname === 'localhost') {
@@ -13,7 +13,10 @@ function resolveWsUrl(): string {
 const WS_BASE = resolveWsUrl()
 
 export function useWebSocket(
-  onChatMessage?: (msg: { customer_id: number; message: string; direction: string; created_at: string }) => void,
+  // Was an inline type with `direction: string`, which is looser than both the store's
+  // IncomingChatMessage and the API's ChatMessage. Two structurally-similar shapes for one
+  // payload is how the mismatch got in; there is one now.
+  onChatMessage?: (msg: IncomingChatMessage) => void,
 ) {
   const { token } = useAuthStore()
   const wsRef = useRef<WebSocket | null>(null)
@@ -99,10 +102,18 @@ export function useWebSocket(
           break
         }
         case 'chat_message': {
+          // The backend sends one of two values. Narrowed here rather than asserted as
+          // `string`: an unexpected value becomes 'from_operator', which is the safe
+          // default — a message shown as coming from the marina when it did not is a
+          // display error, whereas the reverse would attribute the marina's words to the
+          // customer in their own chat history.
+          const raw = msg.data.direction
+          const direction: IncomingChatMessage['direction'] =
+            raw === 'from_customer' ? 'from_customer' : 'from_operator'
           onChatRef.current?.({
             customer_id: msg.data.customer_id as number,
             message: msg.data.message as string,
-            direction: msg.data.direction as string,
+            direction,
             created_at: msg.data.created_at as string,
           })
           break

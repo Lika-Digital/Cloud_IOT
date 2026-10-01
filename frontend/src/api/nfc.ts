@@ -56,6 +56,18 @@ export interface CabinetOutlet {
   rated_amps: number | null
   // Water only.
   rated_liters_per_min: number | null
+  // v3.43 — the outlet's state, for WATER only.
+  //
+  // Null on an electricity socket, and that is not 'unknown': socket state lives in the
+  // websocket store the UI already subscribes to, because it changes on plug-in and must
+  // not need a refetch. Null means 'read it from the live store'.
+  //
+  // For a valve it is 'idle' | 'active' | 'unknown'. There is deliberately no 'pending':
+  // that means physically connected and awaiting activation, which comes from the socket's
+  // plug-in detection and has no valve analogue in the firmware. 'unknown' means the
+  // cabinet has never described this valve, or last did so more than 60 s ago — a stored
+  // state is only as good as its age.
+  state: 'idle' | 'active' | 'unknown' | null
   nfc_tag_id: string | null
 }
 

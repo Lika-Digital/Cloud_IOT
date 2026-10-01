@@ -13,7 +13,10 @@ export interface ActiveSession {
 export interface IncomingChatMessage {
   customer_id: number
   message: string
-  direction: string
+  // The same union as ChatMessage.direction in src/api/chat.ts. It was `string`, which
+  // is why appending a websocket message to the ChatMessage[] state did not typecheck —
+  // and that error sat unread in the mobile baseline alongside three others.
+  direction: 'from_customer' | 'from_operator'
   created_at: string
 }
 

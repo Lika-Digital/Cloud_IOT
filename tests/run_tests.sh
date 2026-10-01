@@ -50,7 +50,7 @@ YELLOW='\033[1;33m'; RED='\033[0;31m'; GREEN='\033[0;32m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 echo ""
-echo "  Gate level: ${GATE_LEVEL}   (fast = pytest + bandit + gap checks; full adds semgrep, pip-audit, eslint)"
+echo "  Gate level: ${GATE_LEVEL}   (fast = pytest + bandit + gap checks; full adds semgrep, pip-audit, eslint, mobile tsc)"
 echo ""
 echo "╔══════════════════════════════════════════════════════╗"
 echo "║          Cloud_IOT — Automated Test Suite           ║"
@@ -287,7 +287,7 @@ fi
 # STAGE 4 — ESLint (TypeScript / React)
 # ═══════════════════════════════════════════════════════════════════════════════
 echo ""
-echo -e "${CYAN}${BOLD}[4/4] TypeScript lint (eslint)${NC}"
+echo -e "${CYAN}${BOLD}[4/4] TypeScript (eslint + mobile tsc)${NC}"
 echo ""
 
 ESLINT_EXIT=0
@@ -365,8 +365,45 @@ PYEOF
         echo -e "${GREEN}[✔] ESLint passed${NC}"
     fi
 else
-    echo -e "${YELLOW}[!] ESLint not found (frontend deps not installed) — skipping.${NC}"
+    echo -e "${YELLOW}[!] ESLint NOT CHECKED (frontend deps not installed).${NC}"
     echo -e "    Run: cd frontend && npm install"
+    # v3.43 — this branch used to skip silently. An unreported skip is a green
+    # signal with nothing behind it; it now appears in the end-of-run summary.
+    SKIPPED_STAGES+=("eslint (frontend deps not installed - NOT CHECKED)")
+fi
+
+# ─── Mobile TypeScript typecheck (v3.43) ─────────────────────────────────────
+#
+# Added because its absence cost us a screen. The QR landing page imported a path
+# four directory levels up when five were needed, so the module never resolved and
+# the entire flow could not build. `tsc` reported it — nobody ran tsc on this
+# package, and the four unrelated errors already in its baseline meant that even
+# when someone did, the fifth line went unread.
+#
+# The baseline is now ZERO. Any error fails the gate, which is the point: a count
+# nobody acts on hides the next one (docs/engineering_notes.md rule 10).
+if [ "$GATE_LEVEL" != "full" ]; then
+    echo -e "${YELLOW}[~] mobile tsc: not run at gate level 'fast' — runs on push.${NC}"
+    SKIPPED_STAGES+=("mobile tsc (fast gate; runs on push)")
+elif [ -f "mobile/node_modules/typescript/bin/tsc" ]; then
+    echo ""
+    echo "  Mobile TypeScript (tsc --noEmit)..."
+    MOBILE_TSC_LOG="${LOG_DIR}/mobile_tsc_last.log"
+    ( cd mobile && node node_modules/typescript/bin/tsc --noEmit ) > "$MOBILE_TSC_LOG" 2>&1
+    MOBILE_TSC_EXIT=$?
+    if [ $MOBILE_TSC_EXIT -ne 0 ]; then
+        MOBILE_ERRS=$(grep -c "error TS" "$MOBILE_TSC_LOG" || true)
+        echo -e "${RED}[X] mobile tsc: ${MOBILE_ERRS} error(s)${NC}"
+        grep "error TS" "$MOBILE_TSC_LOG" | head -20
+        echo -e "    Full report: ${MOBILE_TSC_LOG}"
+        OVERALL_EXIT=1
+    else
+        echo -e "${GREEN}[✔] mobile tsc passed${NC}"
+    fi
+else
+    echo -e "${YELLOW}[!] mobile tsc NOT CHECKED (mobile deps not installed).${NC}"
+    echo -e "    Run: cd mobile && npm install"
+    SKIPPED_STAGES+=("mobile tsc (mobile deps not installed - NOT CHECKED)")
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════

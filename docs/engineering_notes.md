@@ -207,27 +207,57 @@ four, not the class. The habit is the control.
 
 ---
 
-## 10. A broken typecheck baseline hides the next break
+## 10. An error count nobody acts on hides the next error
 
-**v3.43.** `mobile/app/(app)/mobile/socket/[pedestal_id]/[socket_id].tsx` imported
-`../../../../src/api/mobile` — four levels up from its directory, which resolves to
-`app/src/api/mobile` and does not exist. Five are needed. The module never resolved, so the
-**entire QR landing flow could not build**, and had not for some time.
+**v3.43.** `tsc --noEmit` on the mobile package reported four errors, all known and none
+urgent, so nobody read the output. A fifth arrived —
+`mobile/app/(app)/mobile/socket/[pedestal_id]/[socket_id].tsx` imported
+`../../../../src/api/mobile`, four directory levels up where five were needed, resolving to
+`app/src/api/mobile`, which does not exist. The **entire QR landing flow could not build**,
+and had not for some time.
 
-`tsc --noEmit` reported it. It also reported three unrelated errors in `chat.tsx` and one from
-a package that was in `package.json` but not installed locally. Four expected errors is a
-baseline nobody reads, so the fifth arrived unread.
+The number is not the problem. **Four** is as good as **zero** if someone checks that it is
+still four. What breaks is a count that is merely tolerated: the signal degrades to noise, and
+then the tool is off while still appearing to run. Same shape as rule 4 — a skipped test has
+not verified the claim — one level up: a check whose output is known to be noisy has stopped
+being a check.
 
-This is the same shape as rule 4 — a skipped test has not verified the claim — one level up: a
-check whose output is known to be noisy has stopped being a check.
+> **Every check has a budget of zero.** Either the count is zero, or the expected set is
+> written down and compared. "It always prints a few" is a check that has stopped working.
 
-> **A non-zero baseline must be zero or tracked.** Either fix the known errors, or record the
-> exact expected set so a new one stands out. "It always prints some errors" means the tool is
-> off.
+**Enforced by:** `tests/run_tests.sh` runs `tsc --noEmit` on `mobile/` at the full gate, with
+the baseline brought to zero first — the four were fixed, not waived: a chat `direction` type
+widened to `string`, two styles referenced but never defined, and the import itself. Any error
+now fails the gate. The eslint "deps not installed" branch, which used to skip silently, now
+reports itself in the NOT RUN summary for the same reason.
 
-**Enforced by:** nothing yet. Recorded as a known limitation: the four remaining mobile errors
-are unrelated to this change and are not fixed here. The gate does not run `tsc` on the mobile
-package at all, which is why the count could drift unobserved.
+---
+
+## 11. A claim the owner approved is not thereby true — and is harder to dislodge
+
+**v3.43.** I reported that the firmware publishes no per-valve state. The owner accepted it and
+approved a dash-with-tooltip in the UI on that basis. It was wrong:
+`opta/water/V{n}/status` had carried `state` and `hw_status` all along. The handler broadcast
+both and stored neither, so every later reader fell back to `socket_states` — keyed by outlet
+number alone — and answered a question about V1 with socket 1's plug-in signal. "Cable
+detected" on a tap.
+
+The sign-off is what makes this its own rule. An unexamined wrong fact gets corrected the next
+time someone looks. A wrong fact that has been **stated, reviewed and approved** acquires a
+decision on top of it, and anyone who later sees the contradiction has to argue with the
+decision rather than with the fact. It took writing a code comment asserting the claim before
+it got checked against a capture.
+
+> **An approval transfers a decision, never a fact.** When reporting something as a constraint
+> of the hardware, the world, or another system, cite the evidence in the same sentence — and
+> if the evidence is a docstring or your own earlier message, say so, because that is the case
+> where you are most likely wrong.
+
+Same root as rule 6, one level out: there, documentation became a source of truth about
+hardware it had never been checked against. Here, **a report** did.
+
+**Caught by:** reading the real payload in the handler while writing a comment about it.
+`grep` for the field name would have done it at any point in the preceding six months.
 
 ---
 

@@ -959,3 +959,38 @@ def test_tc_six_15d_never_reported_is_unknown(six_pid):
         db.close()
 
     assert state == "unknown", f"an undescribed valve reported {state!r}"
+
+def test_tc_six_15e_outlets_endpoint_carries_the_valve_state(client, auth_headers, six_pid):
+    """/outlets exposes valve state so the provisioning table stops showing a dash.
+
+    The dash was a workaround for this bug, not a hardware limitation. Also asserts the
+    asymmetry deliberately: an electricity socket's `state` is **null** here, which is not
+    "unknown" — socket state lives in the websocket store the UI already subscribes to,
+    because plug-in changes must appear without a refetch. A stale "idle" on a socket someone
+    just plugged into is the first thing an operator notices.
+    """
+    from app.models.valve_config import ValveConfig
+
+    _clear(six_pid)
+    db = _S()
+    try:
+        vc = db.query(ValveConfig).filter(
+            ValveConfig.pedestal_id == six_pid, ValveConfig.valve_id == 1).first()
+        vc.last_state = "idle"
+        vc.state_updated_at = datetime.utcnow()
+        db.commit()
+    finally:
+        db.close()
+
+    r = client.get(f"/api/nfc/outlets/{CAB}", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    outlets = {o["outlet_name"]: o for o in r.json()["outlets"]}
+
+    assert outlets["V1"]["state"] == "idle", (
+        f"got {outlets['V1']['state']!r}; the table cannot render a state the endpoint does "
+        f"not send, which is why it showed a dash"
+    )
+    assert outlets["Q1"]["state"] is None, (
+        "an electricity socket must send null, not a state: null means 'read the live store'. "
+        "Sending a snapshot here would put a second, slower opinion of socket state on screen"
+    )

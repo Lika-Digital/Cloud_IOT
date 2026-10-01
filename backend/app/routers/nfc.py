@@ -116,6 +116,23 @@ def _socket_display_state(db: DBSession, pedestal_id: int, socket_id: int) -> st
     return _compute_socket_display_state(db, pedestal_id, socket_id, raw_state="", hw_status="")
 
 
+def _valve_state(db: DBSession, pedestal_id: int, valve_id: int) -> str:
+    """The valve's state for display — `idle` / `active` / `unknown`.
+
+    v3.43. `opta/water/V{n}/status` has always carried `state` and `hw_status`; the handler
+    broadcast them and stored nothing, so callers fell back to `socket_states` — which is
+    keyed by outlet number alone and therefore answered with the ELECTRICITY socket of the
+    same number. A valve got "cable detected" on a tap, or "idle" while water ran: a
+    plausible wrong answer, which is the dangerous kind.
+
+    Shares its implementation with the QR path's `_outlet_state_str` on purpose. Two
+    independent opinions about what V1 is doing is how the dashboard and the customer's phone
+    would come to disagree in front of each other.
+    """
+    from .mobile import _outlet_state_str
+    return _outlet_state_str(db, pedestal_id, valve_id, OUTLET_VALVE)
+
+
 # ── Pydantic bodies ───────────────────────────────────────────────────────────
 
 class NfcScanBody(BaseModel):
@@ -244,6 +261,10 @@ def list_cabinet_outlets(cabinet_id: str, db: DBSession = Depends(get_db),
                 "phases": r.phases,
                 "rated_amps": r.rated_amps,
                 "rated_liters_per_min": None,
+                # Electricity state stays with the websocket store the UI already subscribes
+                # to — it changes on plug-in and must not need a refetch. Null here means
+                # "ask the live store", not "unknown".
+                "state": None,
             })
         for r in valve_rows:
             outlets.append({
@@ -254,6 +275,7 @@ def list_cabinet_outlets(cabinet_id: str, db: DBSession = Depends(get_db),
                 "phases": None,
                 "rated_amps": None,
                 "rated_liters_per_min": r.rated_liters_per_min,
+                "state": _valve_state(db, cfg.pedestal_id, r.valve_id),
             })
     else:
         for kind, names in VALID_OUTLETS.items():
@@ -266,6 +288,7 @@ def list_cabinet_outlets(cabinet_id: str, db: DBSession = Depends(get_db),
                     "phases": None,
                     "rated_amps": None,
                     "rated_liters_per_min": None,
+                    "state": ("unknown" if kind == OUTLET_VALVE else None),
                 })
 
     tags = {t.socket_id: t for t in nfc_service.list_tags(db, cabinet_id)}

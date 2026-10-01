@@ -1,5 +1,20 @@
 # Mobile API Contract (v3.6)
 
+> ### ⚠ QR IS DORMANT — decision of 2026-09-30
+>
+> **NFC is the supported provisioning and customer-entry path.** The QR code, the
+> `/api/mobile/qr/*` router, the landing screen and `tests/backend/test_mobile_qr_claim.py`
+> are **dormant, not removed**: nothing is deleted, nothing is maintained, nothing is
+> extended, and the test suite is skipped in full with the reason
+> `"QR is not a supported path, decision of 2026-09-30"`.
+>
+> Anything below describing QR records how it worked on the day it was parked. It is **not a
+> statement about the current system** and must not be treated as current when planning,
+> estimating or answering a question about what the product does. UI v2 contains no QR
+> screens, wizard steps or CORE fields.
+>
+> The v3.43 six-outlet parity work on it is finished and stays. Nothing further is planned.
+
 Authoritative reference for the Expo customer app. The mobile surface is
 **monitoring only** — the app may claim a session and watch it live, but
 never stops it via API.

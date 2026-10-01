@@ -50,7 +50,7 @@ YELLOW='\033[1;33m'; RED='\033[0;31m'; GREEN='\033[0;32m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 echo ""
-echo "  Gate level: ${GATE_LEVEL}   (fast = pytest + bandit + gap checks; full adds semgrep, pip-audit, eslint, mobile tsc)"
+echo "  Gate level: ${GATE_LEVEL}   (fast = pytest + bandit + gap checks; full adds semgrep, pip-audit, mobile tsc)"
 echo ""
 echo "╔══════════════════════════════════════════════════════╗"
 echo "║          Cloud_IOT — Automated Test Suite           ║"
@@ -365,11 +365,23 @@ PYEOF
         echo -e "${GREEN}[✔] ESLint passed${NC}"
     fi
 else
-    echo -e "${YELLOW}[!] ESLint NOT CHECKED (frontend deps not installed).${NC}"
-    echo -e "    Run: cd frontend && npm install"
-    # v3.43 — this branch used to skip silently. An unreported skip is a green
-    # signal with nothing behind it; it now appears in the end-of-run summary.
-    SKIPPED_STAGES+=("eslint (frontend deps not installed - NOT CHECKED)")
+    # v3.43/2026-10-01 — THIS STAGE HAS NEVER RUN, AND COULD NEVER HAVE RUN.
+    #
+    # eslint is not a dependency of the frontend package (it appears in the `lint` npm
+    # script and nowhere else), and there is no eslint config file in frontend/. So this
+    # branch has been taken on every invocation since the gate was written — and until
+    # today it was taken SILENTLY, while the gate banner advertised eslint as part of the
+    # full gate. A stage that cannot run, announced as running, is the exact false green
+    # signal of docs/engineering_notes.md rule 10.
+    #
+    # The message used to say "frontend deps not installed" and point at `npm install`,
+    # which would not have fixed it: the deps ARE installed, eslint was simply never one.
+    # Adopting it properly (install + plugins + config + whatever it finds on a codebase
+    # that has never been linted) is deferred work, listed as D13 in docs/ui_v2_spec.md.
+    echo -e "${YELLOW}[!] ESLint NOT CHECKED - and cannot be.${NC}"
+    echo -e "    eslint is not a devDependency of frontend/ and there is no eslint config."
+    echo -e "    This stage has never run. See D13 in docs/ui_v2_spec.md."
+    SKIPPED_STAGES+=("eslint (NOT A DEPENDENCY - this stage has never run, see D13)")
 fi
 
 # ─── Mobile TypeScript typecheck (v3.43) ─────────────────────────────────────

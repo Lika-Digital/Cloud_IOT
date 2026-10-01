@@ -288,7 +288,7 @@ def test_worker_starts_announces_and_stops_cleanly(cfg: WorkerConfig) -> None:
     assert will_retain is True, "a non-retained will teaches a late subscriber nothing"
 
     worker.stop()                       # exactly what the SIGTERM handler does
-    thread.join(timeout=10)
+    thread.join(timeout=30)
     assert not thread.is_alive(), "the worker did not exit after being asked to stop"
     assert rc == [0], f"expected a clean exit code 0, got {rc}"
     assert client.disconnected, "the worker exited without disconnecting from the broker"
@@ -594,9 +594,19 @@ def test_arm_to_alarm_to_clip_through_the_real_loop(cfg: WorkerConfig) -> None:
         )
     finally:
         worker.stop()
-        thread.join(timeout=30)
+        thread.join(timeout=90)
 
-    assert rc == [0]
+    # 2026-10-01 — timeout raised from 30 s and the liveness assertion added BEFORE the
+    # exit-code check. This flaked once in the full gate: under the load of 980 tests the
+    # worker had not finished within 30 s, so `rc` was still empty and the failure read
+    # `assert [] == [0]` — which says nothing about why. It passes 3/3 in isolation, which
+    # is exactly how a flake earns its place in the suite and then gets ignored.
+    #
+    # Asserting `is_alive` first turns the symptom into the cause.
+    assert not thread.is_alive(), (
+        "the worker did not exit within 90 s of being asked to stop"
+    )
+    assert rc == [0], f"expected a clean exit code 0, got {rc}"
     assert detector.unloaded, "the model was not released on shutdown"
 
 
@@ -629,8 +639,9 @@ def test_arm_without_a_detector_is_refused_not_crashed(cfg: WorkerConfig) -> Non
     assert thread.is_alive(), "a refused arm killed the worker"
 
     worker.stop()
-    thread.join(timeout=10)
-    assert rc == [0], "the worker did not exit cleanly after refusing an arm"
+    thread.join(timeout=30)
+    assert not thread.is_alive(), "the worker did not exit after being asked to stop"
+    assert rc == [0], f"expected a clean exit code 0 after a refused arm, got {rc}"
 
 
 # ─── TC-GSMOKE-07 ────────────────────────────────────────────────────────────
@@ -679,8 +690,9 @@ def test_disarm_releases_the_model_and_the_capture_process(cfg: WorkerConfig) ->
           what=f"ffmpeg pid {ffmpeg_pid} to exit")
 
     worker.stop()
-    thread.join(timeout=20)
-    assert rc == [0]
+    thread.join(timeout=60)
+    assert not thread.is_alive(), "the worker did not exit after being asked to stop"
+    assert rc == [0], f"expected a clean exit code 0, got {rc}"
 
 
 def _pid_alive(pid: int) -> bool:

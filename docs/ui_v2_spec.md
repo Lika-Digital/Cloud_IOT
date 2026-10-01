@@ -365,8 +365,11 @@ are at the top of a phone screen without scrolling, which is the entire point.
 
 **DECIDED — status is icon + word + colour, all three, always.**
 **WHY:** the audit found the compliant cases were compliant by accident. One `<Status>`
-component makes all three props required, and a lint rule denies raw colour classes in
-`pages/marina/**`.
+component makes all three props required.
+**The enforcement is a TEST, not a lint rule** (`TC-UIR-01`): a source scan asserting no raw
+`text-red-*` / `text-green-*` / `bg-*-900` in `pages/marina/**`. The earlier draft said "a lint
+rule", which assumed an eslint that **does not exist** — see D13. A mechanism that depends on a
+stage which has never run is not a mechanism.
 **IF I AM WRONG:** nothing to change — this is the brief.
 
 **DECIDED — shared light and guard stay on the row, labelled in plain words.**
@@ -732,6 +735,8 @@ Found during the foundation work. **Yours to prioritise; none of it is in the bu
 | D10 | **Open firmware questions**: packet timestamping (the `millis()` rollover that silences a cabinet at 24.85 days), per-valve fault in the status topic, `config/hardware` fitting in one publish | a list for when a firmware conversation opens, not a request |
 | D11 | **Mobile app release** carrying the water-NFC fixes. Mode 2 is blocked on it; mode 1 is not | sequenced with BLOCK-1 |
 | D12 | **`PedestalControlCenter` is 1 468 lines with 27 `useState`** | the admin profile keeps it; the marina profile does not touch it |
+| **D13** | **The gate's eslint stage has never run, and could never have run.** eslint is not a devDependency of `frontend/` — it appears in the `lint` npm script and nowhere else — and there is no eslint config file. The stage took its "not found" branch on every invocation since it was written, silently until 2026-09-30, while the gate banner advertised eslint as part of the full gate. **Found 2026-10-01**; the gate now states the truth and the banner no longer claims it. Adopting it means installing eslint plus the TypeScript plugins, writing a config, and fixing whatever it finds on a codebase that has never been linted — **volume unknown and deliberately not measured**, because a count taken now would set an expectation before you have decided whether to adopt it. The colour-class rule that §5.1 and §9 depend on is specified as a **test** (`TC-UIR-01`, a source scan), not a lint rule, precisely so it does not inherit this. |
+
 
 ---
 

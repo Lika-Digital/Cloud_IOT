@@ -1,327 +1,747 @@
-# UI v2 — Monitoring & Control profile, specification
+# UI v2 — Marina Monitoring & Control profile: specification
 
-**Date:** 2026-09-28 · **Status:** for approval. **No UI code written.**
-**Reads with:** `docs/ui_v2_audit.md` (what exists today, with evidence).
+**Date:** 2026-10-01 · **Version:** 2 (supersedes the 2026-09-28 draft) · **Status:** for
+approval in one pass. **No UI code written.**
 
-The audit found that three of the brief's eight rules cannot be satisfied in the frontend at
-all — they need data and decisions that do not exist yet. This document says what to build,
-in what order, and marks every point where the brief needs a **[DECIDE]** from you rather
-than a guess from me.
+**Reads with:** `docs/architecture.md` (how the system works), `docs/ui_v2_audit.md` (what
+exists today, with evidence), `docs/ui_v2_spec_inputs.md` (the foundation deltas, now folded
+into §4 here).
 
-I have not hedged with options where I have a recommendation. Where I recommend something
-that differs from the brief, it is flagged as a refinement and the reasoning is given.
+**QR is absent from this document by decision of 2026-09-30.** No screens, no wizard steps, no
+CORE fields. NFC is the only provisioning and customer-entry path.
+
+Everything below is **DECIDED** unless it is in §1. Each decision states what changes if it is
+overruled, so a correction costs one line from you rather than a conversation.
 
 ---
 
-## 1. What has to exist before any screen can be built
+# 1. BLOCKING — four decisions, none of which I can make
 
-### 1.1 The berth → socket → valve mapping  **[DECIDE 1]**
+These are business rules or they change what a customer is charged. Everything else in this
+document proceeds without you.
 
-Rule 1's row is unbuildable without it (audit §1 Rule 1). Proposal:
+### BLOCK-1 · Water now reaches the ERP. myMarina must be told before a water tag goes live.
 
+**What I found and fixed (v3.43, commit `4a203b0`):** all three ERP webhook call sites were
+guarded by `if not is_water:`. A water session was **never reported**. In MODE 1 the ERP bills,
+so a customer could draw 300 litres against a tag they scanned and myMarina would never learn
+the session existed — unbilled water.
+
+I removed the guard, because leaving it is a revenue hole and the six-tag model's whole premise
+is that water bills like electricity.
+
+**What I need from you:** myMarina now receives `session_activated` / `telemetry` /
+`session_ended` events with `session_type: "water"` and a `water_liters` figure, on a channel
+that has only ever carried electricity. **Someone has to tell them, and they may need to ship
+a change.** Until they confirm, provisioning a water tag at a MODE 1 site produces events their
+integration may reject or mis-post.
+
+| | |
+|---|---|
+| **If you say "hold"** | I add a `ERP_WATER_EVENTS_ENABLED` flag, default **false**, so the guard returns under a name that says what it is instead of looking like a tidy-up. One line, and the structural test (`TC-SIX-16b`) is amended to permit exactly that flag and nothing else. |
+| **If you say "go"** | nothing changes; the sequencing note goes in the deployment runbook. |
+
+### BLOCK-2 · An invoice for an unmeasurable session is currently written as €0.00
+
+**Not fixed, because the right answer is commercial.** `invoice_service.py:29-30`:
+
+```python
+energy_kwh  = session.energy_kwh  or 0.0
+water_liters = session.water_liters or 0.0
 ```
-berth_assignments        (pedestal.db — same DB as sockets, valves and billing)
-  id
-  berth_id         int   -- Berth.id from users.db; plain int, no FK (cross-DB, as today)
-  pedestal_id      int   FK pedestals.id
-  socket_id        int   NULL  -- 1..4, the electricity socket serving this berth
-  valve_id         int   NULL  -- 1..2, the water valve serving this berth
-  assigned_at      datetime
-  assigned_by      str
-  UNIQUE (pedestal_id, socket_id)   -- a socket serves at most one berth
-  UNIQUE (berth_id)                 -- a berth has at most one assignment
-```
 
-Four deliberate choices:
+`None` means **we could not measure it** (`consumption_source == "unknown"`). `or 0.0` turns
+that into a measured zero, and the invoice is written for €0.00 with nothing recording that the
+figure was never known. That is the exact collapse you refused to allow in the ledger —
+"a financial record that contradicts itself is not a documented limitation, it is a defect we
+would be choosing to create" — surviving in the one place that produces the actual charge.
 
-- **It lives in `pedestal.db`, not `users.db`.** Sockets, valves and `energy_intervals` are
-  all there, so the joins the dashboard needs stay inside one database. `berth_id` crosses
-  the boundary as a plain int, which is exactly the compromise `Berth.pedestal_id` already
-  makes (`berth_models.py:14-15`) — this adds no new kind of problem.
-- **`socket_id` and `valve_id` are nullable.** A berth with power but no water is real, and
-  the UI must render it rather than refuse to.
-- **`UNIQUE (pedestal_id, socket_id)` but *not* `UNIQUE (pedestal_id, valve_id)`.** Two
-  berths legitimately share one valve — there are 4 sockets and 2 valves per cabinet
-  (`models/session.py:12`, `models/valve_config.py:24`). Forcing valve uniqueness would make
-  a correct installation unrepresentable.
-- **`assigned_at` / `assigned_by`.** Re-pointing a berth to a different socket is an
-  installation act with billing consequences, so it is recorded. Same reasoning as the NFC
-  audit-trail gap.
+Today it is rare and favours the customer. It is also silent, so nobody follows it up.
 
-**[DECIDE 1]** — approve this shape, and in particular the shared-valve asymmetry.
+**Four options. I recommend (b).**
 
-### 1.2 Which "berth" is authoritative  **[DECIDE 2]**
+| | Behaviour |
+|---|---|
+| a | Keep €0.00. Cheapest; a customer who used power pays nothing and nobody notices. |
+| **b (recommended)** | **Write no invoice. Flag the session for manual review**, visible in the marina alarm list as "Consumption could not be measured — needs review". The charge becomes a human decision, which is what it is. |
+| c | Invoice an estimate from the integrated figure, clearly labelled "estimated". Defensible, but re-admits the method the register work exists to retire. |
+| d | Refuse to complete the session until a register reads. Not viable — the customer has already unplugged. |
 
-Three representations exist today (audit §1 Rule 1). Recommendation:
+**If I am wrong:** (a) is one line; (c) reuses the comparison figure already stored alongside
+the register delta, so it is also small. Either way the UI needs no change beyond one alarm
+sentence, which is why this does not block anything else.
 
-**`Berth.berth_number` becomes what the marina sees; `PedestalConfig.berth_ref` becomes a
-display-only installation label; `energy_intervals.berth_ref` is left exactly as it is.**
+### BLOCK-3 · Which berths share which valve at Krk, and how many berths per pedestal in practice
 
-Reasoning: `Berth` is the only one that can express four berths on one cabinet, and it
-already carries the reference photo and match state the L1 row needs. `energy_intervals` is
-historical billing data — rewriting it would change past invoices, which is never worth it
-for a UI change. New billing rows should additionally carry `berth_id`, so future invoices
-join properly while old ones keep working.
+You have decided the model: **1–4 berths configurable, a berth maps to exactly one socket, a
+valve may be shared.** I am building for that and this does not block the spec.
 
-**[DECIDE 2]** — approve, and confirm no invoice may be retroactively re-keyed.
+What I need is **the actual Krk installation** — how many berths per pedestal, and which berths
+the two valves serve — because it is the first wizard run and the first thing the simulator must
+reproduce. If it turns out one berth per pedestal, the shared-valve label never renders and the
+L1 row loses a line of text.
 
-### 1.3 One authoritative status reduction  **[DECIDE 3]**
+**If I am wrong about the shape:** I built for the shared case because it is the one that
+constrains; the single-berth case is a strict subset and renders correctly with no change.
 
-Rules 2 and 4 and the "Needs attention" filter all sit on this. It must be computed
-**server-side, once**, so the web UI and the mobile app cannot disagree about whether a
-berth is fine.
+### BLOCK-4 · May marina staff see the customer's name on the dashboard?
 
-`GET /api/marina/berths` returns per berth:
+A marina `monitor` can already read `/api/pedestals/{id}/usage/history`, which returns
+`customer_name` and `nfc_user_id` (`usage_report_service.py:128-140`) — so the answer today is
+effectively yes, but by accident rather than decision, and that endpoint's own docstring claims
+admin-only while the code is `require_any_role`.
 
-```json
+The L1 row **does not need a name** to work. "Berth 3 needs attention" is complete.
+
+**DECIDED (overrule me if wrong): no customer name anywhere in the marina profile.** Berth
+number and vessel photo identify the boat; staff standing on the pontoon can see it. A name on
+a wall-mounted dashboard is a privacy exposure with no operational payoff.
+
+**If I am wrong:** add `customer_name` to CORE and one line on the berth detail header. Trivial
+either way — but it must be a decision, not a leak, and the `usage/history` docstring gets
+corrected to match whichever you choose.
+
+---
+
+# 2. The data contract — CORE and EXTENDED
+
+> **Status and labels are computed server-side, once, in CORE, and consumed by web, mobile and
+> ERP alike.** The frontend never computes status. There is nothing to drift.
+
+Two payloads, two audiences, one source.
+
+## 2.1 CORE — `GET /api/marina/berths`
+
+Auth: `require_any_role`. The whole marina profile's L1 screen comes from this one call plus
+websocket deltas.
+
+```jsonc
 {
-  "berth_id": 12, "berth_number": 3, "dock": "A",
-  "status": "ok" | "attention" | "unknown",
-  "status_reason": "Water leak detected",      // plain sentence; null when ok
-  "occupied": true, "occupied_known": true,
-  "vessel_matches": true, "vessel_match_configured": true,
-  "power": { "on": true, "watts": 1240, "available": true },
-  "water": { "on": false, "litres_per_min": 0, "available": true, "shared_with": [4] },
-  "light": { "on": true, "scope": "pedestal", "shared_with": [1, 2, 4] },
-  "guard": { "state": "on" | "off" | "paused" | "unavailable",
-             "detail": "Too dark to see", "scope": "pedestal" },
-  "alarm_count": 0
+  "pedestals": [{
+    "pedestal_id": 3,
+    "cabinet_id": "MAR_KRK_ORM_01",
+    "dock": "A",
+    "reachable": true,              // in-memory heartbeat within 60 s — NOT a DB column
+    "smart_mode": true,
+    "berths": [{
+      "berth_id": 12,
+      "berth_number": 3,
+
+      // ── the two-state reduction, plus UNKNOWN ──────────────────────────────
+      "status": "ok" | "attention" | "unknown",
+      "status_code": "water_leak",        // stable key, for tests and logs
+      "status_sentence": "Water leak detected",   // the ONLY marina-facing string
+      "status_rank": 3,                   // §3 precedence; for sorting, never displayed
+
+      "occupied": true,
+      "occupied_known": true,
+      "vessel_matches": true,
+      "vessel_match_configured": true,
+
+      // ── one figure per facility, and never a borrowed one ──────────────────
+      "power": {
+        "outlet": "Q3",                   // real spelling, always
+        "on": true,
+        "state": "active",                // idle|pending|active|fault|unknown
+        "watts": 1240,
+        "available": true,                // false => render a sentence, no control
+        "unit": "W"
+      },
+      "water": {
+        "outlet": "V1",
+        "on": false,
+        "state": "idle",                  // idle|active|unknown — NO "pending" (§4.6)
+        "litres_per_min": 0,
+        "available": true,
+        "unit": "L/min",
+        "shared_with_berths": [4]         // [] when this cabinet serves one berth
+      },
+      "light":  { "on": true,  "scope": "pedestal", "shared_with_berths": [1,2,4] },
+      "guard":  { "state": "on" | "off" | "paused" | "unavailable",
+                  "sentence": "Guard paused — too dark to see",
+                  "scope": "pedestal" },
+      "alarm_count": 0
+    }]
+  }]
 }
 ```
 
-**The UNKNOWN rule is the important part.** Grey means data is genuinely missing, and this
-system has a specific way of producing missing data that *looks* present: a cabinet silent
-for 19 days whose retained MQTT state still reads normally. So:
+**DECIDED — `power` and `water` are objects, not flat fields.**
+**WHY:** `available`, `state` and `shared_with_berths` all have to travel with the facility they
+describe. Flattening to `power_on` / `water_on` is how a row ends up rendering a water control
+for a berth that has no valve.
+**IF I AM WRONG:** flattening later is a mechanical change in one serialiser.
 
-> A berth is **UNKNOWN** when its cabinet's last heartbeat is older than the comm-loss
-> threshold, when a value has never been reported, or when smart mode is off and the NUC
-> therefore does not know what the cabinet is doing. **Stale is UNKNOWN, never OK.**
+**DECIDED — `reachable` is computed from the in-memory heartbeat, never from a stored column.**
+**WHY:** `architecture.md §7`. A cabinet dead for three weeks delivers a healthy-looking
+retained `opta/status` to every new subscriber, and `PedestalConfig.opta_connected` will say
+`1`. `TC-NFCE-06` already pins this for the NFC path; the dashboard must not reintroduce it.
+**IF I AM WRONG:** there is no version of this I would implement differently. A green row
+meaning "we cannot see berth 3" is worse than no dashboard.
 
-This is the v3.40 lesson applied to the dashboard, and it is the one rule I would refuse to
-soften: a grey row that means "we cannot see berth 3" is useful, and a green row that means
-the same thing is worse than no dashboard.
+**DECIDED — `status_code` ships alongside `status_sentence`.**
+**WHY:** tests, logs and the deferred mobile client need a stable key; humans need the sentence.
+Asserting on display text makes every wording change a test failure, which is how wording stops
+being improved.
+**IF I AM WRONG:** drop the field; nothing renders it.
 
-**Precedence when several things are true at once** — highest wins, so the reason shown is
-always the most serious:
+## 2.2 EXTENDED — admin only, unchanged in shape
 
-| Order | Condition | Status | Sentence shown |
-|---|---|---|---|
-| 1 | cabinet not heard from | unknown | "No contact with this pedestal" |
-| 2 | smart mode off | unknown | "This pedestal is running on its own" |
-| 3 | water leak / moisture alarm | attention | "Water leak detected" |
-| 4 | overheating | attention | "Pedestal too hot" |
-| 5 | power cut off automatically | attention | "Power switched off automatically — too much load" |
-| 6 | breaker tripped | attention | "Power tripped — needs resetting" |
-| 7 | guard alarm unreviewed | attention | "Someone was seen — needs checking" |
-| 8 | vessel does not match photo | attention | "Vessel does not match the photo" |
-| 9 | everything else | ok | — |
+Everything the marina profile deliberately excludes, served by the **existing** admin endpoints.
+No new work.
 
-**[DECIDE 3]** — approve the precedence order and the sentences. These become the only
-marina-facing strings for these conditions; §2 explains why that matters.
-
-### 1.4 Smart mode tightened to admin
-
-`backend/app/routers/pedestal_config.py:340`: `require_control` → `require_admin`. Backend
-enforcement, per the brief. No UI change can substitute for it.
-
-This belongs in the **same consolidated access-control change** as the NFC Rule 1 fix, not
-in the UI work: it is the identical defect shape (a control-tier dependency on what is
-really an installation act), and the role tests should be rewritten once to encode both new
-rules rather than twice.
+| Lives in EXTENDED | Why not CORE |
+|---|---|
+| Temperature, moisture | cabinet health, not berth state. Appears in CORE only as a `status_sentence` when it crosses an alarm threshold. |
+| Breaker state and history | diagnosis, not monitoring |
+| Per-phase currents (Phase 1/2/3), `rated_amps`, `meter_type`, modbus address | from `opta/config/hardware`; berth detail shows per-phase and rating (§5.3), the admin profile keeps the rest |
+| CPU, disk, guard thresholds, confidence, detection list | guard engineering surface |
+| `consumption_source`, both meter register endpoints | dispute evidence; surfaced on berth detail as one plain line, not as four numbers |
+| NFC tag ids and provisioning | installation |
+| Smart mode | admin only, backend-enforced |
+| `data_mode: synthetic` | **DECIDED: not in the marina profile.** A marina has no use for it and it is alarming if misread. |
 
 ---
 
-## 2. The rules made structural
+# 3. The nine status sentences, with precedence
 
-The audit's finding on Rule 3 was that the compliant cases were compliant by accident. So
-each rule gets a mechanism, not a review note.
+**Highest rank wins**, so the sentence shown is always the most serious thing true about that
+berth. One table, server-side, in one module. **A condition with no entry here cannot be
+rendered** — it becomes `unknown` / "Something needs checking", which is honest and forces the
+entry to be added rather than letting a blank through.
 
-| Rule | Mechanism |
-|---|---|
-| 3 — colour + icon + word | One `<Status>` component whose props make all three **required**. No raw colour class in any marina-profile file; a lint rule denies `text-red-*` / `text-green-*` / `bg-*-900` in `pages/marina/**`. |
-| 4 — plain language | The only strings allowed are §1.3's table, kept in one module. Any condition without an entry cannot be rendered — it becomes UNKNOWN with "Something needs checking", which is honest and forces the entry to be added. |
-| 2 — two states | The frontend never computes status; it renders `status` from the API. Nothing to drift. |
-| 5 — one number | The row renders exactly one figure per facility (watts, or litres/min) and nothing else. Temperature and moisture do not appear in this profile at all — they are cabinet health and belong to admin. |
-| 6 — no greyed controls | `available: false` renders **one sentence and no control element in the DOM**. Not `disabled`, not `pointer-events-none` — absent. |
-| 7 — three levels | Router-level: the marina profile has exactly three route depths and no overlay may open another overlay. |
-| 8 — phone first | Every marina view is built narrow-first and must pass at 360 px with no horizontal page scroll. |
+| Rank | `status_code` | `status` | `status_sentence` | Source |
+|---|---|---|---|---|
+| 1 | `no_contact` | unknown | **"No contact with this pedestal"** | in-memory heartbeat older than 60 s |
+| 2 | `standalone` | unknown | **"This pedestal is running on its own"** | `smart_mode == false` |
+| 3 | `water_leak` | attention | **"Water leak detected"** | moisture alarm > 90 % |
+| 4 | `too_hot` | attention | **"Pedestal too hot"** | temperature alarm > 50 °C |
+| 5 | `auto_off_overload` | attention | **"Power switched off automatically — too much load"** | `socket_configs.auto_stop_pending_ack` |
+| 6 | `breaker_tripped` | attention | **"Power tripped — needs resetting"** | `opta/breakers/Q{n}/status` |
+| 7 | `guard_unreviewed` | attention | **"Someone was seen — needs checking"** | guard alarm not yet marked correct/false |
+| 8 | `vessel_mismatch` | attention | **"Vessel does not match the photo"** | occupancy match, only where configured |
+| 9 | `ok` | ok | *(no sentence)* | nothing above is true |
 
-**On Rule 4 and guard specifically** — the brief allows four guard strings. The backend has
-more states, so the mapping is fixed here and written once:
+**Two additions to the nine, both forced by the foundation work:**
+
+| Rank | `status_code` | `status` | `status_sentence` | Why it must exist |
+|---|---|---|---|---|
+| 2.5 | `outlet_silent` | unknown | **"This outlet has not reported recently"** | A valve's stored state expires at 60 s (§4.6). The cabinet can be reachable while one outlet is stale. Without this the row would show `idle` for a valve nobody has heard from — the precise defect §4.6 fixed one layer down. |
+| 7.5 | `measurement_missing` | attention | **"Consumption could not be measured — needs review"** | `consumption_source == "unknown"` on a session at this berth. Required by **BLOCK-2(b)**. Omit if you choose (a). |
+
+**DECIDED — rank 1 and 2 are `unknown`, not `attention`.**
+**WHY:** "needs attention" means *go and do something about this berth*. A pedestal with no
+contact or in standalone mode needs something done about the **pedestal**, and the berth's
+actual state is genuinely not known. Marking it `attention` sends staff to the wrong place and
+fills the attention filter with rows that have nothing wrong at the berth.
+**IF I AM WRONG:** change two rows in the table. Nothing else moves.
+
+**DECIDED — these are the only marina-facing strings for these conditions.**
+**WHY:** the audit found Rule 4 compliance was accidental. A string table makes it structural,
+and `TC-UIR-02` asserts that every rendered condition has an entry.
+**IF I AM WRONG:** reword freely — the `status_code` keys are what tests use, precisely so
+wording stays editable.
+
+### Guard state mapping — fixed here, written once
 
 | Backend | Marina sees |
 |---|---|
 | `ARMED`, `ALARM`, `RECORDING` | **Guard on** |
+| `ARMING` | **Guard on** (brief "starting…") |
 | `OFF` | **Guard off** |
 | `SUSPENDED_CPU`, `NO_DISK`, stalled ring | **Guard paused** + plain reason |
-| `limited_visibility` flag while armed | **Guard paused — too dark to see** |
-| `ARMING` | **Guard on** (with a brief "starting…") |
+| `limited_visibility` while armed | **Guard paused — too dark to see** |
 | `UNAVAILABLE` | **Guard unavailable** |
 
-`UNAVAILABLE` must never render as "Guard off". Off is a decision someone made; unavailable
-is a fault. The entire liveness design (LWT + heartbeat + in-memory `worker_seen_at`) exists
-to keep those apart, and collapsing them in the UI would throw that away at the last step.
+**`UNAVAILABLE` must never render as "Guard off".** Off is a decision someone made; unavailable
+is a fault. The entire liveness design — LWT plus heartbeat plus in-memory `worker_seen_at` —
+exists to keep those apart, and collapsing them in the UI throws that away at the last step.
 
 ---
 
-## 3. Screens
+# 4. Foundation deltas folded in
 
-### Level 1 — Dashboard, one row per berth
+What changed underneath since the audit was written. Each one constrains a screen.
 
-Per row: berth number · dock · status word+icon · occupied · vessel matches photo (only
-where configured) · power on/off + watts · water on/off + litres/min · light on/off · guard
-on/off. Filters: **Needs attention** / **All**. One alarm indicator with a count. Nothing
-else.
+### 4.1 Consumption figures are meter readings, forwarded not computed
+A session's figure is `end − start` of the meter's own cumulative register. **Do not present it
+as live-computed.** `powerKw` survives for live display only, and the capture shows why: Q2
+reported 0.181 kW for six minutes while its register never moved.
 
-Sort order: **needs-attention first, then unknown, then by berth number.** The rows that
-need someone are at the top on a phone without scrolling — which is the whole point of the
-screen.
+### 4.2 `energy_kwh` and `water_liters` can be `None`
+Every widget that renders them must handle absence. **`None` is not `0.0`.**
 
-**Shared facilities — refinement, flagged per the brief.** Light is one LED per cabinet
-(`models/pedestal_config.py:led_on`) and guard is one camera per pedestal. Four berth rows
-on one cabinet are therefore four views of one switch. Rendering four independent-looking
-toggles would be a quiet lie of exactly the kind these rules exist to prevent.
+### 4.3 `consumption_source` is part of the contract
+`register` / `integrated_legacy` (closed-ended, assertion-enforced) / `unknown`. Where berth
+detail shows a number that is not `register`, it says so in plain words — "estimated" or "not
+measured". A figure shown without its provenance is how the old workaround survived three
+months.
 
-Recommendation: keep the control on the row, and label the truth — `shared_with` is already
-in the payload, so the row reads **"Light (also berths 1, 2, 4)"** and, on tap, confirms
-*"This light covers berths 1, 2, 3 and 4. Turn it off for all of them?"* One confirm, plain
-words, no hidden surprise. When a cabinet serves one berth, `shared_with` is empty and none
-of this renders. **[DECIDE 4]** — approve, or say you would rather these move to berth
-detail and off the L1 row.
+### 4.4 The ledger agrees with its own session totals
+Interval rows are register deltas, so their sum equals the session figure by construction
+(`TC-EIV-10`). **Any history or analytics view aggregates interval rows**, never session fields.
 
-### Level 2 — Berth detail
+### 4.5 Six outlets, real spellings, attribution by scanned tag
+`Q1`–`Q4` and `V1`/`V2`. Never bare digits — `"1"` is ambiguous between socket 1 and valve 1.
+**The dashboard is organised by berth for monitoring; billing follows the scanned tag.** A
+shared valve is a scheduling constraint, not an attribution problem, so "(also berth 4)" is a
+monitoring clarification and never a billing caveat.
 
-Pedestal image with colour-coded status as today, consumption history, alarm history, the
-reference photo, the current camera view, and the guard event list for this berth. Per guard
-event: time, annotated frame, recording, and the **correct / false alarm** control —
-`require_any_role`, so it is available to whoever is actually looking
-(`docs/guard_b1_design.md §13`).
+### 4.6 Valve state exists, and has four states not five
+`opta/water/V{n}/status` carries `state` and `hw_status`; v3.43 persists them and returns
+`unknown` past 60 s. **There is no `pending`** — that means "physically connected, awaiting
+activation" and comes from plug-in detection, which has no valve analogue. **There is no valve
+fault check** — `STATE_FAULT` is reported only reactively on `opta/acks`, so it cannot be
+polled.
 
-One honest label needed here: guard events are per **camera**, i.e. per pedestal, so on a
-multi-berth cabinet the list is the cabinet's events, not that berth's. It says so.
+### 4.7 The cabinet is not four identical sockets
+Q1 is three-phase 32 A; Q3/Q4 are 16 A. **The UI must render what the payload contains, not
+what it expects**: three-phase Q1 sends `currentAmpsL1..L3` / `powerKwTotal`, Q2–Q4 send
+`currentAmps` / `powerKw`. A component that assumes one shape is a defect.
 
-### Level 2 — Alarms
+### 4.8 `opta/*` only
+`marina/cabinet/*` is aspirational and `pedestal/*` is a legacy test-tool prefix. No new code
+assumes either.
 
-Flat list, newest first, filterable by pedestal and by berth. Plain sentences from §1.3 —
-never error codes. What happened, where, when, still active or not.
+### 4.9 Smart mode is admin-only and backend-enforced
+It does not appear in the wizard, and the endpoint refuses the role regardless of what renders.
 
-**This needs a backend change, not just a page.** `ActiveAlarmsPanel` renders only inside
-`SystemHealth`, which is `adminOnly` (`App.tsx:76-83`), so the marina cannot see a
-cross-berth alarm list today. A marina-scoped endpoint is required — and it should be
-marina-scoped rather than the admin one re-gated, so that admin diagnostics detail does not
-leak into this profile by default.
-
-### Level 3 — Analytics
-
-Reached only from a berth or from a consumption figure. **Removed from the nav**
-(`Layout.tsx:42`). The existing `Analytics` page can be reused behind a berth filter; it
-does not need rebuilding.
-
-### Control Panel — 3-step wizard, run once per pedestal
-
-1. Which dock this pedestal serves.
-2. Which berth numbers it controls — **and which socket and which valve serves each.**
-3. Per berth: upload the vessel reference photo, enable/disable "Berth occupancy and match".
-
-**Step 2 is the refinement from the audit.** As the brief writes it, step 2 captures only
-*which* berths; without socket and valve per berth the L1 row cannot render power or water
-at all. The wizard is the natural place to capture it because it is the one moment when
-someone is physically at the cabinet and can see which outlet serves which boat.
-
-Smart mode does **not** appear in this wizard, and after §1.4 the endpoint refuses the role
-regardless — enforced in the backend, not hidden in the UI.
+### 4.10 The simulator does not exist yet
+Deleted 2026-03-15. Rewritten after this spec is approved and **before** implementation, so
+every configuration the wizard must handle can be looked at without a trip to Krk.
 
 ---
 
-## 4. Tests — the boot gate, before any component test
+# 5. Page map and wireframes
 
-Per the standing instruction that a component suite passing while the app does not boot is
-the same failure in a different place, the marina profile gets a boot smoke test **first**,
-and it must be unskippable.
+Three levels. **Back is always visible. No overlay opens another overlay.**
 
-The audit found the existing gate is not: `tests/playwright_e2e.sh:41-45` exits 0 when the
-backend is not on `:8000`, so on the last push that stage reported success while running
-nothing.
+```
+L1  /marina                     Dashboard — one row per berth
+     │
+     ├── L2  /marina/berth/:id   Berth detail
+     │        └── L3  /marina/berth/:id/history    Consumption history
+     │
+     ├── L2  /marina/alarms      Alarm list
+     │
+     ├── L2  /marina/guard       Guard — per pedestal
+     │
+     └── L2  /marina/setup/:pid  Control-panel wizard (3 steps, admin)
+```
 
-Required, in order:
+## 5.1 L1 — Dashboard
 
-1. **`TC-UIB-01` — the app boots.** Real browser, real built bundle: load the marina
-   dashboard, assert it renders berth rows and no error boundary, and assert the console
-   produced no uncaught error. This must fail if the bundle does not build, if a route is
-   broken, or if the API shape changed.
-2. **Fix the silent skip.** The E2E stage must either start the backend itself or **fail**,
-   never exit 0 having run nothing. If a fixture backend is too heavy for every push, then
-   run `TC-UIB-01` against a stubbed API so that *something* always answers the boot
-   question — and print the skip count either way, as `run_tests.sh` now does for pytest.
-3. **`TC-UIR-01..08` — one test per non-negotiable rule**, asserting the mechanism rather
-   than an instance:
-   - no raw colour class in `pages/marina/**` (Rule 3);
-   - every rendered condition has a string-table entry (Rule 4);
-   - `available: false` renders **no** control element in the DOM (Rule 6) — asserted by
-     querying for the element and expecting absence, not by checking `disabled`;
-   - no page-level horizontal scroll at 360 px (Rule 8);
-   - status is never computed client-side (Rule 2) — the reduction is only ever read.
-4. **`TC-UIS-01` — stale is UNKNOWN.** Given a cabinet whose last heartbeat is older than
-   the threshold but whose retained state reads normal, the berth renders grey. This is the
-   v3.40 regression written as a UI test, and it is the one I would most expect to break
-   later.
+```
+┌────────────────────────────────────────────────────────┐
+│  Marina A                      [ Needs attention (2) ]│
+│                                [ All (8)             ]│
+├────────────────────────────────────────────────────────┤
+│  ▲  BERTH 3            Water leak detected            │
+│     Occupied · photo matches                           │
+│     Power   ON    1 240 W         [ Turn off ]         │
+│     Water   OFF        0 L/min    [ Turn on  ]         │
+│              (also berth 4)                            │
+│     Light   ON                    [ Turn off ]         │
+│              (also berths 1, 2, 4)                     │
+│     Guard   on                                         │
+│                                           2 alarms  ›  │
+├────────────────────────────────────────────────────────┤
+│  ?  BERTH 5            No contact with this pedestal   │
+│     We cannot see this berth at the moment.            │
+│                                                     ›  │
+├────────────────────────────────────────────────────────┤
+│  ✓  BERTH 1            —                               │
+│     Empty                                              │
+│     Power   OFF        0 W         [ Turn on ]         │
+│     Water   —      no water outlet at this berth        │
+│     Light   ON                     [ Turn off ]        │
+│     Guard   on                                         │
+│                                                     ›  │
+└────────────────────────────────────────────────────────┘
+```
+
+**Sort: needs-attention first, then unknown, then by berth number.** The rows that need someone
+are at the top of a phone screen without scrolling, which is the entire point.
+
+**DECIDED — status is icon + word + colour, all three, always.**
+**WHY:** the audit found the compliant cases were compliant by accident. One `<Status>`
+component makes all three props required, and a lint rule denies raw colour classes in
+`pages/marina/**`.
+**IF I AM WRONG:** nothing to change — this is the brief.
+
+**DECIDED — shared light and guard stay on the row, labelled in plain words.**
+**WHY:** your decision, and it is right: four berth rows on one cabinet are four views of one
+switch, and four independent-looking toggles would be a quiet lie. On tap: *"This light covers
+berths 1, 2, 3 and 4. Turn it off for all of them?"* One confirm, no hidden surprise. When a
+cabinet serves one berth, `shared_with_berths` is empty and none of it renders.
+**IF I AM WRONG:** move both to berth detail; the row loses two lines.
+
+**DECIDED — a berth with no valve renders "no water outlet at this berth", not a disabled
+control.**
+**WHY:** Rule 6, applied to absence rather than to smart mode. `available: false` renders **no
+control element in the DOM** — not `disabled`, not `pointer-events-none`, absent.
+**IF I AM WRONG:** this is the rule; I would not change it.
+
+**DECIDED — one figure per facility and nothing else.** Watts, or litres per minute.
+Temperature, moisture, amps, phases and kWh totals do not appear at L1 at all.
+
+**DECIDED — per-phase values do not appear at L1.** Your decision. One number per row; "which
+phase" is not a question marina staff ask.
+
+## 5.2 L1 — smart mode off
+
+```
+┌────────────────────────────────────────────────────────┐
+│  ?  BERTH 3            This pedestal is running on its │
+│                        own                              │
+│     Power   ON    1 240 W                               │
+│     Water   OFF        0 L/min                          │
+│     The marina office can start and stop outlets here   │
+│     once this pedestal is reconnected.                  │
+│                                                     ›  │
+└────────────────────────────────────────────────────────┘
+```
+
+Readings still render — they are real, they arrived over MQTT. **Controls are absent**, with one
+sentence in their place. Never a greyed-out button.
+
+## 5.3 L2 — Berth detail
+
+```
+┌────────────────────────────────────────────────────────┐
+│  ‹ Back to marina            BERTH 3   ▲ Water leak    │
+├────────────────────────────────────────────────────────┤
+│  [ pedestal image, status-coloured ]                   │
+│                                                        │
+│  This berth                                            │
+│    Power    socket Q3 · 16 A · single phase            │
+│    Water    outlet V1 · 20 L/min · also berth 4        │
+│                                                        │
+│  Now                                                   │
+│    Power    ON     1 240 W         [ Turn off ]        │
+│    Water    OFF        0 L/min     [ Turn on  ]        │
+│                                                        │
+│  This month                                            │
+│    Electricity   34.812 kWh      meter reading         │
+│    Water          1 203.5 L      meter reading         │
+│                                        [ History › ]   │
+│                                                        │
+│  Vessel                                                │
+│    [ reference photo ]  [ camera now ]   matches ✓     │
+│                                                        │
+│  Alarms at this berth                      2 active ›  │
+└────────────────────────────────────────────────────────┘
+```
+
+**DECIDED — the socket's rating and phase count live here, not on the row.** Your decision.
+From `opta/config/hardware`, never a constant.
+
+**DECIDED — a three-phase socket shows "Phase 1 / 2 / 3" here**, in a sub-block, and only when
+the payload actually contains per-phase values. Labelled in words, never L1/L2/L3 — "L1" means
+the dashboard level in this document and a phase on the hardware, and that collision is exactly
+the kind of thing that ends up on a screen.
+
+**DECIDED — "meter reading" appears next to each figure, and the wording changes with
+`consumption_source`.**
+
+| `consumption_source` | Shown |
+|---|---|
+| `register` | "meter reading" |
+| `integrated_legacy` | "estimated — meter unavailable" |
+| `unknown` | **"not measured"**, and the figure itself renders as **—**, never `0.0` |
+
+**WHY:** §4.3. The provenance travels with the number or the number is a claim without a source.
+**IF I AM WRONG:** drop the label; the figures are unaffected.
+
+**DECIDED — guard events on berth detail are labelled as the cabinet's, not the berth's.**
+**WHY:** one camera per pedestal. On a multi-berth cabinet the event list is the cabinet's. Not
+saying so would attribute a stranger walking past berth 1 to berth 3.
+
+## 5.4 L2 — Alarms
+
+Flat list, newest first, filterable by pedestal and by berth. Plain sentences from §3 only —
+never an error code. What happened, where, when, still active or not.
+
+**Needs a backend endpoint, not just a page.** `ActiveAlarmsPanel` renders only inside
+`SystemHealth`, which is `adminOnly` (`App.tsx:76-83`), so the marina cannot see a cross-berth
+alarm list today.
+
+**DECIDED — a new marina-scoped endpoint, not the admin one re-gated.**
+**WHY:** re-gating leaks admin diagnostic detail into this profile by default, and the next
+field added to the admin payload appears on the marina screen without anyone deciding so.
+**IF I AM WRONG:** re-gating is less code; the cost arrives later.
+
+## 5.5 L2 — Guard
+
+Per pedestal, not per berth. Four states from the mapping in §3, event list with annotated
+frame, recording, and the **correct / false alarm** control (`require_any_role`, so it is
+available to whoever is actually looking).
+
+**DECIDED — notifications stay off.** Your standing instruction: off until you have watched a
+week. **There is no built-and-disabled notification path** that could be switched on by
+accident — the code is absent, not flagged off.
+
+## 5.6 Control-panel wizard — 3 steps, admin, once per pedestal
+
+```
+Step 1 of 3   Which dock does this pedestal serve?
+              Dock  [ A ▾ ]
+              Pedestal label  [ MAR_KRK_ORM_01 ]  (read-only, from the cabinet)
+
+Step 2 of 3   Which berths does it serve, and which outlet each?
+              ┌──────────────────────────────────────────────┐
+              │ Berth    Power socket      Water outlet       │
+              │ [ 3 ]    [ Q3 ▾ ]          [ V1 ▾ ]           │
+              │ [ 4 ]    [ Q4 ▾ ]          [ V1 ▾ ]  shared   │
+              │ [ + add a berth ]                             │
+              └──────────────────────────────────────────────┘
+              Q1 · 32 A · 3-phase    Q2 · 32 A    Q3 · 16 A    Q4 · 16 A
+              V1 · 20 L/min          V2 · 20 L/min
+              ⚠ This cabinet has not reported its outlets yet — the list
+                above is the standard set.
+
+Step 3 of 3   Per berth: vessel reference photo, and occupancy matching on/off
+              Berth 3  [ upload photo ]  [x] Berth occupancy and match
+              Berth 4  [ upload photo ]  [ ] Berth occupancy and match
+```
+
+**DECIDED — step 2 captures socket AND valve per berth, not just berth numbers.**
+**WHY:** without it the L1 row cannot render power or water at all. The wizard is the right
+place because it is the one moment someone is physically at the cabinet and can see which outlet
+serves which boat.
+
+**DECIDED — the outlet dropdowns are driven by `GET /api/nfc/outlets/{cabinet}`**, with its
+`reported` flag surfaced as the warning shown above.
+**WHY:** the cabinet enumerates itself, including ratings. A hardcoded four-socket list was
+wrong twice over. And "never heard from this cabinet" must not render identically to "this
+cabinet has no water outlets".
+
+**DECIDED — a socket may serve only one berth; the UI enforces it at entry.** Your decision, and
+the DB enforces it too (§6). A valve may be shared, and the UI labels it "shared" as soon as a
+second berth picks it — so the person entering it sees the consequence while they are deciding,
+not afterwards.
+
+**DECIDED — smart mode does not appear in this wizard at all.** Backend-enforced regardless.
+
+**DECIDED — the wizard is re-runnable and shows the current mapping pre-filled.**
+**WHY:** re-pointing a berth is an installation act that will happen (a socket fails, a boat
+moves). A one-shot wizard means the second change is made in the database by hand.
+**IF I AM WRONG:** make it one-shot plus an edit screen; same work, two entry points.
 
 ---
 
-## 5. Build order
+# 6. `berth_assignments`
 
-Each step ends somewhere real, so work can stop between steps without leaving a half-built
-dashboard in front of the marina.
+```sql
+berth_assignments                   -- pedestal.db, beside sockets, valves, energy_intervals
+  id            INTEGER PRIMARY KEY
+  berth_id      INTEGER NOT NULL    -- Berth.id from users.db; plain int, no FK (cross-DB)
+  pedestal_id   INTEGER NOT NULL REFERENCES pedestals(id)
+  socket_id     INTEGER             -- 1..4, NULL if this berth has no power
+  valve_id      INTEGER             -- 1..2, NULL if this berth has no water
+  assigned_at   DATETIME NOT NULL
+  assigned_by   TEXT NOT NULL       -- admin email; REQUIRED, never defaulted
+  UNIQUE (pedestal_id, socket_id)   -- a socket serves at most one berth
+  UNIQUE (berth_id)                 -- a berth has at most one assignment
+  -- deliberately NO unique on (pedestal_id, valve_id): a valve may be shared
+```
+
+**DECIDED — it lives in `pedestal.db`.**
+**WHY:** sockets, valves and `energy_intervals` are all there, so every join the dashboard needs
+stays in one database. `berth_id` crosses as a plain int, which is the compromise
+`Berth.pedestal_id` already makes — no new kind of problem.
+
+**DECIDED — `socket_id` and `valve_id` are nullable.**
+**WHY:** a berth with power but no water is a real installation and the UI must render it rather
+than refuse to.
+
+**DECIDED — `UNIQUE (pedestal_id, socket_id)` but no valve uniqueness.**
+**WHY:** your rule. Forcing valve uniqueness would make a correct installation
+unrepresentable.
+
+**DECIDED — `assigned_by` is required and raises rather than defaulting.**
+**WHY:** same reasoning as `provisioned_by` on NFC tags. Re-pointing a berth changes which
+customer's consumption lands where. A caller with no actor has a bug; a default hides it.
+
+**DECIDED — `Berth.berth_number` is the authoritative identity the marina sees.**
+`PedestalConfig.berth_ref` becomes a display-only installation label.
+**WHY:** `Berth` is the only representation that can express four berths on one cabinet, and it
+already carries the reference photo and match state the L1 row needs.
+
+**DECIDED — `energy_intervals.berth_ref` is left exactly as it is, and no invoice is ever
+re-keyed.**
+**WHY:** historical billing. Rewriting it changes past invoices, which is never worth it for a
+UI change. New rows additionally carry `berth_id` so future invoices join properly while old
+ones keep working.
+**IF I AM WRONG:** this is the one I would push back on twice.
+
+---
+
+# 7. Component list and data flow
+
+Every widget, its source, and what it does when the source is absent.
+
+| Component | Reads | Source | When absent |
+|---|---|---|---|
+| `<MarinaDashboard>` | `pedestals[].berths[]` | `GET /api/marina/berths` + WS deltas | full-page "Cannot reach the server" |
+| `<BerthRow>` | one `berths[]` entry | — | n/a |
+| `<Status>` | `status`, `status_sentence` | CORE | `unknown` + "Something needs checking" |
+| `<FacilityLine>` power | `power{}` | CORE; live from WS `power_reading` | `available:false` → sentence, **no control in DOM** |
+| `<FacilityLine>` water | `water{}` | CORE; live from WS `water_reading` | as above |
+| `<SharedNote>` | `shared_with_berths` | CORE | renders nothing when `[]` |
+| `<LightToggle>` | `light{}` | CORE; `POST /api/controls/pedestal/{id}/led` | sentence, no control |
+| `<GuardBadge>` | `guard{}` | CORE, mapped per §3 | **"Guard unavailable"**, never "off" |
+| `<AttentionFilter>` | `status`, `status_rank` | client-side over CORE | — |
+| `<BerthDetail>` | one berth + EXTENDED | `GET /api/marina/berths/{id}` | back to L1 with a sentence |
+| `<OutletSpec>` | `rated_amps`, `phases`, `rated_liters_per_min` | `GET /api/nfc/outlets/{cabinet}` | "Not reported by this cabinet yet" |
+| `<PhaseBlock>` | `currentAmpsL1..L3` | WS `meter_telemetry` | **absent** when the payload has no per-phase keys (§4.7) |
+| `<ConsumptionFigure>` | `energy_kwh` / `water_liters` + `consumption_source` | CORE | **—** with "not measured"; never `0.0` |
+| `<ConsumptionHistory>` | interval rows | `GET /api/pedestals/{id}/usage/history` | "No readings yet" |
+| `<VesselMatch>` | `vessel_matches`, photos | existing occupancy endpoints | hidden unless `vessel_match_configured` |
+| `<AlarmList>` | marina-scoped alarms | **new** `GET /api/marina/alarms` | "No alarms" |
+| `<GuardEvents>` | guard events + review control | existing guard endpoints | "No events" |
+| `<SetupWizard>` | outlets + current mapping | `GET /api/nfc/outlets/{cabinet}`, `GET/PUT /api/marina/berth-assignments` | step 2 falls back to the canonical six, with the warning |
+
+**DECIDED — live values arrive by websocket; structure arrives by REST.**
+**WHY:** the WS already carries `power_reading`, `water_reading`, `session_*` and
+`socket_state_changed`. Re-fetching CORE on every telemetry tick would make the dashboard
+refetch 12 times a minute per cabinet.
+**IF I AM WRONG:** poll CORE on a timer; strictly worse, but one hook.
+
+**DECIDED — one new backend endpoint for the reduction, two for the rest.**
+`GET /api/marina/berths`, `GET /api/marina/berths/{id}`, `GET /api/marina/alarms`, and
+`GET/PUT /api/marina/berth-assignments`. Nothing else is new; everything else reuses what
+exists.
+
+---
+
+# 8. Migration — what is removed, merged, kept
+
+| Today | UI v2 | Why |
+|---|---|---|
+| `/dashboard` (pedestal grid) | **kept as the ADMIN dashboard** | engineering view; still the right one for admin |
+| — | **new `/marina`** | the profile this spec is about |
+| `/analytics` in nav | **demoted to L3**, reached from a berth or a figure | the audit's nav-reduction finding |
+| `/history` | **merged** into berth detail → History | history without a berth is a report, not a screen |
+| `/berths` (`BerthOccupancy`) | **merged** into L1 + berth detail | berths *are* the dashboard now |
+| `/billing`, `/users`, `/contracts` | **kept, admin** | commercial, not marina monitoring |
+| `/system-health` | **kept, admin** | plus the alarm list gets a marina-scoped sibling |
+| `/api-gateway`, `/settings` | **kept, admin** | configuration |
+| `SocketQrGrid`, QR endpoints, QR landing | **not in UI v2. Dormant, not removed.** | decision of 2026-09-30 |
+| `PedestalControlCenter` (1 468 lines, 27 `useState`) | **not reused.** Stays for admin; the marina profile does not touch it | the audit's structural risk. Reusing it would import the whole admin surface into the simple profile |
+
+**DECIDED — the admin profile is untouched** beyond the one new marina alarm endpoint.
+**WHY:** your constraint is that the NUC keeps running. Rewriting the admin dashboard alongside
+a new marina profile doubles the blast radius of one deployment.
+
+---
+
+# 9. The simplicity acceptance test
+
+Measured on the current tree (2026-10-01), so "simpler" is a number rather than an opinion.
+
+All counts below were read from the tree, not estimated. Two figures I first wrote from memory
+were wrong and are corrected here — the nav count (I said 9; a marina `monitor` sees 7, because
+three items are admin-gated) and the per-card figure count (I said 11; the card itself renders
+5 numbers — the 4x2 socket figures live one level deeper).
+
+| | Today | UI v2 target | Measured how |
+|---|---|---|---|
+| Nav items visible to a marina `monitor` | **7** | **4** (Marina, Alarms, Guard, Setup) | `Layout.tsx:40-57` — 7 unconditional; `system-health` and `settings` are `isAdmin`, `api-gateway` is `canApi` |
+| Routes defined | **16** | **+6** marina, admin routes untouched | `App.tsx`, `grep -c '<Route'` |
+| Pages | **12** | 12 kept for admin, **+1** marina root | `ls pages/` |
+| Numbers on one dashboard tile | **5** (temp °C, moisture %, heartbeat age, pending count, active count) | **2** on an L1 row (watts, litres/min) | `PedestalCard.tsx:93-135` |
+| Distinct indicators on one dashboard tile | **10** (5 numbers + `data_mode` / `initialized` / `ALARM` badges + OPTA and Cam dots) | **4** (status, power, water, guard) | same |
+| Largest single component | **1 468 lines, 27 `useState`** (`PedestalControlCenter`) | **no marina component over 250 lines** | `wc -l`, `grep -c useState` |
+| Total lines across `components/pedestal/**` | **5 075** across 16 files | marina profile adds **under 1 200**, reuses none of it | `wc -l` |
+| Status representations | colour-only in places | **always colour + icon + word** | `TC-UIR-01` |
+| Marina-facing strings for a status | ad hoc per component | **one table, 11 entries** | §3 |
+
+**One count I could not take statically, and will not invent:** taps from login to turning a
+socket off. The chain is `/dashboard` → tile CTA → `PedestalView` → `PedestalControlCenter` →
+socket control, which reads as four, but the tile CTA renders conditionally and
+`PedestalControlCenter` has collapsible sections whose default state decides whether it is four
+or five. **It gets counted in the device walkthrough** alongside the modal-in-modal and sunlight
+questions you have already said not to guess at. The UI v2 target is **2** — marina root, then
+the control on the row — and that one is countable from the wireframe.
+
+**Acceptance:** all nine measured rows met, the tap count measured in the walkthrough and at
+most 2, plus `TC-UIB-01` (the app boots) and `TC-UIR-01..08` green.
+**A failure on any row is a failure of the profile, not a note for later.**
+
+### Tests, in build order — the boot gate first
+
+The standing rule: a component suite passing while the app does not boot is the same failure in
+a different place. **The existing E2E gate is not trustworthy** — `tests/playwright_e2e.sh:41-45`
+exits 0 when the backend is not on `:8000`, and it did exactly that on the last push.
+
+1. **`TC-UIB-01` — the app boots.** Real browser, real built bundle. Loads `/marina`, asserts
+   berth rows render, no error boundary, no uncaught console error. Must fail if the bundle does
+   not build, a route is broken, or the CORE shape changed.
+2. **Fix the silent skip.** The E2E stage must start the backend or **fail** — never exit 0
+   having run nothing. If a real backend is too heavy per-push, run `TC-UIB-01` against a
+   stubbed CORE so something always answers the boot question, and print the skip count either
+   way.
+3. **`TC-UIR-01..08`** — one per rule, asserting the **mechanism**: no raw colour class in
+   `pages/marina/**`; every rendered condition has a string-table entry; `available:false`
+   renders **no** control element (queried for absence, not for `disabled`); no page-level
+   horizontal scroll at 360 px; status is never computed client-side.
+4. **`TC-UIS-01` — stale is UNKNOWN.** A cabinet whose last heartbeat is older than the
+   threshold but whose retained state reads normal renders **grey**. The v3.40 regression as a UI
+   test, and the one I most expect to break later.
+5. **`TC-UIS-02` — a stale valve is UNKNOWN**, distinct from `idle`. The §4.6 rule at the UI
+   layer.
+
+---
+
+# 10. Build order
 
 | # | Step | Ends with |
 |---|---|---|
-| 1 | `berth_assignments` + `GET /api/marina/berths` + the reduction (§1.1, §1.3) | the contract answerable with `curl`, no UI |
-| 2 | Smart mode → admin (§1.4) — *in the access-control change, not here* | role tests rewritten to encode the rule |
-| 3 | `TC-UIB-01` + fix the silent E2E skip (§4.1-4.2) | a gate that cannot pass vacuously |
-| 4 | L1 dashboard, narrow-first, with `<Status>` and the string table | the screen the marina uses daily |
-| 5 | Control Panel wizard (§3) | installation captures the mapping step 1 needs |
-| 6 | L2 berth detail incl. guard events + labelling | guard gets its marina face; step 6 of Stage B discharged |
+| 1 | `berth_assignments` + `GET /api/marina/berths` + the reduction | the contract answerable with `curl`, no UI |
+| 2 | `TC-UIB-01` + fix the silent E2E skip | a gate that cannot pass vacuously |
+| 3 | **Simulator**, rewritten against today's contract | 1–4 berths, 6 outlets, shared valve, three-phase Q1, valve state — all renderable without a trip to Krk |
+| 4 | L1 dashboard, narrow-first, `<Status>` + string table | the screen the marina uses daily |
+| 5 | Setup wizard | installation captures what step 1 needs |
+| 6 | L2 berth detail incl. per-phase and provenance | the investigation screen |
 | 7 | L2 alarms + marina-scoped endpoint | alarm list visible to the marina at last |
-| 8 | Analytics demoted to L3 | nav reduced |
+| 8 | L2 guard screen | guard gets its marina face |
+| 9 | Analytics demoted to L3, nav reduced to 4 | the simplicity counts met |
+| 10 | **One deployment runbook: guard + UI together**, acceptance measured on the NUC | numbers before the merge to `main`, not after |
 
-Step 1 before step 4 matters: with the contract answerable by `curl`, the L1 screen is a
-rendering job against a fixed shape. That is the same discipline that made guard's step 5
-useful before it had any UI, and it is what let the operator runbook be written against
-`curl` alone.
-
-**Ordering note.** The brief's sequence is UI v2 audit and spec → access-control plan → UI
-implementation → one deployment covering guard and UI. Steps 1 and 3 above are the only ones
-that could start before the access-control change; step 2 belongs to it. Nothing here
-touches production until that single combined deployment.
+Step 1 before step 4 matters: with CORE answerable by `curl`, L1 is a rendering job against a
+fixed shape. Same discipline that made guard's measurement stage useful before it had any UI.
 
 ---
 
-## 6. What I am NOT proposing
+# 11. Deferred — not required for the UI to work
 
-- **No rebuild of `BerthOccupancy`'s detection and matching.** The data and thresholds are
-  good; only placement changes.
-- **No change to the admin profile** beyond what the brief requires. Temperature, moisture,
-  breakers, CPU, disk, thresholds, confidence and the detections list all stay there.
-- **No new charting.** Analytics moves depth; it does not change.
+Found during the foundation work. **Yours to prioritise; none of it is in the build above.**
+
+| | Item | Why deferred |
+|---|---|---|
+| D1 | **ERP key rotation.** A 10-year `external_api` JWT, and the ERP `X-API-Key` is compiled into the mobile bundle (`EXPO_PUBLIC_ERP_API_KEY`) so it must be assumed known. Procedure written (`docs/erp_key_rotation.md`); precondition is that no shipped client depends on it. | sequenced behind ERP taking over `/scan` |
+| D2 | **`usage/history` docstring says admin-only; the code is `require_any_role`** and it returns `customer_name` and `nfc_user_id`. Doc/code drift of the same shape as the `require_control` finding. | resolved by **BLOCK-4** either way |
+| D3 | **The gateway self-proxy mints a real admin JWT** (5 min, first active admin's id and email) and `X-Ext-Api-Caller` is a provenance hint, not a boundary. Documented as such; worth a synthetic principal instead of a real user's identity. | works correctly; the objection is to the blast radius if the secret leaks |
+| D4 | **NFC is absent from the API catalog entirely**, so `/api/ext/nfc/...` always 403s. The ERP reaches NFC only on the direct `X-API-Key` channel. Intentional, undocumented. | now documented here; no change needed |
+| D5 | **`_make_internal_admin_jwt` is duplicated** byte-for-byte in `external_api_gateway.py` and `external_api_admin.py` | two copies of a token minter is one too many |
+| D6 | **No retention policy** except `error_logs`; no disk-full guard | pre-existing, unchanged |
+| D7 | **Static JWT secret, anonymous MQTT, unauthenticated camera stream, brute-forceable OTP** | from the 2026-06-10 audit; nothing applied |
+| D8 | **Comm-loss watchdog misses cabinets already offline at backend restart**; stale sessions from that window need manual SQL | known since v3.39 |
+| D9 | **Nothing enforces that the git hooks are installed** (`core.hooksPath` can be unset) | accepted knowingly |
+| D10 | **Open firmware questions**: packet timestamping (the `millis()` rollover that silences a cabinet at 24.85 days), per-valve fault in the status topic, `config/hardware` fitting in one publish | a list for when a firmware conversation opens, not a request |
+| D11 | **Mobile app release** carrying the water-NFC fixes. Mode 2 is blocked on it; mode 1 is not | sequenced with BLOCK-1 |
+| D12 | **`PedestalControlCenter` is 1 468 lines with 27 `useState`** | the admin profile keeps it; the marina profile does not touch it |
+
+---
+
+# 12. What I am not proposing
+
+- **No rebuild of occupancy detection or matching.** The data and thresholds are good; only
+  placement changes.
+- **No change to the admin profile** beyond the one new marina alarm endpoint.
+- **No new charting.** Analytics changes depth, not content.
 - **No touching `energy_intervals`.** Historical billing stays as written.
-- **No notification path.** Notifications to the marina stay off until you have watched a
-  week; there is no built-and-disabled path to switch on by accident.
-
----
-
-## 7. Decisions needed
-
-| | Decision |
-|---|---|
-| **[DECIDE 1]** | `berth_assignments` shape (§1.1), especially the shared-valve asymmetry |
-| **[DECIDE 2]** | `Berth.berth_number` authoritative; `energy_intervals` untouched (§1.2) |
-| **[DECIDE 3]** | The status precedence order and its nine sentences (§1.3) |
-| **[DECIDE 4]** | Shared light/guard stay on the L1 row with "also berths …" wording, or move to berth detail (§3) |
-
-And the open questions from the audit that change what gets built:
-
-- **How many berths does one pedestal serve at Krk in practice?** If one, [DECIDE 4] is
-  moot and §1.1's asymmetry never bites. This is the single answer that would most simplify
-  the work.
-- **Does `Berth Occupancy` survive as a marina page** once berths are the dashboard?
-- **Should `data_mode: synthetic`** (`Dashboard.tsx:54`) be visible in this profile at all?
+- **No notification path**, not even disabled.
+- **No QR.**
+- **No multi-tenant keying.** One NUC per marina; the ext-API key is per-marina by deployment.

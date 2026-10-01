@@ -620,8 +620,29 @@ def test_tc_six_13_erp_payload_for_a_water_session(client, auth_headers, six_pid
         f"register (987.6) leaking into a water session is a billing fault. None, not 0.0: "
         f"this outlet does not measure kWh, which is different from measuring zero"
     )
-    assert body["estimated_cost"] is None, (
-        "a euro figure priced from the kWh tariff must not be attached to litres"
+    # Rewritten 2026-10-01. This asserted `estimated_cost is None` on the reasoning that "a
+    # euro figure priced from the kWh tariff must not be attached to litres" — right reasoning,
+    # wrong conclusion. `BillingConfig.liter_price_eur` has existed all along and
+    # `invoice_service` has always used it, so None was not "no tariff exists", it was this
+    # function not reaching for the one that does. A customer filling a tank in MODE 2 saw a
+    # blank where the running cost belongs, on the screen whose purpose is the running cost.
+    # The tariff is read through the API, not through a directly-opened session: the app and a
+    # hand-opened UserSessionLocal do not necessarily resolve to the same file under the test
+    # harness, and an assertion built on the wrong one fails for a reason that has nothing to
+    # do with the behaviour under test.
+    cfg = client.get("/api/billing/config", headers=auth_headers)
+    assert cfg.status_code == 200, cfg.text
+    liter_price = cfg.json()["liter_price_eur"]
+    kwh_price = cfg.json()["kwh_price_eur"]
+
+    assert body["estimated_cost"] == round(body["water_liters"] * liter_price, 4), (
+        f"a water session must be priced at the WATER tariff: expected "
+        f"{round(body['water_liters'] * liter_price, 4)} "
+        f"({body['water_liters']} L x {liter_price}), got {body['estimated_cost']!r}"
+    )
+    assert body["estimated_cost"] != round(body["water_liters"] * kwh_price, 4), (
+        "litres priced at the kWh tariff — the two tariffs must not be interchangeable "
+        "(if they are numerically equal, change one in the test fixture)"
     )
 
 

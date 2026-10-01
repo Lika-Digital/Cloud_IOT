@@ -366,15 +366,27 @@ def build_session_payload(db, user_db, session) -> dict:
     end = session.ended_at or datetime.utcnow()
     duration_minutes = round(max(0.0, (end - session.started_at).total_seconds()) / 60.0, 2)
 
-    # Priced from the kWh tariff, so it applies to electricity only. A water session gets
-    # None rather than a euro figure derived from the wrong tariff — and in MODE 1 ERP
-    # prices everything anyway; this field is an estimate for display, never the invoice.
+    # Priced from the tariff that matches the session type. An estimate for DISPLAY only —
+    # never the invoice (invoice_service writes that) and irrelevant in MODE 1, where the ERP
+    # prices everything.
+    #
+    # v3.43 — water is priced too. `BillingConfig.liter_price_eur` has existed since the
+    # billing config was introduced and `invoice_service` has always used it, so returning
+    # None for water was not "no tariff exists" — it was this function not reaching for the
+    # one that does. A customer filling a tank in MODE 2 saw a blank where the running cost
+    # should be, on the screen that exists to show them the running cost.
+    #
+    # Stays None when the quantity itself is None: a cost computed from an unknown
+    # consumption would be a number with nothing behind it.
     estimated_cost = None
     try:
         from ..auth.customer_models import BillingConfig
         billing = user_db.get(BillingConfig, 1)
-        if billing is not None and energy_kwh is not None:
-            estimated_cost = round(energy_kwh * (billing.kwh_price_eur or 0.0), 4)
+        if billing is not None:
+            if is_water and water_liters is not None:
+                estimated_cost = round(water_liters * (billing.liter_price_eur or 0.0), 4)
+            elif not is_water and energy_kwh is not None:
+                estimated_cost = round(energy_kwh * (billing.kwh_price_eur or 0.0), 4)
     except Exception:
         estimated_cost = None
 

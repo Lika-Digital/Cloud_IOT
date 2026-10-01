@@ -1834,12 +1834,22 @@ async def _handle_event_user_plugged_out(db, pedestal_id: int, outlet_id: str, r
         logger.info("[Event] UserPluggedOut %s — stopped active session %d", outlet_id, active.id)
 
         # v3.26 — ERP webhook: session ended via unplug (de-duped vs SessionEnded).
-        if not is_water:
-            from . import erp_webhook
-            if erp_webhook.mark_ended(active.id):
-                _pl = erp_webhook.build(db, active, "session_ended")
-                if _pl is not None:
-                    asyncio.create_task(erp_webhook.post_erp_event(_pl))
+        # v3.43 — WATER IS REPORTED TO THE ERP, exactly like electricity.
+        #
+        # This was guarded by `if not is_water:`, as all three ERP webhook sites were, so a
+        # water session was NEVER reported. In MODE 1 the ERP bills: a customer could draw
+        # 300 litres against a tag they scanned and the ERP would never learn the session
+        # existed. Unbilled water — a revenue hole, not a simplification.
+        #
+        # The guard was consistent with the old world, where water had no tag and no customer
+        # to attribute to. The six-tag model's premise is that water bills like electricity,
+        # which is what makes it wrong now. `build_session_payload` already carries
+        # `session_type` and `water_liters`, so the ERP can tell the two apart.
+        from . import erp_webhook
+        if erp_webhook.mark_ended(active.id):
+            _pl = erp_webhook.build(db, active, "session_ended")
+            if _pl is not None:
+                asyncio.create_task(erp_webhook.post_erp_event(_pl))
 
     _set_socket_connected(db, pedestal_id, socket_id, False)
     # v3.25 — plug removed: clear any plug-in pending marker so the socket
@@ -1937,11 +1947,21 @@ async def _handle_event_outlet_activated(db, pedestal_id: int, outlet_id: str, r
     await _broadcast_socket_state(pedestal_id, socket_id, "active", resource=resource)
 
     # v3.26 — ERP webhook: socket activated.
-    if not is_water:
-        from . import erp_webhook
-        _pl = erp_webhook.build(db, session, "session_activated")
-        if _pl is not None:
-            asyncio.create_task(erp_webhook.post_erp_event(_pl))
+    # v3.43 — WATER IS REPORTED TO THE ERP, exactly like electricity.
+    #
+    # This was guarded by `if not is_water:`, as all three ERP webhook sites were, so a
+    # water session was NEVER reported. In MODE 1 the ERP bills: a customer could draw
+    # 300 litres against a tag they scanned and the ERP would never learn the session
+    # existed. Unbilled water — a revenue hole, not a simplification.
+    #
+    # The guard was consistent with the old world, where water had no tag and no customer
+    # to attribute to. The six-tag model's premise is that water bills like electricity,
+    # which is what makes it wrong now. `build_session_payload` already carries
+    # `session_type` and `water_liters`, so the ERP can tell the two apart.
+    from . import erp_webhook
+    _pl = erp_webhook.build(db, session, "session_activated")
+    if _pl is not None:
+        asyncio.create_task(erp_webhook.post_erp_event(_pl))
 
 
 async def _handle_event_telemetry_update(db, pedestal_id: int, outlet_id: str, resource: str, data: dict):
@@ -2047,12 +2067,22 @@ async def _handle_event_session_ended(db, pedestal_id: int, outlet_id: str, reso
     logger.info("[Event] SessionEnded %s → completed session %d", outlet_id, session.id)
 
     # v3.26 — ERP webhook: session ended (any cause). De-duped across end paths.
-    if not is_water:
-        from . import erp_webhook
-        if erp_webhook.mark_ended(session.id):
-            _pl = erp_webhook.build(db, session, "session_ended")
-            if _pl is not None:
-                asyncio.create_task(erp_webhook.post_erp_event(_pl))
+    # v3.43 — WATER IS REPORTED TO THE ERP, exactly like electricity.
+    #
+    # This was guarded by `if not is_water:`, as all three ERP webhook sites were, so a
+    # water session was NEVER reported. In MODE 1 the ERP bills: a customer could draw
+    # 300 litres against a tag they scanned and the ERP would never learn the session
+    # existed. Unbilled water — a revenue hole, not a simplification.
+    #
+    # The guard was consistent with the old world, where water had no tag and no customer
+    # to attribute to. The six-tag model's premise is that water bills like electricity,
+    # which is what makes it wrong now. `build_session_payload` already carries
+    # `session_type` and `water_liters`, so the ERP can tell the two apart.
+    from . import erp_webhook
+    if erp_webhook.mark_ended(session.id):
+        _pl = erp_webhook.build(db, session, "session_ended")
+        if _pl is not None:
+            asyncio.create_task(erp_webhook.post_erp_event(_pl))
 
     await ws_manager.broadcast({
         "event": "session_completed",

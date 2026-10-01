@@ -994,3 +994,146 @@ def test_tc_six_15e_outlets_endpoint_carries_the_valve_state(client, auth_header
         "an electricity socket must send null, not a state: null means 'read the live store'. "
         "Sending a snapshot here would put a second, slower opinion of socket state on screen"
     )
+
+# ═══ TC-SIX-16 ════════════════════════════════════════════════════════════════
+
+def test_tc_six_16_water_sessions_reach_the_erp(six_pid):
+    """A water session must be reported to the ERP, exactly like an electricity one.
+
+    All three ERP webhook sites were guarded by `if not is_water:`, so a water session was
+    NEVER reported. In MODE 1 the ERP bills — a customer could draw 300 litres against a tag
+    they scanned and the ERP would never learn the session existed. Unbilled water.
+
+    The guard made sense in the world where water had no tag and no customer to attribute to.
+    The six-tag model's premise is that water bills like electricity, which is what turned a
+    simplification into a revenue hole.
+
+    Asserted at the payload builder rather than by driving MQTT: the question is whether a
+    water session produces a well-formed ERP event at all, and the three call sites are now
+    unconditional, which `test_tc_six_16b` checks structurally.
+    """
+    from app.config import settings
+    from app.services import erp_webhook
+    from app.models.session import Session
+    from app.models.valve_config import ValveConfig
+
+    _clear(six_pid)
+    # `build` returns None when no webhook is configured, so a site with no ERP would make
+    # this test vacuously pass. Configure one.
+    prev_url = settings.erp_webhook_url
+    settings.erp_webhook_url = "https://erp.example.test/hook"
+    db = _S()
+    try:
+        vc = db.query(ValveConfig).filter(
+            ValveConfig.pedestal_id == six_pid, ValveConfig.valve_id == 1).first()
+        vc.meter_total_l = 300.0
+        ses = Session(pedestal_id=six_pid, socket_id=1, type="water", status="completed",
+                      started_at=datetime.utcnow(), ended_at=datetime.utcnow(),
+                      water_liters=300.0, nfc_user_id="erp-water-billing")
+        db.add(ses)
+        db.commit()
+
+        payload = erp_webhook.build(db, ses, "session_ended")
+    finally:
+        db.close()
+        settings.erp_webhook_url = prev_url
+
+    assert payload is not None, (
+        "a completed water session produced NO ERP event; in MODE 1 that is water drawn "
+        "against a scanned tag that the ERP never hears about"
+    )
+    assert payload["event"] == "session_ended"
+    assert payload["session_type"] == "water"
+    assert payload["socket_id"] == "V1", (
+        f"the ERP reconciles on this string; got {payload['socket_id']!r}"
+    )
+    assert payload["water_liters"] == 300.0, (
+        f"the billable quantity must be in the payload; got {payload.get('water_liters')!r}"
+    )
+    assert payload["customer_id"] == "erp-water-billing", (
+        "the charge must carry whoever scanned the tag"
+    )
+    assert payload["energy_kwh"] is None, (
+        "a water session must not carry a kWh figure — None, not 0.0"
+    )
+
+
+def test_tc_six_16b_no_erp_webhook_site_is_gated_on_session_type():
+    """Structural: no `if not is_water` guard may sit on an ERP webhook call.
+
+    A source-level assertion because the defect was invisible at every other level — the three
+    sites each looked locally reasonable, the suite was green, and nothing anywhere said "water
+    is excluded from billing". Re-introducing the guard would again be a one-line change that
+    reads as a tidy-up.
+    """
+    import io as _io
+    import re
+
+    # Any guard that would make an ERP webhook conditional on the session being electricity.
+    _GUARD_RE = (
+        r"if\s+not\s+is_water\s*:"
+        r"|if\s+is_water\s*:"
+        r"|type\s*[!=]=\s*['\"]water"
+    )
+
+    src = _io.open("backend/app/services/mqtt_handlers.py", encoding="utf-8").read()
+    lines = src.splitlines()
+
+    offenders = []
+    for i, line in enumerate(lines):
+        if "erp_webhook" not in line or line.lstrip().startswith("#"):
+            continue
+        # Walk back over the enclosing block for a session-type guard.
+        for back in range(i - 1, max(i - 12, -1), -1):
+            prev = lines[back]
+            if prev.lstrip().startswith("#"):
+                continue
+            if re.search(_GUARD_RE, prev):
+                offenders.append((back + 1, prev.strip(), i + 1, line.strip()))
+                break
+            if prev.strip() and not prev.startswith(" " * (len(line) - len(line.lstrip()))):
+                break
+
+    assert not offenders, (
+        "ERP webhook call(s) gated on session type - water would go unbilled in MODE 1:" + "\n"
+        + "\n".join(
+            f"  line {g}: {gt}  ->  line {c}: {ct}" for g, gt, c, ct in offenders)
+    )
+
+
+def test_tc_six_16c_analytics_router_requires_authentication():
+    """Every /api/analytics route must carry an auth dependency.
+
+    The whole router had none. All-time consumption per socket and per pedestal, daily totals
+    and recent sensor readings answered any unauthenticated caller who knew the URL —
+    `SecurityMiddleware` logs and calls `call_next`, so it never blocked anything.
+
+    Asserted over the live route table rather than by reading the decorator, because the fix
+    was applied at the router and a route added later must inherit it. A per-endpoint check
+    would pass while the next endpoint leaked.
+    """
+    from app.main import app
+
+    unguarded = []
+    for route in app.routes:
+        path = getattr(route, "path", "")
+        if not path.startswith("/api/analytics"):
+            continue
+        dependant = getattr(route, "dependant", None)
+        names = set()
+        stack = [dependant] if dependant else []
+        while stack:
+            d = stack.pop()
+            if d is None:
+                continue
+            call = getattr(d, "call", None)
+            if call is not None:
+                names.add(getattr(call, "__name__", ""))
+            stack.extend(getattr(d, "dependencies", []) or [])
+        if not any(n.startswith("require_") or n == "_get_current_user" for n in names):
+            unguarded.append(path)
+
+    assert not unguarded, (
+        f"unauthenticated /api/analytics routes: {sorted(set(unguarded))}. These expose "
+        f"consumption history to anyone who knows the URL"
+    )

@@ -19,8 +19,23 @@ def _guard_topics() -> list[str]:
         return []
 
 
+# THREE topic families are subscribed. Exactly ONE is published by real hardware.
+#
+# Corrected 2026-10-01 — the comments below used to label the wrong family "(real hardware)",
+# which is how `WTR-1` reached a production allowlist and how a whole family of handlers came
+# to be maintained against nothing. A full MQTT capture from MAR_KRK_ORM_01 (firmware 3.1.0,
+# 2026-09-29) contains ONLY `opta/...` topics.
+#
+#   opta/*            REAL. Verified by capture. Everything new targets this.
+#   marina/cabinet/*  ASPIRATIONAL. Nothing publishes it, nothing bridges the prefixes, and
+#                     every MARINA_* handler fires only from tests. Not to be extended.
+#   pedestal/*        LEGACY. The deleted simulator and the manual test tool spoke this.
+#                     Kept because the test tool still exists; no firmware has ever used it.
+#
+# Subscribing to all three is cheap and harmless. BELIEVING all three is what cost us.
 TOPICS = [
-    # Legacy pedestal/... schema (test tool, simulator)
+    # Legacy pedestal/... schema — test tool only; the simulator that spoke it was deleted
+    # 2026-03-15 (be0df4f). No firmware publishes this.
     "pedestal/+/socket/+/status",
     "pedestal/+/socket/+/power",
     "pedestal/+/water/flow",
@@ -29,14 +44,16 @@ TOPICS = [
     "pedestal/+/sensors/moisture",
     "pedestal/+/diagnostics/response",
     "pedestal/+/register",
-    # Marina cabinet firmware schema (real hardware)
+    # Marina cabinet schema — ASPIRATIONAL, NOT real hardware. This comment said
+    # "(real hardware)" and said the opposite of the truth. Do not extend; do not let new
+    # code assume these topics exist.
     "marina/cabinet/+/sockets/+/state",
     "marina/cabinet/+/water/+/state",
     "marina/cabinet/+/door/state",
     "marina/cabinet/+/status",
     "marina/cabinet/+/events",
     "marina/cabinet/+/acks",
-    # Opta firmware schema (cabinetId in payload, not in topic path)
+    # Opta firmware schema — THE REAL ONE. cabinetId is in the payload, not the topic path.
     "opta/status",
     "opta/sockets/+/status",
     "opta/sockets/+/power",

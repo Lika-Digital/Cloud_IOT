@@ -5,9 +5,26 @@ from ..database import get_db
 from ..models.session import Session
 from ..models.sensor_reading import SensorReading
 from ..time_utils import iso_z
+from ..auth.dependencies import require_any_role
 from datetime import datetime, timedelta
 
-router = APIRouter(prefix="/api/analytics", tags=["analytics"])
+# v3.43 — THIS ROUTER HAD NO AUTHENTICATION DEPENDENCY AT ALL.
+#
+# Found 2026-10-01 while auditing what reaches the ERP. Every endpoint here — all-time
+# consumption per socket, per pedestal, daily totals, recent sensor readings — answered any
+# unauthenticated caller who knew the URL. `SecurityMiddleware` does not help: it logs and
+# calls `call_next`, nothing more.
+#
+# Applied at the ROUTER, not per endpoint, so an endpoint added here later cannot be
+# forgotten. `require_any_role` rather than `require_admin` because this is operations data
+# — marina staff answering "how much did berth 3 use last week" — and that matches every
+# other read in the system. The web UI already sends its operator JWT on these calls, so
+# nothing legitimate breaks.
+router = APIRouter(
+    prefix="/api/analytics",
+    tags=["analytics"],
+    dependencies=[Depends(require_any_role)],
+)
 
 
 @router.get("/consumption/daily")

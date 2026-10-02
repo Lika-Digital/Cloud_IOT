@@ -99,6 +99,7 @@ def usage_rows(
     db,
     pedestal_id: int,
     *,
+    include_identity: bool = False,
     socket_id: int | None = None,
     resource: str | None = None,
     year: int | None = None,
@@ -122,10 +123,23 @@ def usage_rows(
         q = q.filter(SessionModel.started_at >= start, SessionModel.started_at < end)
     sessions = q.order_by(SessionModel.started_at.desc()).all()
 
-    names = _resolve_customer_names({s.customer_id for s in sessions})
+    # v3.44 — IDENTITY IS OPT-IN, AND OFF BY DEFAULT.
+    #
+    # `customer_name` and `nfc_user_id` used to be in every row, and the endpoint above
+    # is `require_any_role` — so marina staff could read the name of every customer who
+    # had ever used a socket. Decided 2026-10-01: marina staff do not see customer names.
+    #
+    # Default False rather than True-with-a-filter, so a future caller that forgets to
+    # think about it leaks nothing. The admin path asks for identity explicitly, which is
+    # also the line a reviewer can find.
+    #
+    # `customer_id` STAYS in both shapes: it is an opaque integer, it is what the
+    # monthly report groups by, and without it the rows cannot be told apart. The name
+    # is the exposure, not the key.
+    names = _resolve_customer_names({s.customer_id for s in sessions}) if include_identity else {}
     rows: list[dict] = []
     for s in sessions:
-        rows.append({
+        row = {
             "session_id": s.id,
             "socket_id": s.socket_id,
             "type": s.type,
@@ -134,10 +148,12 @@ def usage_rows(
             "energy_kwh": s.energy_kwh,
             "water_liters": s.water_liters,
             "customer_id": s.customer_id,
-            "customer_name": names.get(s.customer_id),
-            "nfc_user_id": s.nfc_user_id,
             "end_reason": s.end_reason,
-        })
+        }
+        if include_identity:
+            row["customer_name"] = names.get(s.customer_id)
+            row["nfc_user_id"] = s.nfc_user_id
+        rows.append(row)
     return rows
 
 
@@ -201,13 +217,22 @@ def build_report_text(db, pedestal_id: int, year: int, month: int) -> str:
         sub_kwh = 0.0
         sub_l = 0.0
         for r in grp:
-            who_parts = []
-            if r["customer_name"]:
-                cid = f" (#{r['customer_id']})" if r["customer_id"] is not None else ""
-                who_parts.append(f"{r['customer_name']}{cid}")
-            if r["nfc_user_id"]:
-                who_parts.append(f"nfc:{r['nfc_user_id']}")
-            who = " / ".join(who_parts) if who_parts else "—"
+            # v3.44 — NO CUSTOMER NAMES IN THE REPORT.
+            #
+            # This printed `customer_name` and `nfc_user_id`, and the download endpoint is
+            # `require_any_role` — so the name leak closed on /usage/history was still open
+            # through the monthly report. Fixed by dropping the fields rather than by
+            # tightening the endpoint to admin: that would be an access-control boundary
+            # change, and it is not the right fix anyway.
+            #
+            # The division is the one the owner stated: WE know the berth and the
+            # consumption; the ERP knows the customer. `customer_id` is the join key and
+            # stays — it is an opaque integer, and the ERP holds the name. `nfc_user_id`
+            # goes because it is frequently the customer's EMAIL (see /api/nfc/scan, which
+            # normalises to `customer.email or str(customer.id)`), which makes it
+            # identifying in exactly the way a name is.
+            cid = r["customer_id"]
+            who = f"customer #{cid}" if cid is not None else "—"
             if resource == "water":
                 amt = f"{(r['water_liters'] or 0.0):.1f} L".rjust(12)
                 sub_l += r["water_liters"] or 0.0

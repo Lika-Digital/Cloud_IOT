@@ -47,7 +47,19 @@ def get_db():
         db.close()
 
 
-def init_db():
+def import_all_models():
+    """Import every model module so `Base.metadata` is complete.
+
+    v3.44 — extracted from `init_db()` so there is ONE list.
+    `tests/backend/conftest.py` kept its own copy and called `create_all` against it, so a
+    model added to production had no table in the test database until someone remembered the
+    second list. `berth_assignments` was the one that found it: the table existed in
+    production and every marina test failed with "no such table".
+
+    Two hand-maintained lists of the same thing is the pattern this codebase keeps paying for
+    — see docs/engineering_notes.md on claims that nothing verifies. The import below is now
+    the only list, and both callers use it.
+    """
     from .models import pedestal, session, sensor_reading, error_log, active_alarm  # noqa: F401
     from .models import pedestal_config  # noqa: F401
     from .models import external_api  # noqa: F401
@@ -61,7 +73,21 @@ def init_db():
     from .models import nfc_tag  # noqa: F401 — v3.26
     from .models import nfc_pending_session  # noqa: F401 — v3.26
     from .models import energy_interval  # noqa: F401 — v3.35
+    from .models import berth_assignment  # noqa: F401 — v3.44 marina profile
+    # Was registered ONLY by a top-level import in main.py and by conftest's own
+    # list — so three places registered models and this one was missing it. Folded in
+    # 2026-10-02 when the lists were unified.
+    from .models import pilot_assignment  # noqa: F401
     from .guard import models as guard_models  # noqa: F401 — v3.42 guard tables
+    # The auth/users.db models live on UserBase, not Base, so `create_all(bind=engine)`
+    # ignores them — but they must still be imported for UserBase.metadata to be
+    # complete when the caller creates the user database.
+    from .auth import models as auth_models  # noqa: F401
+    from .auth import customer_models, contract_models, berth_models  # noqa: F401
+
+
+def init_db():
+    import_all_models()
     Base.metadata.create_all(bind=engine)
     _migrate_schema()
 

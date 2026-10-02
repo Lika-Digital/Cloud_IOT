@@ -1,9 +1,26 @@
 """Usage history + monthly report endpoints (v3.31).
 
-All endpoints are admin-only (``require_admin``). The read-only GETs are also
-opt-in exposable to the ERP via the External API Gateway (see api_catalog) — the
-gateway proxies with an internal admin token and monitor-mode permits GET only,
-so report DELETION can never be reached from outside.
+ACCESS, CORRECTED 2026-10-01. This docstring said "All endpoints are admin-only
+(``require_admin``)" and had said so since v3.31. **None of them was.** The real gates:
+
+  * the three read endpoints — ``require_any_role`` (any operator, including monitor)
+  * ``DELETE`` on a report      — ``require_control`` (not admin either)
+
+The third such finding in this codebase, after the NFC provisioning routes and
+``/api/analytics``. A docstring is a claim, not a control — see
+``docs/engineering_notes.md``.
+
+The read gate is LEFT as ``require_any_role`` deliberately: "what did berth 3 use last
+week" is operations, and that is the audience. What changed is the PAYLOAD —
+``customer_name`` and ``nfc_user_id`` are returned only to an admin, because marina
+staff do not see customer names (decided 2026-10-01).
+
+The read-only GETs are also opt-in exposable to the ERP via the External API Gateway
+(see api_catalog) — the gateway proxies with an internal admin token and monitor-mode
+permits GET only, so report DELETION can never be reached from outside. NOTE: because
+the proxy token is admin, a gateway-proxied call DOES receive the identity fields.
+That is correct — the ERP already holds the customers; it is the marina operator this
+withholds them from.
 
 Usage data comes from completed ``sessions`` rows (retention-safe, kept forever).
 Monthly report files live under ``settings.reports_dir`` and are removed only
@@ -45,19 +62,25 @@ def get_usage_history(
     socket_id: int | None = Query(None, ge=1, le=4),
     month: str | None = Query(None, description="Optional 'YYYY-MM' filter"),
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_any_role),
+    user: User = Depends(require_any_role),
 ):
     """Completed-session usage records for a socket/valve (newest first).
 
     Without ``month`` returns all-time history; ``socket_id``/``resource``
-    narrow to one outlet. Customer / NFC fields are blank for sessions the NUC
-    never attributed (e.g. Smart Mode off — standalone Opta).
+    narrow to one outlet.
+
+    ``customer_name`` and ``nfc_user_id`` appear ONLY for an admin caller. Marina staff
+    get the consumption and the opaque ``customer_id``, which is everything the
+    operational question needs; the name is an exposure with no operational payoff on a
+    wall-mounted screen. For an admin, the fields are present but still blank for
+    sessions the NUC never attributed (Smart Mode off — standalone Opta).
     """
     year = mon = None
     if month:
         year, mon = _parse_month(month)
     return svc.usage_rows(
         db, pedestal_id,
+        include_identity=(user.role == "admin"),
         socket_id=socket_id, resource=resource, year=year, month=mon,
     )
 

@@ -22,6 +22,7 @@ from .services.simulator_manager import simulator_manager
 from .services.session_service import session_service
 from .services.websocket_manager import ws_manager
 from .routers import pedestals, sessions, controls, analytics, predictions, websocket, camera, diagnostics
+from .routers import marina as marina_router  # v3.44 — marina Monitoring & Control profile
 from .routers import auth as auth_router
 from .routers import totp as totp_router
 from .routers import customer_auth, customer_sessions, customer_invoices, billing, chat, system_health
@@ -899,6 +900,7 @@ app.include_router(meter_load_router.router)    # v3.11 — internal load monito
 app.include_router(usage_history_router.router) # v3.31 — usage history + monthly reports
 app.include_router(data_export_router.router)   # v3.37 — DB backup + usage export downloads
 app.include_router(guard_router)
+app.include_router(marina_router.router)         # v3.44 — marina profile CORE
 app.include_router(ext_pedestal_router.router)   # must be before gateway catch-all
 app.include_router(ext_breaker_router.router)    # v3.8 — must be before gateway catch-all
 app.include_router(ext_meter_load_router.router) # v3.11 — must be before gateway catch-all

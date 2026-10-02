@@ -165,10 +165,30 @@ def test_standalone_completes_when_draw_stops_and_shows_in_history():
     db = _S()
     try:
         rows = svc.usage_rows(db, PID, socket_id=1, resource="electricity")
+        # Identity is opt-in from v3.44, so the DEFAULT call must not carry it at all.
+        # Asserted as key ABSENCE rather than a None value: a None would mean "we looked
+        # and there was no customer", which is a different claim from "this caller is not
+        # shown customers".
+        rows_with_identity = svc.usage_rows(
+            db, PID, socket_id=1, resource="electricity", include_identity=True,
+        )
     finally:
         db.close()
+
     assert len(rows) == 1
-    assert rows[0]["customer_name"] is None     # standalone — customer blank
+    assert "customer_name" not in rows[0], (
+        "the default call leaks the customer name; identity must be opt-in so a caller "
+        "that forgets to think about it exposes nothing"
+    )
+    assert "nfc_user_id" not in rows[0]
+    assert rows[0]["customer_id"] is None, (
+        "a standalone session has no customer — the opaque id stays in the shape and is "
+        "null, which is the honest answer"
+    )
+
+    # And the opt-in path still answers the question it exists for.
+    assert "customer_name" in rows_with_identity[0]
+    assert rows_with_identity[0]["customer_name"] is None   # standalone — nobody to name
 
 
 def test_no_standalone_session_when_smart_mode_on():

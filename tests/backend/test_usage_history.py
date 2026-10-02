@@ -140,7 +140,21 @@ def test_month_boundary_filtering():
 
 
 def test_customer_and_nfc_resolved():
-    """When a session has a customer / NFC id, the report names them."""
+    """The monthly report identifies a session by customer_id and NOTHING ELSE.
+
+    Rewritten 2026-10-01, not adjusted to pass. The rule inverted: this asserted that the
+    report NAMES the customer. It must not.
+
+    The report's download endpoint is `require_any_role`, so a name in the text is readable by
+    marina staff — the same leak closed on `/usage/history`, still open through a second door.
+    Fixed by dropping the fields rather than tightening the endpoint, which would be an
+    access-control boundary change and is not the right fix: the division is that WE know the
+    berth and the consumption while the ERP knows the customer.
+
+    `nfc_user_id` is asserted absent too, and that is the less obvious half: `/api/nfc/scan`
+    normalises it to `customer.email or str(customer.id)`, so in practice it is frequently an
+    EMAIL — identifying in exactly the way a name is.
+    """
     from app.services import usage_report_service as svc
     from app.auth.customer_models import Customer
     from app.auth.password import hash_password
@@ -164,8 +178,16 @@ def test_customer_and_nfc_resolved():
             text = svc.build_report_text(db, PID, 2026, 5)
     finally:
         db.close()
-    assert "Marina Guest" in text
-    assert "nfc:ERP-777" in text
+    assert "Marina Guest" not in text, (
+        "the customer's NAME is in a report any operator can download"
+    )
+    assert "ERP-777" not in text, (
+        "nfc_user_id is in the report; it is often the customer's email address"
+    )
+    assert f"customer #{cid}" in text, (
+        "the opaque customer_id must remain — it is the key the ERP reconciles "
+        "against, and without it the rows cannot be told apart"
+    )
 
 
 # ── HTTP endpoints ─────────────────────────────────────────────────────────────

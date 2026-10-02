@@ -60,19 +60,17 @@ def setup_test_databases():
         patch("app.services.mqtt_client.mqtt_service.stop"),
         patch("app.services.simulator_manager.simulator_manager.stop"),
     ):
-        from app.database import Base
+        from app.database import Base, import_all_models
         from app.auth.user_database import UserBase
-        from app.models import pedestal, session as session_model, sensor_reading  # noqa
-        from app.models import pedestal_config, active_alarm, error_log, external_api, pilot_assignment, session_audit  # noqa
-        from app.models import socket_config, auto_activation_log  # noqa
-        from app.models import breaker_event  # noqa — v3.8
-        from app.models import valve_config  # noqa — v3.9
-        from app.models import led_schedule  # noqa — v3.10
-        from app.models import meter_load_alarm  # noqa — v3.11
-        from app.models import nfc_tag, nfc_pending_session  # noqa — v3.26
-        from app.models import energy_interval  # noqa — v3.35
-        from app.guard import models as guard_models  # noqa — v3.42 guard tables
-        from app.auth import models, customer_models, contract_models, berth_models  # noqa
+
+        # v3.44 — ONE list, shared with production.
+        #
+        # This block used to enumerate the models itself, and the two lists had
+        # already drifted in BOTH directions: conftest had `pilot_assignment` and
+        # `database.init_db` did not, while `berth_assignment` was added to production
+        # and every marina test failed with "no such table". A model's table either
+        # exists in both databases or the tests are not testing the application.
+        import_all_models()
 
         Base.metadata.drop_all(bind=test_engine)
         Base.metadata.create_all(bind=test_engine)

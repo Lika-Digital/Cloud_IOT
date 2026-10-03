@@ -11,6 +11,14 @@ import SystemHealth from './pages/SystemHealth'
 import Contracts from './pages/Contracts'
 import BerthOccupancy from './pages/BerthOccupancy'
 import ApiGateway from './pages/ApiGateway'
+// v3.44 — the marina Monitoring & Control profile. A separate route tree from the admin
+// dashboard on purpose: the admin surface stays exactly as it is.
+import MarinaDashboard from './pages/marina/MarinaDashboard'
+import BerthDetail from './pages/marina/BerthDetail'
+import MarinaWater from './pages/marina/MarinaWater'
+import MarinaAlarms from './pages/marina/MarinaAlarms'
+import MarinaGuard from './pages/marina/MarinaGuard'
+import MarinaSetup from './pages/marina/MarinaSetup'
 import LoginPage from './pages/LoginPage'
 import Register from './pages/Register'
 import ProtectedRoute from './components/auth/ProtectedRoute'
@@ -58,6 +66,15 @@ function AppInner() {
       >
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<Dashboard />} />
+        {/* Marina profile. Three levels, no more, and back is always visible. */}
+        <Route path="marina" element={<MarinaDashboard />} />
+        <Route path="marina/berth/:berthId" element={<BerthDetail />} />
+        <Route path="marina/water" element={<MarinaWater />} />
+        <Route path="marina/alarms" element={<MarinaAlarms />} />
+        <Route path="marina/guard" element={<MarinaGuard />} />
+        {/* Installation. The BACKEND enforces admin on the write; this route being
+            reachable is not what protects it. */}
+        <Route path="marina/setup/:pedestalId" element={<MarinaSetup />} />
         <Route path="analytics" element={<Analytics />} />
         <Route path="history" element={<History />} />
         <Route

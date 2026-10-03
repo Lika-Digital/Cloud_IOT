@@ -38,6 +38,7 @@ export default function Layout() {
   // v3.34 — Dashboard/Analytics/History + Billing/Customers/Contracts/Berths are
   // shared by all operators; only the three admin sections are gated by isAdmin.
   const NAV_ITEMS: NavItem[] = [
+    { to: '/marina', label: 'Marina', icon: '⚓', badge: 0 },
     { to: '/dashboard', label: 'Dashboard', icon: '⚡', badge: 0 },
     { to: '/analytics', label: 'Analytics', icon: '📊', badge: 0 },
     { to: '/history', label: 'History', icon: '📋', badge: 0 },

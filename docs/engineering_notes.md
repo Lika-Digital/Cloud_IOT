@@ -285,6 +285,38 @@ hardware it had never been checked against. Here, **a report** did.
 
 ---
 
+## 12. Unknown is a reason to look, not a reason to hide
+
+**v3.44, the marina dashboard.** The "Needs attention" filter selected `status === 'attention'`.
+It read as obviously correct. It meant that a pedestal which had gone **silent** — producing
+only `unknown` berths — rendered an **empty dashboard**: marina staff looking at a clean screen
+while nobody could see any of their berths.
+
+The blank screen this whole profile exists to prevent, appearing in exactly the situation where
+someone most needs telling.
+
+It surfaced only because an e2e spec fed the page a payload where every berth was `unknown`.
+Nothing in the component was wrong in isolation, and no amount of reading it would have shown
+the gap — the filter and the status vocabulary were each individually sensible.
+
+> **A state that means "we cannot see this" belongs in the view that means "someone should
+> look".** Unknown is not a quieter OK. Filtering, counting, sorting and alerting must all
+> treat it as actionable, and the only thing that differs is WHERE the person goes: the
+> pedestal, not the berth.
+
+That last clause is why `unknown` keeps its own status rather than being folded into
+`attention` — the sentence sends staff to the right place ("No contact with this pedestal",
+not "something is wrong at berth 3"), while the filter still shows them the row.
+
+**Enforced by:** the filter admits `attention` **and** `unknown`; the button's count is
+computed from the same predicate the filter uses, so the two cannot drift; and `TC-UIE-01`
+renders an unknown-only payload and requires the rows to be present.
+
+Related to rule 8 — zero and unknown are different values — one layer up: there it was about
+what a column may hold, here about what a view may omit.
+
+---
+
 ## Appendix — things that look like over-engineering and are not
 
 One line each on what they prevent, for whoever maintains this next. Each looks like needless

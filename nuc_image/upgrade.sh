@@ -2,13 +2,23 @@
 # ============================================================================
 # Cloud IoT NUC — In-place Upgrade Script
 #
-# Pulls the latest main branch from GitHub into ~/Cloud_IOT (the git repo),
-# copies changed files to /opt/cloud-iot (the running app), rebuilds the
-# frontend if needed, and restarts only the affected services.
+# Pulls a branch from GitHub into ~/Cloud_IOT (the git repo), copies changed
+# files to /opt/cloud-iot (the running app), rebuilds the frontend if needed,
+# and restarts only the affected services.
 # The .env file and databases are never touched.
 #
 # Usage (on the NUC):
-#   sudo bash ~/Cloud_IOT/nuc_image/upgrade.sh
+#   sudo bash ~/Cloud_IOT/nuc_image/upgrade.sh              # main — normal
+#   sudo bash ~/Cloud_IOT/nuc_image/upgrade.sh develop      # a test branch
+#
+# THE BRANCH ARGUMENT (v3.44). The default is and stays `main`, so every existing
+# instruction, cron entry and habit keeps working unchanged — and so the rollback
+# path is untouched by the existence of this argument.
+#
+# It exists so a release can be TESTED on the cabinet before `main` moves. While the
+# NUC runs a test branch, `main` is still the last known-good release: rolling back
+# is re-running this script with no argument, because nothing on `main` ever changed.
+# That is the whole rollback plan, and it needs no snapshot and no backup step.
 #
 # Requirements:
 #   - NUC must have internet access (GitHub reachable)
@@ -16,6 +26,9 @@
 #   - Application running at /opt/cloud-iot
 # ============================================================================
 set -euo pipefail
+
+# Branch to deploy. First positional argument; `main` when not given.
+BRANCH="${1:-main}"
 
 REPO_DIR="/home/cloud_iot/Cloud_IOT"
 APP_DIR="/opt/cloud-iot"
@@ -43,6 +56,7 @@ mkdir -p /var/log/cloud-iot
 echo "" >> "$LOG_FILE"
 echo "════════════════════════════════════════════════" >> "$LOG_FILE"
 echo "  Upgrade started: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$LOG_FILE"
+echo "  Branch: ${BRANCH}" >> "$LOG_FILE"
 echo "════════════════════════════════════════════════" >> "$LOG_FILE"
 
 echo ""
@@ -50,15 +64,25 @@ echo "╔═══════════════════════�
 echo "║         Cloud IoT NUC — Upgrade Script              ║"
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
+if [ "$BRANCH" != "main" ]; then
+  # Said loudly, because a NUC left on a test branch silently stops receiving releases.
+  echo -e "${YELLOW}${BOLD}  ⚠  Deploying branch '${BRANCH}', not main.${NC}"
+  echo -e "${YELLOW}     This is a TEST deployment. main is untouched and remains the"
+  echo -e "     rollback: re-run this script with no argument to return to it.${NC}"
+  echo ""
+fi
 
 # ── Ensure we're on main ─────────────────────────────────────────────────────
 phase "Current version"
 cd "$REPO_DIR"
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-if [ "$CURRENT_BRANCH" != "main" ]; then
-  warn "Repo is on branch '${CURRENT_BRANCH}' — switching to main"
+if [ "$CURRENT_BRANCH" != "$BRANCH" ]; then
+  warn "Repo is on branch '${CURRENT_BRANCH}' — switching to ${BRANCH}"
   git stash -q 2>/dev/null || true
-  git checkout main 2>&1 | tee -a "$LOG_FILE" || error "Failed to switch to main"
+  git fetch origin "$BRANCH" 2>&1 | tee -a "$LOG_FILE" \
+    || error "Cannot fetch branch '${BRANCH}' — does it exist on origin?"
+  git checkout "$BRANCH" 2>&1 | tee -a "$LOG_FILE" \
+    || error "Failed to switch to ${BRANCH}"
 fi
 CURRENT_COMMIT=$(git rev-parse --short HEAD)
 CURRENT_DESCR=$(git log -1 --pretty="%s" 2>/dev/null || echo "unknown")
@@ -67,9 +91,9 @@ info "Branch:  main"
 
 # ── Fetch latest ──────────────────────────────────────────────────────────────
 phase "Fetching latest from GitHub"
-git fetch origin main 2>&1 | tee -a "$LOG_FILE" || error "git fetch failed — check internet connection"
+git fetch origin "$BRANCH" 2>&1 | tee -a "$LOG_FILE" || error "git fetch failed — check internet connection"
 
-REMOTE_COMMIT=$(git rev-parse --short origin/main)
+REMOTE_COMMIT=$(git rev-parse --short "origin/${BRANCH}")
 NEEDS_PULL=false
 NEEDS_SYNC=false
 
@@ -96,7 +120,7 @@ if $NEEDS_PULL; then
   # Show what will be applied
   echo ""
   echo -e "  ${BOLD}Commits to apply:${NC}"
-  git log HEAD..origin/main --oneline | sed 's/^/    /' | tee -a "$LOG_FILE"
+  git log "HEAD..origin/${BRANCH}" --oneline | sed 's/^/    /' | tee -a "$LOG_FILE"
   echo ""
 fi
 
@@ -110,7 +134,7 @@ BACKEND_CHANGED=false
 FRONTEND_CHANGED=false
 
 if $NEEDS_PULL; then
-  CHANGED_FILES=$(git diff HEAD..origin/main --name-only)
+  CHANGED_FILES=$(git diff "HEAD..origin/${BRANCH}" --name-only)
   echo "$CHANGED_FILES" | grep -q "^backend/" && BACKEND_CHANGED=true
   echo "$CHANGED_FILES" | grep -qE "^frontend/" && FRONTEND_CHANGED=true
 elif $NEEDS_SYNC; then
@@ -132,7 +156,7 @@ echo ""
 # ── Pull (only if there are new commits) ─────────────────────────────────────
 if $NEEDS_PULL; then
   phase "Pulling latest code"
-  git pull origin main 2>&1 | tee -a "$LOG_FILE" || error "git pull failed"
+  git pull origin "$BRANCH" 2>&1 | tee -a "$LOG_FILE" || error "git pull failed"
 else
   phase "Syncing (git already up to date)"
 fi

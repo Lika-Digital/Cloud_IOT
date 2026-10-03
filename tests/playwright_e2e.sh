@@ -24,26 +24,46 @@ echo ""
 echo -e "${CYAN}${BOLD}[E2E] Playwright end-to-end tests${NC}"
 echo ""
 
-# ── Check Node / npm are available ────────────────────────────────────────────
+# ─── WHY THERE IS NO LONGER A SILENT exit 0 HERE ─────────────────────────────
+#
+# Three branches used to `exit 0` when they could not run: no node, no Playwright,
+# and no backend on :8000. All three reported SUCCESS for having verified nothing, and
+# on the 2026-09-30 push the last one did exactly that — the stage printed a skip and the
+# gate went green.
+#
+# The backend check was also simply WRONG. Every spec in frontend/e2e/ mocks its API with
+# Playwright's `page.route`, and playwright.config.ts starts Vite itself. None of them has
+# ever needed a live API, so the check skipped tests that would have passed.
+#
+# Now: a missing TOOL is a hard failure (fix your environment), and the backend is not
+# consulted at all. E2E_REQUIRED=0 is available for a deliberate local skip and still
+# prints what was not checked.
+
+E2E_REQUIRED="${E2E_REQUIRED:-1}"
+
+not_run() {
+    echo -e "${YELLOW}[!] E2E NOT RUN: $1${NC}"
+    if [ "$E2E_REQUIRED" = "1" ]; then
+        echo -e "${RED}    This is a FAILURE TO REPORT, not a pass. Nothing was verified.${NC}"
+        echo    "    Set E2E_REQUIRED=0 to skip deliberately."
+        exit 1
+    fi
+    echo    "    E2E_REQUIRED=0 — skipping deliberately. NOTHING WAS VERIFIED."
+    exit 0
+}
+
+# ── Node ─────────────────────────────────────────────────────────────────────
 if ! command -v node &>/dev/null; then
-    echo -e "${YELLOW}[!] Node.js not found — skipping Playwright.${NC}"
-    exit 0
+    not_run "Node.js not found. Install Node, or set E2E_REQUIRED=0."
 fi
 
-# ── Check frontend deps are installed ─────────────────────────────────────────
+# ── Playwright ───────────────────────────────────────────────────────────────
 if [ ! -d "frontend/node_modules/@playwright" ]; then
-    echo -e "${YELLOW}[!] Playwright not installed in frontend/node_modules.${NC}"
-    echo "    Run: cd frontend && npm install"
-    exit 0
+    not_run "Playwright is not installed. Run: cd frontend && npm install"
 fi
 
-# ── Skip if backend is not running (E2E needs live API on :8000) ──────────────
-if ! curl -sf http://localhost:8000/api/pedestals -o /dev/null 2>/dev/null; then
-    echo -e "${YELLOW}[!] Backend not reachable on :8000 — skipping Playwright.${NC}"
-    echo "    Start the backend then re-run: bash tests/playwright_e2e.sh"
-    exit 0
-fi
-
+# NOTE: no backend check. The specs mock their own API and Vite is started by
+# playwright.config.ts. A live backend is neither needed nor consulted.
 # ── Run Playwright ─────────────────────────────────────────────────────────────
 cd frontend
 # playwright.config.ts already configures both list + json reporters

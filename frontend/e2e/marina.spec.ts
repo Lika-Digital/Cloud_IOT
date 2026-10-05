@@ -163,7 +163,12 @@ test('TC-UIB-01 the marina dashboard boots and renders berth rows', async ({ pag
   await expect(page.getByText('Water leak detected')).toBeVisible()
   // Status is colour + icon + WORD. The word is what this asserts, because it is the part a
   // colour-blind user and a screen reader both depend on.
-  await expect(page.getByText('Needs attention').first()).toBeVisible()
+  //
+  // `exact: true` matters: the filter button reads 'Needs attention (2)', so a substring
+  // match finds the button as well as the badge and the assertion becomes ambiguous —
+  // which is how it passed alone and failed in the full suite. The badge is the one that
+  // carries the rule.
+  await expect(page.getByText('Needs attention', { exact: true }).first()).toBeVisible()
 
   await expect(page.getByTestId('marina-error')).toHaveCount(0)
   expect(thrown, `the app threw on boot:\n${thrown.join('\n')}`).toEqual([])

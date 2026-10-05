@@ -2,6 +2,12 @@ import { defineConfig, devices } from '@playwright/test'
 
 export default defineConfig({
   testDir: './e2e',
+  // Specs beginning with `_` are MANUAL tools, not gate tests. `_screens.spec.ts`
+  // captures the screenshots for review: it clicks through every screen at two
+  // viewports, takes ~35 s, and flaked in the full suite on a slow first load.
+  // A screenshot harness failing a push gate is noise with a real cost, so it is run
+  // deliberately:  npx playwright test e2e/_screens.spec.ts
+  testIgnore: '**/_*.spec.ts',
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,

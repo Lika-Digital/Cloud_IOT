@@ -31,7 +31,12 @@ export default defineConfig({
     command: 'npm run dev',
     url: 'http://localhost:5173',
     reuseExistingServer: true,
-    timeout: 30_000,
+    // 120 s, not 30 s. On the push gate Playwright runs immediately after the full
+    // pytest suite, and Vite's cold start — dependency optimisation included — does not
+    // finish in 30 s on a machine that has just been hammered. The result was
+    // `TOTAL=0 PASSED=0 FAILED=0` and an aborted push: the stage correctly refused to
+    // report success for having run nothing, but the cause was the timeout, not the code.
+    timeout: 120_000,
   },
 
   projects: [

@@ -1,7 +1,7 @@
-# v3.44 — UI v2 + Guard: deploy and acceptance runbook
+# v3.45 — UI v2, meter fix and Guard: deploy and acceptance runbook
 
-**Date:** 2026-10-03 · **Target:** the Krk cabinet, `MAR_KRK_ORM_01` · **Branch under test:**
-`develop`
+**Date:** 2026-10-10 · **Target:** the Krk cabinet, `MAR_KRK_ORM_01` · **Deployed from:**
+`main`, after the merge
 
 Same shape as `docs/guard_a5_runbook.md`: numbered steps, each ending in **STOP** (do not
 continue) or **NOTE** (record and carry on). Phone first — several checks must be done on a
@@ -11,106 +11,151 @@ phone standing at the pedestal, not at a desk, because that is where this UI is 
 
 ## Read this before step 0
 
-### We deploy from `develop`. `main` is not touched until everything passes.
+### We merge to `main` first. The cabinet then upgrades the way it always has.
 
 ```bash
-sudo bash ~/Cloud_IOT/nuc_image/upgrade.sh develop     # the test deployment
-sudo bash ~/Cloud_IOT/nuc_image/upgrade.sh             # back to main — the rollback
+sudo bash ~/Cloud_IOT/nuc_image/upgrade.sh          # no argument. The standard command.
 ```
 
-The branch argument is new in v3.44. **The default is still `main`**, so every existing
-instruction and habit keeps working.
+**Changed 2026-10-10.** An earlier draft of this runbook had the cabinet deploy `develop`
+using a new branch argument. That route is withdrawn, for a reason worth recording:
 
-### The rollback is that `main` was never touched
+> **The cabinet's own copy of `upgrade.sh` is the one from `773bca6`, which has no branch
+> argument.** Lines 57-61 of that version force `git checkout main`, and every fetch and pull
+> is hardcoded `origin main`. So `upgrade.sh develop` on the cabinet today would deploy
+> **main** while printing `Branch: main` — a silently wrong result. Getting the branch
+> argument onto the cabinet requires checking out `develop` there first, which is a
+> chicken-and-egg that buys nothing.
 
-There is no snapshot to take and no backup step, because nothing is being overwritten:
-`main` still points at **v3.40**, the last release the cabinet ran. While the NUC is on
-`develop`, that commit is sitting on the remote untouched, and returning to it is one command
-with no argument.
+The branch argument stays in the code. It works, it is tested, and it becomes usable once
+`main` carries it. **This runbook does not depend on it.**
 
-This is stated plainly because a rollback plan nobody has read is not a rollback plan. It is
-**verified in STEP 1**, not assumed.
+### Rollback is git, not a backup
+
+`773bca6` is what the cabinet runs now and it stays reachable forever. Rolling the code back
+is checking it out and re-running the upgrade. There is no snapshot to take.
+
+### Back up the data — or decide not to, and say why
+
+**This is a decision, not a step to skip by default.** Whether a backup is needed is a
+property of the CABINET, not of this procedure. A runbook with no backup step will one day be
+followed on a cabinet where sessions are billed, by someone who does not know a decision was
+ever made.
+
+| This cabinet is… | Do this |
+|---|---|
+| **A test cabinet, data disposable** — Krk, `MAR_KRK_ORM_01`, as of 2026-10-10: everything in it is test data, nothing is billed, and the three open standalone sessions do not matter | **Skip the backup, and write in the log that you skipped it and why.** |
+| **Carrying real billing data** | **Back up before anything else**, in this order: `pedestal.db`, the auth database under `data/`, and `.env`. |
+
+For a cabinet with real data, use the online-backup endpoint rather than `cp` — the databases
+run in WAL mode and a file copy of a WAL database is not consistent:
+
+```bash
+curl -fsS -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8000/api/admin/backup/database -o ~/backup-pedestal-$(date +%F).db
+cp /opt/cloud-iot/backend/.env ~/backup-env-$(date +%F)
+```
+
+The code rollback does not need this. The backup covers the one thing a rollback cannot undo:
+migrations add columns, and reverting the code leaves both the columns and anything written
+through them in place.
 
 ### Which steps are irreversible
 
 | Step | Reversible? |
 |---|---|
-| Deploying `develop` to the NUC | **Yes** — re-run `upgrade.sh` with no argument |
-| Everything in acceptance areas 1–3 | **Yes** — read-only, or a control the operator can undo |
-| Area 4 — provisioning an NFC tag | **Yes** — a tag can be un-pointed from the dashboard, and the removal is recorded |
-| Area 4 — a real customer session | **Partly** — the session and its ledger rows are a record of something that happened and are not deleted. That is correct; use a test customer. |
-| Area 5 — water events reaching the ERP | **NO.** Once myMarina receives a water session it has it. See area 5. |
-| **Merging `develop` to `main`** | **THE IRREVERSIBLE ONE.** After this the cabinet, and every future cabinet, updates to it. Do not do it until all five areas pass. |
+| **Merging `develop` to `main`** | **THE IRREVERSIBLE ONE.** After this, this cabinet and every future cabinet updates to it. |
+| Running `upgrade.sh` on the cabinet | **Yes** — check out `773bca6` and re-run |
+| Acceptance areas 1–3 | **Yes** — read-only, or a control the operator can undo |
+| Area 4 — provisioning an NFC tag | **Yes** — a tag can be un-pointed, and the removal is recorded |
+| Area 4 — a real customer session | **Partly** — the session and its ledger rows are a record of something that happened. Use a test customer. |
+| Area 5 — water events reaching the ERP | **NO** once it is wired. Not reachable today — see below. |
 
-### One area needs someone else
+### Nothing leaves this cabinet today
 
-**Area 5 needs a person on the myMarina side.** It cannot be completed alone, and it is the
-only step with an external dependency. Arrange it before starting, or expect to stop at area 4
-and wait.
+Measured on the live `external_api_config` row, 2026-10-10:
+
+```
+webhook_url    = None
+allowed_events = ["heartbeat", "temperature_reading"]
+active         = 1
+```
+
+**Two independent reasons nothing is pushed out:** no webhook URL, and `session_ended` is not
+an allowed event. The three open standalone sessions cannot reach myMarina on close.
+
+The attribution filter added in v3.45 (`erp_webhook.is_erp_reportable`) is therefore not a
+precondition for this deploy. It stays because it is the defence that does not depend on
+today's configuration — a session attributed to nobody does not leave, whatever the next bad
+field turns out to be.
+
+### One area needs someone else, and is blocked
+
+**Area 5 cannot be completed now.** Beyond needing a person at myMarina, two findings from the
+2026-08-21 verification on that same config row block it outright — see **D17** and **D18** in
+`docs/ui_v2_spec.md`. Do areas 1–4, record area 5 as blocked, and do not treat the deploy as
+unfinished because of it.
 
 ---
 
 ## STEP 0 — Baseline, before anything changes (5 min)
 
-Record what the cabinet is running now, so "it broke" can be told from "it was already like
-that".
+Record what the cabinet runs now, so "it broke" can be told from "it was already like that".
 
 ```bash
 cd ~/Cloud_IOT && git rev-parse --abbrev-ref HEAD && git rev-parse --short HEAD
 systemctl is-active cloud-iot cloud-iot-guard mosquitto
-curl -s localhost:8000/api/pedestals | head -c 200
 df -h / | tail -1
 ```
 
 **STOP if** the repo is not on `main`, or `cloud-iot` is not `active`. Something is already
 wrong and this is not the moment to add a deployment to it.
 
-**NOTE** the commit hash. That is the rollback target, and STEP 1 checks you can reach it.
+**NOTE** the commit hash. It should read `773bca6`. That is the rollback target.
 
 ---
 
-## STEP 1 — Verify the rollback BEFORE relying on it (3 min)
+## STEP 1 — Confirm `origin/main` actually moved (2 min)
 
-Do this now, while everything still works. A rollback tested for the first time during an
-incident is a hope, not a plan.
+**Do this before running the upgrade, not after.** The upgrade pulls `main`; if the merge did
+not land, it will cheerfully redeploy what is already there and report success.
 
 ```bash
 cd ~/Cloud_IOT
 git fetch origin main
-git rev-parse --short origin/main        # expect the v3.40 commit from STEP 0
 git log origin/main -1 --format='%h %ci %s'
 ```
 
-**STOP if** `origin/main` is not the commit you recorded in STEP 0. It means `main` has moved
-and the rollback target is not what you think it is.
-
-**NOTE:** this is the whole rollback. `main` is a commit on the remote that nothing in this
-procedure writes to.
+**STOP unless** this shows the v3.45 merge commit and a timestamp from today. If it still
+shows `a0a1405` or `773bca6`, the push did not land — stop and go back to the development
+machine.
 
 ---
 
-## STEP 2 — Deploy `develop` (10 min)
+## STEP 2 — Upgrade (10 min)
 
 ```bash
-sudo bash ~/Cloud_IOT/nuc_image/upgrade.sh develop
+sudo bash ~/Cloud_IOT/nuc_image/upgrade.sh
 ```
 
-The script prints a warning that it is not deploying `main`. That warning is deliberate: a NUC
-left on a test branch silently stops receiving releases.
+No argument. The standard command.
 
 ```bash
 systemctl is-active cloud-iot cloud-iot-guard
 journalctl -u cloud-iot -n 40 --no-pager | grep -iE "error|traceback" || echo "clean"
-curl -s localhost:8000/api/marina/berths -H "Authorization: Bearer $TOKEN" | head -c 300
 ```
 
-**STOP if** `cloud-iot` is not active, or the log shows a traceback, or `/api/marina/berths`
-404s. Roll back (`upgrade.sh` with no argument) and report what the log said.
+**STOP if** `cloud-iot` is not active, or the log shows a traceback. Roll back: check out
+`773bca6` and re-run the upgrade.
 
-**NOTE:** the first start applies the new migrations (`berth_assignments`, valve state
-columns). They are additive and idempotent, but note the startup line that confirms it.
+**NOTE:** the first start applies the new migrations — `berth_assignments`, the valve state
+columns, the session register columns. All additive and idempotent; note the startup line
+that confirms it.
 
----
+**NOTE:** `pip install -r requirements.txt` runs during the upgrade, and `numpy` moved from a
+hard `==2.1.2` pin to `>=2.1,<3`. The loosened range is safer on this machine's Python 3.14,
+but this is the step most likely to fail. If it does, the log names the package.
+
 
 # ACCEPTANCE — five areas, in this order
 
@@ -125,8 +170,8 @@ Open each on a **desktop browser** and on a **phone**, on the marina wifi, signe
 
 | # | Screen | What must be true |
 |---|---|---|
-| 1.1 | `/marina` | One row per berth. Status is **colour + icon + word**, never colour alone. One figure per row. A berth with no reading shows **—**, never `0`. |
-| 1.2 | `/marina/berth/<id>` | Socket name, **rating and phase count** — Q1 must read 32 A three phase and Q3/Q4 16 A. Month-to-date carries its provenance ("meter reading"). |
+| 1.1 | `/marina` | One row per berth. Status is **colour + icon + word**, never colour alone. One figure per row, **in AMPS** — v3.45 stopped displaying watts because the single-phase meters report `powerKw` ~100x high. A berth with no reading shows **—**, never `0`. |
+| 1.2 | `/marina/berth/<id>` | Socket name, **rating and phase count** — Q1 must read 32 A three phase and Q3/Q4 16 A. Live figure in amps. Month-to-date in **kWh from the register**, carrying its provenance ("meter reading"). |
 | 1.3 | `/marina/water` | Two outlets, by outlet. No berth column. A free outlet reads **Free**, a silent one **Not known** — and those must look different. |
 | 1.4 | `/marina/alarms` | Plain sentences. **No error codes, no identifiers** such as `meter_power_implausible`. |
 | 1.5 | `/marina/guard` | Four words only. If the guard worker is stopped it must read **"Guard unavailable"** and never "Guard off". |
@@ -134,6 +179,29 @@ Open each on a **desktop browser** and on a **phone**, on the marina wifi, signe
 
 **STOP if** any screen shows a raw error code, a `0` where a figure is unknown, or a
 greyed-out control instead of a sentence.
+
+### 1.6b — The meter fix, verified on the cabinet (v3.45)
+
+The reason this release exists. Three standalone sessions were open on this cabinet holding
+56 kWh that never happened, because the gate trusted `powerKw`.
+
+```bash
+# No standalone session should be open on an idle socket.
+sqlite3 /opt/cloud-iot/backend/pedestal.db   "SELECT id, socket_id, origin, started_at, energy_kwh FROM sessions
+   WHERE status='active' AND origin='standalone';"
+```
+
+**STOP unless** this returns nothing, once the pre-existing three are closed. A NEW standalone
+session appearing on an idle socket means the gate is still trusting power.
+
+**NOTE** the `meter_power_implausible` alarms. With the detector live, each single-phase
+socket reporting an impossible figure raises one. Seeing them is CORRECT — it is the fault
+becoming visible, not a new fault. Record how many and on which sockets.
+
+**STOP if** Q1 raises one. Q1 is the three-phase meter that has never lied; an alarm there
+means the invariant is wrong, not the meter.
+
+---
 
 ### 1.7 — The needs-attention filter, with a cabinet that goes quiet
 
@@ -262,7 +330,19 @@ present), so it is allowed; a MODE 2 site refuses until the app ships.
 
 ## AREA 5 — ERP integration ⚠ NEEDS SOMEONE AT myMarina
 
-**This step cannot be done alone.** Arrange a person on the myMarina side before starting.
+**This step cannot be done alone, and as of 2026-10-10 it is BLOCKED.** Two findings from the
+2026-08-21 verification of the live `external_api_config` row:
+
+* **D17** — the whole `/api/ext/` family returned **401**: `pedestals/{id}/status`,
+  `pedestals/{id}/water`, `marinas/{id}/load/alarms`, `marinas/{id}/breaker/alarms`. Those are
+  exactly the routes the ERP uses. Only the older `/api/...` routes passed.
+* **D18** — `allowed_events` contains `["heartbeat", "temperature_reading"]` and **none of the
+  session events** the ERP integration document describes.
+
+Neither blocks this deploy. Both block this area. Record it as blocked and move on; do not
+treat the deployment as unfinished because of it.
+
+Arrange a person on the myMarina side before attempting it.
 
 **Irreversible:** once myMarina receives a water session, it has it. If their side is not
 ready, turn water reporting **off** first — `/api-gateway`, "What this ERP receives" — and
@@ -280,29 +360,17 @@ without stopping recording — the history stays intact for when they are ready.
 
 ---
 
-## STEP 3 — Merge to `main` (the irreversible step)
+## STEP 3 — After acceptance
 
-**Only after all five areas pass.**
-
-```bash
-# On the development machine, not the NUC
-git checkout main
-git merge develop
-CLOUD_IOT_RELEASE=1 git push origin main
-```
-
-The pre-push hook on `main` requires confirmation. That prompt is the last point at which this
-is reversible.
-
-Then, on the NUC:
+The merge to `main` happened BEFORE the cabinet upgrade, so there is no "switch the cabinet
+back" step and no cabinet left on a test branch. That was the point of the change.
 
 ```bash
-sudo bash ~/Cloud_IOT/nuc_image/upgrade.sh      # no argument — back on main, now at v3.44
-cd ~/Cloud_IOT && git rev-parse --abbrev-ref HEAD    # must print: main
+cd ~/Cloud_IOT && git rev-parse --abbrev-ref HEAD      # must print: main
 ```
 
-**STOP if** the NUC is left on `develop`. It will stop receiving releases and nobody will
-notice for weeks.
+**Do not run `upgrade.sh` on the second cabinet until this one is accepted.** It pulls from
+`main` too, so the merge has already reached it the moment it is upgraded.
 
 ---
 
@@ -310,7 +378,7 @@ notice for weeks.
 
 | Symptom | Do this |
 |---|---|
-| Any STOP in STEP 2 | `sudo bash upgrade.sh` (no argument). The cabinet returns to v3.40. |
+| Any STOP in STEP 2 | `cd ~/Cloud_IOT && git checkout 773bca6` then re-run `upgrade.sh`. That commit is what the cabinet ran before and stays reachable forever. |
 | A screen is wrong but the cabinet works | Record it with a screenshot and continue. A UI defect is not a reason to roll back a working cabinet. |
 | Guard fails area 2 | Stop guard (`sudo systemctl stop cloud-iot-guard`) and continue with areas 3–5. Guard is a separate service and does not block the UI. |
 | Readings wrong in area 3 | **Stop.** This is consumption, and a wrong figure reaches the ERP. Roll back. |

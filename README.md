@@ -1616,7 +1616,7 @@ CLOUD_IOT_RELEASE=1 git push origin main
 #    From an interactive terminal, you can type "release" when prompted instead
 
 # 5. Deploy to NUC
-ssh cloud_iot@marina-iot
+ssh cloud-iot@marina-iot
 sudo bash ~/Cloud_IOT/nuc_image/upgrade.sh
 ```
 
@@ -1732,7 +1732,7 @@ cd /opt/cloud-iot/backend
 
 ```bash
 # SSH into the NUC (via Tailscale or Cloudflare)
-ssh cloud_iot@marina-iot
+ssh cloud-iot@marina-iot
 
 # Run the upgrade script
 sudo bash ~/Cloud_IOT/nuc_image/upgrade.sh
@@ -1769,7 +1769,7 @@ If you `git pull` manually first, `upgrade.sh` will see "already up to date" and
 **If you accidentally git-pulled already**, run the copy steps manually:
 ```bash
 sudo cp -r ~/Cloud_IOT/backend/app /opt/cloud-iot/backend/
-sudo chown -R cloud_iot:cloud_iot /opt/cloud-iot/backend/app
+sudo chown -R cloud-iot:cloud-iot /opt/cloud-iot/backend/app
 sudo /opt/cloud-iot/backend/.venv/bin/pip install -r ~/Cloud_IOT/backend/requirements.txt -q
 sudo systemctl restart cloud-iot-backend
 ```
@@ -1866,7 +1866,7 @@ The NUC has no static IP (behind 5G router). Access is only via:
 
 | Method | When to use |
 |---|---|
-| Tailscale SSH: `ssh cloud_iot@marina-iot` | Primary remote access |
+| Tailscale SSH: `ssh cloud-iot@marina-iot` | Primary remote access |
 | Cloudflare Tunnel: `marina.lika.solutions` | Web UI access |
 | Physical keyboard/monitor | Last resort — NUC is unreachable remotely |
 

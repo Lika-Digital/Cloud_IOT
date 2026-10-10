@@ -27,10 +27,51 @@ _last_telemetry_sent: dict[int, float] = {}   # session_id -> monotonic ts
 _ended_sent: set[int] = set()                 # session_ids whose "ended" already fired
 
 
+def is_erp_reportable(session) -> bool:
+    """May this session be reported to the ERP at all?
+
+    v3.45 — ONLY A SESSION ATTRIBUTED TO SOMEONE. A session with neither `customer_id` nor
+    `nfc_user_id` belongs to nobody, and there is nothing the ERP can do with it except
+    attach a figure to an empty customer.
+
+    THE DEFENCE THIS PROVIDES, AND WHY IT IS HERE RATHER THAN UPSTREAM
+    ------------------------------------------------------------------
+    `origin='standalone'` sessions are opened by the backend itself when a socket appears to
+    be drawing power with no customer behind it. In October 2026 the single-phase meters were
+    found to report `powerKw` ~100x high, so three such sessions had been opened on live
+    hardware and held for days — one since 27 September carrying 42.40 kWh that never
+    happened. Nothing stopped those reaching myMarina; this function is what does.
+
+    It is deliberately NOT a fix for the meter fault. It is the backstop that holds whatever
+    the next bad field turns out to be: a figure we cannot attribute to a customer does not
+    leave the cabinet, no matter which sensor produced it. The detection rule upstream may be
+    wrong again; this rule is about the ERP contract, which is that we report consumption
+    TIED TO THE CUSTOMER WHO SCANNED.
+
+    Operator-started sessions are also unattributed and are also withheld, which is correct
+    for the same reason — the ERP has no one to bill. They remain fully recorded locally and
+    visible to the marina; only the outbound report is withheld.
+    """
+    return bool(getattr(session, "customer_id", None)
+                or getattr(session, "nfc_user_id", None))
+
+
 def build(db, session, event: str) -> dict | None:
     """Synchronously build the webhook payload (reads DBs). Returns None when no
-    webhook is configured so the caller can skip scheduling a task."""
+    webhook is configured, or when the session is not attributable, so the caller
+    can skip scheduling a task."""
     if not settings.erp_webhook_url:
+        return None
+    if not is_erp_reportable(session):
+        # Logged at INFO, not suppressed silently: "the ERP never heard about that session"
+        # has to be answerable from the journal without reading this file.
+        logger.info(
+            "[ERP] withholding %s for session %s on pedestal %s — no customer_id and no "
+            "nfc_user_id, so there is nobody to attribute it to (origin=%s). The session is "
+            "still recorded locally.",
+            event, getattr(session, "id", "?"), getattr(session, "pedestal_id", "?"),
+            getattr(session, "origin", "?"),
+        )
         return None
     from ..auth.user_database import UserSessionLocal
     from . import nfc_service

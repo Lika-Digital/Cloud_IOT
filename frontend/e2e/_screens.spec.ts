@@ -16,6 +16,12 @@ import { loginAs } from './helpers'
  * wide as the content rather than as wide as the phone.
  */
 
+// 60 s, not the global 15 s. This harness is the FIRST thing to touch the dev server in
+// a capture run, so it pays Vite's cold start — the first test timed out mid-click
+// while the page was still settling. A capture tool waiting longer costs nothing; the
+// gate specs keep the short timeout, where a slow page IS the signal.
+test.describe.configure({ timeout: 60_000 })
+
 const DESKTOP = { width: 1280, height: 900 }
 const PHONE = { width: 380, height: 820 }
 const DIR = '../tests/logs/local/screens'
@@ -28,25 +34,25 @@ function core() {
       berths: [
         { berth_id: 101, berth_number: 1, status: 'ok', status_code: 'ok',
           status_sentence: null, status_rank: 9,
-          power: { outlet: 'Q1', on: true, state: 'active', watts: 3410, unit: 'W',
+          power: { outlet: 'Q1', on: true, state: 'active', amps: 14.8, unit: 'A',
                    available: true, unavailable_reason: null },
           occupied: true, occupied_known: true, vessel_matches: true,
           vessel_match_configured: true, alarm_count: 0 },
         { berth_id: 102, berth_number: 2, status: 'ok', status_code: 'ok',
           status_sentence: null, status_rank: 9,
-          power: { outlet: 'Q2', on: false, state: 'idle', watts: null, unit: 'W',
+          power: { outlet: 'Q2', on: false, state: 'idle', amps: null, unit: 'A',
                    available: true, unavailable_reason: null },
           occupied: false, occupied_known: true, vessel_matches: null,
           vessel_match_configured: false, alarm_count: 0 },
         { berth_id: 103, berth_number: 3, status: 'attention', status_code: 'water_leak',
           status_sentence: 'Water leak detected', status_rank: 3,
-          power: { outlet: 'Q3', on: true, state: 'active', watts: 1240, unit: 'W',
+          power: { outlet: 'Q3', on: true, state: 'active', amps: 5.4, unit: 'A',
                    available: true, unavailable_reason: null },
           occupied: true, occupied_known: true, vessel_matches: false,
           vessel_match_configured: true, alarm_count: 2 },
         { berth_id: 104, berth_number: 4, status: 'unknown', status_code: 'outlet_silent',
           status_sentence: 'This outlet has not reported recently', status_rank: 2.5,
-          power: { outlet: 'Q4', on: false, state: 'unknown', watts: null, unit: 'W',
+          power: { outlet: 'Q4', on: false, state: 'unknown', amps: null, unit: 'A',
                    available: true, unavailable_reason: null },
           occupied: false, occupied_known: false, vessel_matches: null,
           vessel_match_configured: false, alarm_count: 0 },

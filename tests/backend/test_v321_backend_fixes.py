@@ -375,7 +375,20 @@ def test_b3_fresh_fault_response_reports_fault(client, auth_headers):
 
 # ── B4 — power value sanity clamp ────────────────────────────────────────────
 
-def test_b4_clamp_fires_and_logs_when_reported_exceeds_50x(caplog):
+def test_b4_impossible_power_is_detected_and_not_substituted(caplog):
+    """REWRITTEN v3.45 — the clamp became a detector, and the rule inverted.
+
+    This used to assert that `meter_power_kw` held the COMPUTED value, i.e. that the clamp had
+    silently substituted a figure. That behaviour is now the defect: a corrected value is
+    indistinguishable from a correct one, which is how a 100x meter fault ran from firmware
+    2.x until a hand capture in October 2026.
+
+    The rule now: an impossible reading is DETECTED, alarmed, and `meter_power_kw` is set to
+    None. Null reaches the UI as "not measured", which is true; a substitute would not be.
+
+    395.974 kW against 227.5 V x 26.0 A = 5.915 kVA is 67x beyond what the voltage and current
+    permit — impossible whatever the power factor, because power factor cannot exceed 1.
+    """
     pid = _ensure_cabinet()
     _seed_hw_config(pid, 2, rated_amps=40.0, phases=1)
     with caplog.at_level("WARNING"):
@@ -385,23 +398,21 @@ def test_b4_clamp_fires_and_logs_when_reported_exceeds_50x(caplog):
             "powerFactor": 0.667, "energyKwh": 0.0, "frequency": 50.0,
         })
     cfg = _get_socket_cfg(pid, 2)
-    assert cfg.meter_power_kw_raw == pytest.approx(395.974)            # raw preserved
-    assert cfg.meter_power_kw == pytest.approx(227.5 * 26.0 * 0.001)   # computed (no PF, 1-ph)
-
-    # v3.43 — the clamp must now SAY SOMETHING, not just substitute a value. It fired at 53x on
-    # Q4 at MAR_KRK_ORM_01 and nobody knew, because a corrected value looks exactly like a
-    # correct one. The assertion is on the meaning rather than the old "sanity clamp fired"
-    # phrasing, so a reworded message does not fail while a silent clamp would.
-    logged = " ".join(r.message for r in caplog.records)
-    assert "50x" in logged and "not believable" in logged, (
-        f"the clamp did not explain itself in the log. A clamp that quietly fixes bad data is "
-        f"how the powerKw problem survived. Got: {logged[:400]}"
+    assert cfg.meter_power_kw_raw == pytest.approx(395.974), "the raw figure must be kept"
+    assert cfg.meter_power_kw is None, (
+        f"got {cfg.meter_power_kw!r} — an impossible reading must become None, not a "
+        f"substitute. A substituted value looks exactly like a measured one."
     )
-    assert "meter_power_implausible" in logged or "Meter" in logged, \
-        "the clamp should be attributable to the meter subsystem in the log"
+
+    logged = " ".join(r.message for r in caplog.records)
+    assert "cannot exceed" in logged, (
+        f"the log must state the invariant that was violated, so a reader can check the "
+        f"arithmetic themselves. Got: {logged[:400]}"
+    )
+    assert "Meter" in logged, "attributable to the meter subsystem"
 
 
-def test_b4_raw_stored_alongside_clamped():
+def test_b4_raw_stored_alongside_verdict():
     pid = _ensure_cabinet()
     _seed_hw_config(pid, 2, rated_amps=40.0, phases=1)
     _simulate("opta/meters/Q2/telemetry", {
@@ -437,7 +448,18 @@ def test_b4_no_clamp_when_within_50x():
     assert cfg.meter_power_kw_raw == pytest.approx(3.0)
 
 
-def test_b4_three_phase_clamp_uses_pf(caplog):
+def test_b4_three_phase_impossible_power_is_detected(caplog):
+    """REWRITTEN v3.45 — three-phase uses the same invariant, and NO power factor.
+
+    This asserted the clamp substituted `V_avg x I x PF`. Two things changed:
+
+      * it detects instead of substituting, so the field becomes None;
+      * the comparison no longer uses PF at all. Power factor was the other field caught
+        misbehaving on this cabinet (0.447 then 0.033 in 5 s on Q4), and the invariant
+        `P <= V x I` holds without it because PF cannot exceed 1.
+
+    600 kW against 230 V x 26 A = 5.98 kVA is 100x beyond what is physically available.
+    """
     pid = _ensure_cabinet()
     _seed_hw_config(pid, 1, rated_amps=65.0, phases=3)
     with caplog.at_level("WARNING"):
@@ -450,8 +472,34 @@ def test_b4_three_phase_clamp_uses_pf(caplog):
         })
     cfg = _get_socket_cfg(pid, 1)
     assert cfg.meter_power_kw_raw == pytest.approx(600.0)
-    # computed = avg_v(230) * I_total(26) * PF(0.9) * 0.001
-    assert cfg.meter_power_kw == pytest.approx(230.0 * 26.0 * 0.9 * 0.001)
+    assert cfg.meter_power_kw is None, (
+        f"got {cfg.meter_power_kw!r} — detected, not substituted"
+    )
+    assert "cannot exceed" in " ".join(r.message for r in caplog.records)
+
+
+def test_b4_three_phase_plausible_power_is_left_alone(caplog):
+    """And the honest three-phase meter must pass.
+
+    Q1 at MAR_KRK_ORM_01 is the only meter on the cabinet that has never lied. A fix that
+    silenced three faulty sockets by starting to accuse the fourth would be worse than the
+    fault. 5.0 kW against 5.98 kVA is power factor 0.84 — an ordinary load.
+    """
+    pid = _ensure_cabinet()
+    _seed_hw_config(pid, 1, rated_amps=65.0, phases=3)
+    with caplog.at_level("WARNING"):
+        _simulate("opta/meters/Q1/telemetry", {
+            "cabinetId": CABINET, "socketId": "Q1",
+            "currentAmpsL1": 8.7, "currentAmpsL2": 8.6, "currentAmpsL3": 8.7,
+            "currentAmpsTotal": 26.0,
+            "voltageL1": 230.0, "voltageL2": 230.0, "voltageL3": 230.0,
+            "powerKwTotal": 5.0, "powerFactor": 0.84, "frequency": 50.0,
+        })
+    cfg = _get_socket_cfg(pid, 1)
+    assert cfg.meter_power_kw == pytest.approx(5.0), (
+        "a plausible three-phase reading was discarded"
+    )
+    assert "cannot exceed" not in " ".join(r.message for r in caplog.records)
 
 
 def test_b4_rest_response_exposes_power_kw_raw(client, auth_headers):

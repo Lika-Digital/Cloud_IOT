@@ -371,7 +371,13 @@ def test_tc_mc_07_a_berth_with_no_socket_says_so(client, auth_headers, marina_pi
         assert orphan["power"]["unavailable_reason"] == "no_socket", (
             "the UI needs to tell 'no socket here' apart from 'cannot control right now'"
         )
-        assert orphan["power"]["watts"] is None, "no socket means no figure, not 0"
+        # v3.45 — the row reports AMPS, not watts. The single-phase meters report `powerKw`
+        # ~100x high, so a watts figure on this row would have shown 2,650 W on a 26 W socket.
+        assert orphan["power"]["amps"] is None, "no socket means no figure, not 0"
+        assert "watts" not in orphan["power"], (
+            "the row still carries a watts key; the field was removed rather than nulled so "
+            "no client can keep rendering a number this meter cannot produce"
+        )
     finally:
         udb = _US()
         try:

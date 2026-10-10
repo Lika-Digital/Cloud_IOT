@@ -176,23 +176,71 @@ def test_outlet_activated_attaches_nfc_user(client, mqtt_pid):
 
 # ── Webhook wiring ────────────────────────────────────────────────────────────
 
-def test_webhook_fires_on_activate_when_url_set(client, mqtt_pid):
+def _activate_and_watch(mqtt_pid, outlet, nfc_user_id=None):
+    """Drive OutletActivated and report whether the ERP webhook fired.
+
+    When `nfc_user_id` is given, the session is stamped with it the moment it is created, so
+    the payload is built for an ATTRIBUTED session.
+    """
+    from app.services.mqtt_handlers import _handle_event_outlet_activated
+    from app.services import session_service as _ss_mod
+
+    real_activate = _ss_mod.session_service.activate
+
+    def _attributed_activate(db, session, *a, **kw):
+        if nfc_user_id is not None:
+            session.nfc_user_id = nfc_user_id
+        return real_activate(db, session, *a, **kw)
+
+    with (
+        patch("app.services.mqtt_handlers.ws_manager.broadcast", AsyncMock()),
+        patch("app.services.erp_webhook.post_erp_event", AsyncMock()) as post,
+        patch.object(_ss_mod.session_service, "activate", _attributed_activate),
+    ):
+        db = _S()
+        try:
+            asyncio.run(_handle_event_outlet_activated(db, mqtt_pid, outlet, "POWER", {}))
+        finally:
+            db.close()
+    return post
+
+
+def test_webhook_fires_on_activate_for_an_attributed_session(client, mqtt_pid):
+    """An NFC session reaches the ERP, as it always has."""
     _clear(mqtt_pid)
     from app.config import settings
-    from app.services.mqtt_handlers import _handle_event_outlet_activated
     prev = settings.erp_webhook_url
     settings.erp_webhook_url = "https://erp.example/webhook"
     try:
-        with (
-            patch("app.services.mqtt_handlers.ws_manager.broadcast", AsyncMock()),
-            patch("app.services.erp_webhook.post_erp_event", AsyncMock()) as post,
-        ):
-            db = _S()
-            try:
-                asyncio.run(_handle_event_outlet_activated(db, mqtt_pid, "Q2", "POWER", {}))
-            finally:
-                db.close()
-        assert post.called, "activate webhook should fire when ERP_WEBHOOK_URL is set"
+        post = _activate_and_watch(mqtt_pid, "Q2", nfc_user_id="erp-customer-1")
+        assert post.called, "activate webhook should fire for an attributed session"
+    finally:
+        settings.erp_webhook_url = prev
+        _clear(mqtt_pid)
+
+
+def test_webhook_withheld_for_an_unattributed_session(client, mqtt_pid):
+    """v3.45 — a session with no customer does NOT reach the ERP. NEW RULE.
+
+    This test file previously asserted the opposite by omission: it activated a socket with
+    no customer at all and required the webhook to fire. That is exactly the path that would
+    have sent myMarina 42.40 phantom kWh from session 130 on the live cabinet — a standalone
+    session, customer_id NULL, opened by the backend because the meter over-reported power.
+
+    The gate fix stops those sessions being created. This stops whatever the NEXT bad field
+    creates from leaving the cabinet: a figure we cannot attribute to a customer is not
+    reported, regardless of which sensor produced it.
+    """
+    _clear(mqtt_pid)
+    from app.config import settings
+    prev = settings.erp_webhook_url
+    settings.erp_webhook_url = "https://erp.example/webhook"
+    try:
+        post = _activate_and_watch(mqtt_pid, "Q2", nfc_user_id=None)
+        assert not post.called, (
+            "an unattributed session produced an ERP webhook. There is nobody for myMarina "
+            "to bill, and this is the backstop that protects the contract."
+        )
     finally:
         settings.erp_webhook_url = prev
         _clear(mqtt_pid)

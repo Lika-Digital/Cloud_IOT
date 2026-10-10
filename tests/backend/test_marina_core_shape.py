@@ -316,7 +316,9 @@ def test_tc_shape_05_unknown_and_null_are_both_reachable(client, auth_headers, s
     )
     p = no_socket[0]["power"]
     assert p["state"] == "unknown"
-    assert p["watts"] is None, "no socket must mean no figure, not 0"
+    # v3.45 — amps, not watts. See backend/app/routers/marina.py `_power_block`.
+    assert p["amps"] is None, "no socket must mean no figure, not 0"
+    assert p["unit"] == "A"
     assert p["available"] is False
     assert p["unavailable_reason"] == "no_socket"
 

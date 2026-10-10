@@ -127,7 +127,7 @@ export default function BerthDetail() {
         <FacilityLine
           label="Power"
           on={d.power.on}
-          figure={d.power.watts}
+          figure={d.power.amps}
           unit={d.power.unit}
           available={d.power.available}
           unavailableSentence={

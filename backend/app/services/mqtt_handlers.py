@@ -1015,7 +1015,11 @@ async def _broadcast_socket_state(pedestal_id: int, socket_id: int, new_state: s
 
 # v3.32 — a socket is "delivering power" when the live meter shows real draw.
 # Small thresholds so standby/measurement noise does not flicker the badge.
-_METER_ACTIVE_KW = 0.05       # >= 50 W
+# v3.45 — NO LONGER USED FOR GATING. `_socket_delivering_power` reads current only,
+# because the single-phase meters report `powerKw` ~100x high and every socket cleared
+# this threshold permanently. Kept as a named constant so the deletion is findable, and
+# because the value documents what the old rule was.
+_METER_ACTIVE_KW = 0.05       # >= 50 W  (unused since v3.45)
 _METER_ACTIVE_AMPS = 0.30     # >= 0.3 A on any phase
 # v3.39 — telemetry arrives every ~5 s. Anything older than this is a stale
 # leftover from before the cabinet went offline and must NOT count as live
@@ -1033,6 +1037,28 @@ def _socket_delivering_power(cfg, *, now: datetime | None = None) -> bool:
     treated as no draw. `meter_load_updated_at` is stamped on every telemetry
     message, so a cabinet that stops reporting decays to "not delivering"
     instead of freezing on its last value.
+
+    v3.45 — CURRENT ONLY. The `meter_power_kw >= 0.05` branch that used to sit here is
+    DELETED, and this is the change that stops phantom sessions.
+
+    Measured on MAR_KRK_ORM_01 (2026-10-09, 5-minute capture): the single-phase ABB D11
+    meters report `powerKw` roughly 100x too high. Q4 reported 2.65 kW while drawing 0.26 A
+    at 228 V. Every socket therefore cleared the 50 W threshold permanently, and the backend
+    opened a standalone session on each one and held it open — three were open on the live
+    cabinet, one since 27 September carrying 42.40 kWh that never happened.
+
+    Current is the right field for this decision on three independent grounds:
+
+      * it is MEASURED rather than computed, so it cannot inherit a firmware arithmetic bug;
+      * the SAFETY path already trusts it — overload and auto-stop read
+        `meter_current_amps` / `meter_current_l1..3` and never `meter_power_kw`
+        (see `_handle_opta_meter_telemetry`, the load-percentage block);
+      * on the real fault it gives the right answer. Q4's 0.26 A is below the 0.30 A
+        threshold, so no session opens, while `powerKw` said 2.65 kW and opened one.
+
+    Power factor is deliberately absent. It is no more trustworthy than `powerKw` here: two
+    consecutive samples 5 s apart reported PF 0.447 then 0.033 while `powerKw` sat unchanged
+    at 2.624, and at 0.26 A on a 32 A meter the reading is 0.8 % of scale.
     """
     if cfg is None:
         return False
@@ -1042,9 +1068,6 @@ def _socket_delivering_power(cfg, *, now: datetime | None = None) -> bool:
     age_s = ((now or datetime.utcnow()) - updated_at).total_seconds()
     if age_s > _METER_STALE_AFTER_S:
         return False
-    pwr = getattr(cfg, "meter_power_kw", None)
-    if pwr is not None and pwr >= _METER_ACTIVE_KW:
-        return True
     for field in ("meter_current_amps", "meter_current_l1", "meter_current_l2", "meter_current_l3"):
         c = getattr(cfg, field, None)
         if c is not None and c >= _METER_ACTIVE_AMPS:
@@ -2881,63 +2904,94 @@ async def _handle_opta_hardware_config(payload: str) -> None:
     })
 
 
-def _sanity_clamp_power_kw(
-    reported_kw, *, voltage, current, power_factor, is_three_phase: bool, socket_name: str,
-    pedestal_id: int | None = None,
-):
-    """B4 (v3.21) — sanity-clamp the firmware's reported powerKw for DISPLAY/audit.
+# How far above apparent power a reported figure may sit before it is called a fault.
+#
+# Real power can never exceed apparent power, because power factor cannot exceed 1. So
+# `powerKw > V x I` is not a heuristic threshold — it is a physical impossibility, and a
+# meter claiming it is faulty by proof rather than by judgement.
+#
+# The 15 % margin is for measurement noise in V and I, not for any real power above
+# apparent. The old rule allowed 50x and did not fire on a meter that was 46x out.
+_POWER_IMPLAUSIBLE_MARGIN = 1.15
 
-    Computes expected kW from V and I (D3: power factor is applied only for the
-    three-phase formula, not single-phase). If the reported value exceeds the
-    computed value by more than 50x, logs a warning with both figures and
-    returns the computed value as the operational figure; otherwise returns the
-    reported value unchanged. When voltage or current is zero/missing the check
-    is skipped and the reported value is returned as-is.
+# Below this apparent power the comparison is not made at all. Near zero, V x I is dominated
+# by quantisation in the current reading and a ratio means nothing — Q1 at 0.000 A would
+# otherwise alarm on any non-zero rounding in `powerKwTotal`.
+_POWER_CHECK_FLOOR_KVA = 0.010      # 10 VA
 
-    Operational decisions are unaffected: overload uses current (amps) and
-    billing uses energy_kwh — this only corrects the displayed instantaneous
-    power and provides a clamped/raw audit pair.
+
+def check_power_plausible(
+    reported_kw, *, voltage, current, socket_name: str, pedestal_id: int | None = None,
+) -> bool:
+    """Is the meter's reported power physically possible? Detect only — never correct.
+
+    v3.45. This replaces `_sanity_clamp_power_kw`, and the change of job is the point.
+
+    The old function CORRECTED: when the reported figure was more than 50x the computed one
+    it returned the computed value, which flowed on to the display and to the session gate.
+    A corrected value looks exactly like a correct one, which is how a 100x meter fault
+    survived from firmware 2.x until a hand capture in October 2026. The clamp was the thing
+    that hid the fault it was written to catch.
+
+    It now returns a VERDICT and changes nothing. The reported figure is stored raw in
+    `meter_power_kw_raw`, nothing reads it for a decision, and a failed check raises an alarm.
+
+    THE INVARIANT, AND WHY IT NEEDS NO POWER FACTOR
+    -----------------------------------------------
+    Apparent power S = V x I. Real power P = S x PF, and PF <= 1 always. Therefore:
+
+        P <= V x I,  for every load, on every meter, with no exceptions.
+
+    A reported P above V x I is impossible regardless of what PF actually is, so the check
+    does not have to trust PF — which matters here, because PF is the other field caught
+    misbehaving (0.447 then 0.033 in 5 s on Q4 while `powerKw` did not move).
+
+    On the real fault: Q4 reported 2.747 kW with 0.26 A at 228 V, i.e. 0.0593 kVA available.
+    46x beyond what the voltage and current permit. This fires. The previous 50x rule did not.
+
+    THREE-PHASE IS UNCHANGED IN EFFECT
+    ----------------------------------
+    The same invariant applies with S = V_avg x I_total, and Q1 — which reports honestly —
+    passes it. At zero current the floor short-circuits the check, so the meter that has
+    never lied cannot start alarming.
+
+    Returns True when plausible (including "cannot tell"), False when impossible.
     """
     if reported_kw is None:
-        return None
+        return True
     try:
         v = float(voltage) if voltage is not None else 0.0
         i = float(current) if current is not None else 0.0
         rep = float(reported_kw)
     except (TypeError, ValueError):
-        return reported_kw
+        return True
 
-    if v == 0.0 or i == 0.0:
-        return reported_kw  # cannot compute an expected value — trust firmware
+    if v <= 0.0 or i <= 0.0:
+        # No basis for the comparison. "Cannot tell" is not "faulty".
+        return True
 
-    if is_three_phase:
-        try:
-            pf = float(power_factor) if power_factor not in (None, "") else 0.0
-        except (TypeError, ValueError):
-            pf = 0.0
-        computed = v * i * pf * 0.001
-    else:
-        computed = v * i * 0.001
+    apparent_kva = v * i * 0.001
+    if apparent_kva < _POWER_CHECK_FLOOR_KVA:
+        return True
 
-    if computed > 0.0 and rep > computed * 50.0:
-        # v3.43 — this used to only log. A clamp that quietly fixes bad data is how the powerKw
-        # problem survived: it fired at 53x on Q4 at MAR_KRK_ORM_01 and nobody knew, because a
-        # corrected value looks exactly like a correct one. Now it alarms.
-        message = (
-            f"Socket {socket_name}: the meter reports {rep:.3f} kW but voltage x current gives "
-            f"{computed:.3f} kW — more than 50x apart. The reported power is not believable; "
-            f"the displayed value has been replaced with the computed one and the raw figure "
-            f"kept for audit. This is a meter or firmware fault to investigate."
-        )
-        logger.warning("[Meter] %s", message)
-        try:
-            from .meter_register import raise_meter_alarm
-            raise_meter_alarm("meter_power_implausible", message, pedestal_id,
-                              severity="warning")
-        except Exception:
-            logger.exception("[Meter] could not raise the power-implausible alarm")
-        return computed
-    return reported_kw
+    if rep <= apparent_kva * _POWER_IMPLAUSIBLE_MARGIN:
+        return True
+
+    message = (
+        f"Socket {socket_name}: the meter reports {rep:.3f} kW, but {v:.1f} V x {i:.3f} A "
+        f"is only {apparent_kva:.4f} kVA of apparent power. Real power cannot exceed "
+        f"apparent power, so this reading is impossible by a factor of "
+        f"{rep / apparent_kva:.0f} and the meter or its firmware is at fault. "
+        f"Consumption is unaffected: it is taken from the meter's own energy register, and "
+        f"session detection uses current. The reported power is not displayed."
+    )
+    logger.warning("[Meter] %s", message)
+    try:
+        from .meter_register import raise_meter_alarm
+        raise_meter_alarm("meter_power_implausible", message, pedestal_id, severity="warning")
+    except Exception:
+        logger.exception("[Meter] could not raise the power-implausible alarm")
+    return False
 
 
 async def _handle_opta_meter_telemetry(socket_name: str, payload: str) -> None:
@@ -3002,11 +3056,15 @@ async def _handle_opta_meter_telemetry(socket_name: str, payload: str) -> None:
             cfg.meter_energy_kwh    = data.get("energyKwh")
             cfg.meter_frequency_hz  = data.get("frequency")
             cfg.meter_power_kw_raw  = reported_kw
-            cfg.meter_power_kw = _sanity_clamp_power_kw(
-                reported_kw, voltage=v_single, current=i_single, power_factor=None,
-                is_three_phase=False, socket_name=socket_name,
-                pedestal_id=pedestal_id,
-            )
+            # v3.45 — the reported figure is stored, checked, and NOT corrected. When it is
+            # impossible, `meter_power_kw` is set to None rather than to a substitute: there
+            # is no trustworthy real-power value for this meter, and inventing one is what
+            # the old clamp did. Null reaches the UI as "not measured".
+            if check_power_plausible(reported_kw, voltage=v_single, current=i_single,
+                                     socket_name=socket_name, pedestal_id=pedestal_id):
+                cfg.meter_power_kw = reported_kw
+            else:
+                cfg.meter_power_kw = None
         else:
             i_total     = data.get("currentAmpsTotal")
             pf_3ph      = data.get("powerFactor")
@@ -3032,11 +3090,14 @@ async def _handle_opta_meter_telemetry(socket_name: str, payload: str) -> None:
                 except (TypeError, ValueError):
                     _avg_v = None
             cfg.meter_power_kw_raw  = reported_kw
-            cfg.meter_power_kw = _sanity_clamp_power_kw(
-                reported_kw, voltage=_avg_v, current=i_total, power_factor=pf_3ph,
-                is_three_phase=True, socket_name=socket_name,
-                pedestal_id=pedestal_id,
-            )
+            # Same invariant for three-phase, with S = V_avg x I_total. Q1 reports honestly
+            # and passes; at zero current the floor short-circuits the check, so the meter
+            # that has never lied cannot start alarming.
+            if check_power_plausible(reported_kw, voltage=_avg_v, current=i_total,
+                                     socket_name=socket_name, pedestal_id=pedestal_id):
+                cfg.meter_power_kw = reported_kw
+            else:
+                cfg.meter_power_kw = None
         cfg.meter_load_updated_at = datetime.utcnow()
 
         # Load calculation requires rated_amps from hardware config (D5).

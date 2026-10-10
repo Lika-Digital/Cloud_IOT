@@ -7,7 +7,10 @@ export default defineConfig({
   // viewports, takes ~35 s, and flaked in the full suite on a slow first load.
   // A screenshot harness failing a push gate is noise with a real cost, so it is run
   // deliberately:  npx playwright test e2e/_screens.spec.ts
-  testIgnore: '**/_*.spec.ts',
+  // Excluded from the gate, but NOT unrunnable: naming the file explicitly is not enough
+  // to beat testIgnore, so the capture harness needs a way back in. CAPTURE=1 provides it:
+  //     CAPTURE=1 npx playwright test e2e/_screens.spec.ts
+  testIgnore: process.env.CAPTURE ? [] : ['**/_*.spec.ts'],
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,

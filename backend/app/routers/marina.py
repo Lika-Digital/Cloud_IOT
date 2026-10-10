@@ -99,7 +99,7 @@ def _power_block(db: DBSession, pedestal_id: int, socket_id: Optional[int],
     if socket_id is None:
         return {
             "outlet": None, "on": False, "state": "unknown",
-            "watts": None, "unit": "W",
+            "amps": None, "unit": "A",
             "available": False, "unavailable_reason": "no_socket",
         }
 
@@ -122,18 +122,34 @@ def _power_block(db: DBSession, pedestal_id: int, socket_id: Optional[int],
     else:
         state = "idle"
 
-    # Live power only while a session runs. A leftover figure on an idle socket reads as
-    # "something is drawing here", which is the opposite of true.
-    watts = None
-    if active is not None and cfg is not None and cfg.meter_power_kw is not None:
-        watts = round(cfg.meter_power_kw * 1000.0)
+    # v3.45 — AMPS, NOT WATTS.
+    #
+    # This read `cfg.meter_power_kw * 1000`. The single-phase ABB D11 meters report `powerKw`
+    # roughly 100x high (measured on MAR_KRK_ORM_01, 2026-10-09: Q4 claimed 2.65 kW while
+    # drawing 0.26 A at 228 V), so the berth row would have shown 2,650 W on a 26 W socket.
+    #
+    # Current is shown instead because it is what the meter measures directly. Real power
+    # would need power factor, which is the other field caught misbehaving — 0.447 then 0.033
+    # in consecutive samples 5 s apart while the power figure did not move. There is no
+    # trustworthy real-power value to display for this hardware, and showing one anyway is
+    # what let the fault run from firmware 2.x to October.
+    #
+    # CONSUMPTION IS UNAFFECTED AND IS NOT ON THIS ROW: it comes from the meter's own energy
+    # register and appears on berth detail as kWh. Amps answers "is something drawing here
+    # and how hard", which is the question a row has to answer.
+    #
+    # None when the detector found the reported power impossible, or when no session is
+    # running — a leftover figure on an idle socket reads as "something is drawing here".
+    amps = None
+    if active is not None and cfg is not None and cfg.meter_current_amps is not None:
+        amps = round(float(cfg.meter_current_amps), 2)
 
     return {
         "outlet": f"Q{socket_id}",
         "on": active is not None,
         "state": state,
-        "watts": watts,
-        "unit": "W",
+        "amps": amps,
+        "unit": "A",
         "available": controllable,
         "unavailable_reason": None if controllable else "standalone",
     }

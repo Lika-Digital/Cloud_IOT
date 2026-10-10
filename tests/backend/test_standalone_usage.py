@@ -61,7 +61,18 @@ def _set_mode(smart: bool):
         db.close()
 
 
-def _set_power(socket_id: int, power_kw: float, at: datetime = T0):
+def _set_draw(socket_id: int, amps: float, at: datetime = T0, power_kw: float = 0.0):
+    """Set what the meter reports for a socket.
+
+    v3.45 — CURRENT is the field that opens a standalone session. This helper used to set
+    `meter_power_kw` and leave current at 0.0, which no longer opens anything.
+
+    The change is not cosmetic. On MAR_KRK_ORM_01 the single-phase meters report `powerKw`
+    roughly 100x high, so gating on power opened a session on every socket and held it —
+    three were open when it was found, one since 27 September holding 42.40 kWh that never
+    happened. `power_kw` stays available as a separate argument precisely so a test can prove
+    that power alone does NOT open a session.
+    """
     from app.models.socket_config import SocketConfig
     db = _S()
     try:
@@ -72,7 +83,7 @@ def _set_power(socket_id: int, power_kw: float, at: datetime = T0):
         # v3.39 — the reading's timestamp is what the staleness guard checks.
         sc.meter_load_updated_at = at
         sc.meter_power_kw = power_kw
-        sc.meter_current_amps = 0.0
+        sc.meter_current_amps = amps
         sc.meter_current_l1 = 0.0
         sc.meter_current_l2 = 0.0
         sc.meter_current_l3 = 0.0
@@ -108,7 +119,7 @@ class _AsyncNoop:
 
 def test_standalone_session_created_on_draw():
     _set_mode(smart=False)
-    _set_power(1, 0.49)
+    _set_draw(1, 9.5)
     _tick(datetime(2026, 6, 19, 12, 0, 0))
     s = _active(1)
     assert s is not None
@@ -153,10 +164,10 @@ def test_meter_handler_integrates_energy_power_x_time():
 def test_standalone_completes_when_draw_stops_and_shows_in_history():
     from app.services import usage_report_service as svc
     _set_mode(smart=False)
-    _set_power(1, 0.49)
+    _set_draw(1, 9.5)
     t0 = datetime(2026, 6, 19, 12, 0, 0)
     _tick(t0)                                  # create
-    _set_power(1, 0.0)                          # draw stops
+    _set_draw(1, 0.0)                          # draw stops
     _tick(t0 + timedelta(seconds=10))           # below threshold -> low_since
     assert _active(1) is not None              # still within grace
     _tick(t0 + timedelta(seconds=200))          # past 120s grace -> complete
@@ -193,14 +204,14 @@ def test_standalone_completes_when_draw_stops_and_shows_in_history():
 
 def test_no_standalone_session_when_smart_mode_on():
     _set_mode(smart=True)
-    _set_power(1, 0.49)
+    _set_draw(1, 9.5)
     _tick(datetime(2026, 6, 19, 12, 0, 0))
     assert _active(1) is None
 
 
 def test_smart_mode_on_completes_existing_standalone_session():
     _set_mode(smart=False)
-    _set_power(1, 0.49)
+    _set_draw(1, 9.5)
     _tick(datetime(2026, 6, 19, 12, 0, 0))
     assert _active(1) is not None
     # Operator turns Smart Mode ON — the watchdog hands the socket back.
@@ -211,6 +222,34 @@ def test_smart_mode_on_completes_existing_standalone_session():
 
 def test_no_session_when_no_draw():
     _set_mode(smart=False)
-    _set_power(1, 0.0)
+    _set_draw(1, 0.0)
     _tick(datetime(2026, 6, 19, 12, 0, 0))
     assert _active(1) is None
+
+
+def test_inflated_power_with_no_current_opens_nothing():
+    """v3.45 — THE LIVE FAULT, at the tick that creates sessions.
+
+    MAR_KRK_ORM_01, 2026-10-09: Q4 reported 2.65 kW while drawing 0.26 A at 228 V. Under the
+    old rule the 50 W power threshold was cleared permanently and a standalone session opened
+    on every socket. Three were open when this was found; session 130 on Q2 had been running
+    since 27 September holding 42.40 kWh that never happened.
+
+    Paired with a real draw so it cannot pass by the tick simply never firing.
+    """
+    _set_mode(smart=False)
+
+    # Q4 exactly as captured: trickle current, impossible power claim.
+    _set_draw(4, 0.26, power_kw=2.65)
+    _tick(datetime(2026, 6, 19, 13, 0, 0))
+    assert _active(4) is None, (
+        "2.65 kW reported at 0.26 A opened a standalone session. This is the reading that "
+        "manufactured 56 kWh of phantom consumption on the live cabinet."
+    )
+
+    # A boat actually charging, on the same socket, with the same lying power figure.
+    _set_draw(4, 9.5, at=datetime(2026, 6, 19, 13, 1, 0), power_kw=2.65)
+    _tick(datetime(2026, 6, 19, 13, 1, 0))
+    s = _active(4)
+    assert s is not None, "a genuine 9.5 A draw did not open a session"
+    assert s.origin == "standalone"

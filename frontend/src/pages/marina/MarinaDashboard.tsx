@@ -347,7 +347,7 @@ function BerthRow({ berth, standalone }: { berth: Berth; standalone: boolean }) 
       <FacilityLine
         label="Power"
         on={p.on}
-        figure={p.watts}
+        figure={p.amps}
         unit={p.unit}
         available={p.available}
         unavailableSentence={

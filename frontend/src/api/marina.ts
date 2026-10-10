@@ -65,8 +65,21 @@ export interface PowerFacility {
   outlet: string | null
   on: boolean
   state: 'idle' | 'pending' | 'active' | 'fault' | 'unknown'
-  /** null when idle or unknown — never 0, which would read as "measured nothing". */
-  watts: number | null
+  /**
+   * CURRENT, in amps — v3.45. This was `watts`, derived from the meter's `powerKw`.
+   *
+   * The single-phase meters report `powerKw` ~100x high (Q4 claimed 2.65 kW at 0.26 A and
+   * 228 V on MAR_KRK_ORM_01), so the row showed 2,650 W on a 26 W socket. Amps is what the
+   * meter measures directly; real power would need power factor, which was caught swinging
+   * 0.447 -> 0.033 in 5 s on the same socket.
+   *
+   * Consumption is NOT this field — it comes from the energy register and appears on berth
+   * detail in kWh. This answers "is something drawing here, and how hard".
+   *
+   * null when no session is running, or when the meter's reading was found impossible.
+   * Never 0, which would read as "measured nothing".
+   */
+  amps: number | null
   unit: string
   /** false => render a sentence and NO control element in the DOM. Not a disabled button. */
   available: boolean

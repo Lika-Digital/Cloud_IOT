@@ -193,23 +193,52 @@ if $NEEDS_SYNC && ! $NEEDS_PULL; then
   echo ""
 fi
 
-# Detect changed files (vs remote if pulling, vs deployed app if just syncing)
+# ── What changed, and whether we can even tell ──────────────────────────────────
+#
+# Two paths reach the deploy, and only one of them can name the changed files:
+#
+#   NEEDS_PULL  — there are new commits, so `git diff HEAD..origin/BRANCH` is exact.
+#   NEEDS_SYNC  — git is already current (someone pulled by hand) but /opt is stale.
+#                 There is no commit range to diff, so the changed set is UNKNOWABLE.
+#
+# `CHANGED_FILES` used to be assigned only on the first path while being READ on both,
+# at the npm-install and pip-install guards. Under `set -u` those reads failed with
+# "unbound variable"; because they sit inside `if` conditions bash printed the error and
+# then took the condition as false rather than aborting. Net effect: on the sync-only
+# path **both dependency installs were silently skipped** while the deploy reported
+# success. A backend can come up `active` and still be missing a lazily-imported
+# package, so the failure surfaces later and somewhere else.
+#
+# Fixed in two parts, because defaulting the variable alone would turn a loud error into
+# a quiet wrong answer — "no files changed" is not the truth on that path, it is the
+# absence of the truth:
+#
+#   1. CHANGED_FILES always exists, so no read can be unbound.
+#   2. DEPS_UNKNOWN says out loud that we cannot tell, and the guards treat that as
+#      "assume both changed". Doing the installs when they were unnecessary costs a
+#      minute; skipping them when they were necessary ships a broken deploy.
 BACKEND_CHANGED=false
 FRONTEND_CHANGED=false
+CHANGED_FILES=""
+DEPS_UNKNOWN=false
 
 if $NEEDS_PULL; then
   CHANGED_FILES=$(git diff "HEAD..origin/${BRANCH}" --name-only)
   echo "$CHANGED_FILES" | grep -q "^backend/" && BACKEND_CHANGED=true
   echo "$CHANGED_FILES" | grep -qE "^frontend/" && FRONTEND_CHANGED=true
 elif $NEEDS_SYNC; then
-  # Can't diff git commits — just force both
+  # No commit range to diff. Assume everything changed, dependencies included.
   BACKEND_CHANGED=true
   FRONTEND_CHANGED=true
+  DEPS_UNKNOWN=true
 fi
 
 echo -e "  ${BOLD}Changes detected:${NC}"
 $BACKEND_CHANGED  && echo -e "    ${YELLOW}● Backend${NC}" || echo -e "    · Backend (no changes)"
 $FRONTEND_CHANGED && echo -e "    ${YELLOW}● Frontend${NC}" || echo -e "    · Frontend (no changes)"
+if $DEPS_UNKNOWN; then
+  echo -e "    ${YELLOW}● Dependencies — cannot determine what changed; will install both${NC}"
+fi
 echo ""
 
 # Confirm
@@ -268,7 +297,8 @@ if $FRONTEND_CHANGED; then
   cd "${REPO_DIR}/frontend"
 
   # Install/update deps if needed
-  if [ ! -d node_modules ] || echo "$CHANGED_FILES" | grep -q "^frontend/package"; then
+  # DEPS_UNKNOWN: sync-only path, no commit range — assume package.json moved.
+  if [ ! -d node_modules ] || $DEPS_UNKNOWN || echo "$CHANGED_FILES" | grep -q "^frontend/package"; then
     info "Installing frontend dependencies..."
     npm install --silent 2>&1 | tail -3 | tee -a "$LOG_FILE"
   fi
@@ -289,8 +319,9 @@ if $BACKEND_CHANGED; then
   phase "Deploying backend"
 
   # Check for new Python dependencies
-  if echo "$CHANGED_FILES" | grep -q "^backend/requirements.txt"; then
-    info "requirements.txt changed — installing new packages"
+  # DEPS_UNKNOWN: sync-only path, no commit range — assume requirements.txt moved.
+  if $DEPS_UNKNOWN || echo "$CHANGED_FILES" | grep -q "^backend/requirements.txt"; then
+    info "Installing backend dependencies (requirements.txt changed, or unknown)"
     VENV_PIP="${APP_DIR}/backend/.venv/bin/pip"
     [ -f "$VENV_PIP" ] && "$VENV_PIP" install -r "${REPO_DIR}/backend/requirements.txt" -q \
       2>&1 | tee -a "$LOG_FILE" || warn "pip install had errors — check logs"

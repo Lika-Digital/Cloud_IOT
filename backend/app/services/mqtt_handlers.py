@@ -2919,6 +2919,49 @@ _POWER_IMPLAUSIBLE_MARGIN = 1.15
 # otherwise alarm on any non-zero rounding in `powerKwTotal`.
 _POWER_CHECK_FLOOR_KVA = 0.010      # 10 VA
 
+# ── How often a faulty meter may speak ─────────────────────────────────────────
+#
+# Telemetry arrives every 5 s per socket. A meter fault does not clear by itself, so an
+# unthrottled line per reading is a permanent stream: the Krk cabinet had two bad sockets
+# (Q3 at ~48x, Q4 at ~78x) logging on every message, which with the duplicate call site
+# removed below came to roughly 69 000 lines a day.
+#
+# The cost is NOT a full disk — journald rotates on SystemMaxUse. The cost is that
+# rotation then evicts everything else, so the next unrelated fault has no history behind
+# it. A log that drowns out every other line has stopped being a log.
+#
+# 5 minutes keeps the fault plainly visible (12 lines an hour, per socket) while leaving
+# the journal usable. The count of suppressed readings rides along in the next message, so
+# the rate stays recoverable without logging the rate.
+_POWER_ALARM_REPORT_INTERVAL_S = 300.0
+
+# (pedestal_id, socket_name) -> [monotonic of last report, readings suppressed since]
+# In-memory only and deliberately so: after a restart the first bad reading reports at
+# once, which is the behaviour you want from a process that has just come up.
+_power_implausible_reports: dict[tuple, list] = {}
+
+
+def _should_report_implausible(pedestal_id, socket_name: str) -> int | None:
+    """Is this the reading that gets logged? Returns suppressed-count, or None to stay quiet.
+
+    THROTTLES THE REPORT, NEVER THE REFUSAL. `check_power_plausible` returns False on every
+    implausible reading regardless of what this says — the bad figure is discarded each and
+    every time. Only the telling-someone-about-it is rate-limited. Confusing those two would
+    mean a throttled window silently accepting the value it exists to reject.
+    """
+    key = (pedestal_id, socket_name)
+    now = time.monotonic()
+    entry = _power_implausible_reports.get(key)
+    if entry is None:
+        _power_implausible_reports[key] = [now, 0]
+        return 0                      # first sighting always speaks
+    last, suppressed = entry
+    if now - last >= _POWER_ALARM_REPORT_INTERVAL_S:
+        _power_implausible_reports[key] = [now, 0]
+        return suppressed
+    entry[1] = suppressed + 1
+    return None
+
 
 def check_power_plausible(
     reported_kw, *, voltage, current, socket_name: str, pedestal_id: int | None = None,
@@ -2977,15 +3020,28 @@ def check_power_plausible(
     if rep <= apparent_kva * _POWER_IMPLAUSIBLE_MARGIN:
         return True
 
+    # The verdict is already decided; everything below is only about reporting it.
+    suppressed = _should_report_implausible(pedestal_id, socket_name)
+    if suppressed is None:
+        return False              # still refused, just not re-announced
+
+    since = ""
+    if suppressed:
+        since = (
+            f" {suppressed} further implausible readings were suppressed on this socket in "
+            f"the last {int(_POWER_ALARM_REPORT_INTERVAL_S // 60)} minutes; all of them were "
+            f"discarded too."
+        )
     message = (
         f"Socket {socket_name}: the meter reports {rep:.3f} kW, but {v:.1f} V x {i:.3f} A "
         f"is only {apparent_kva:.4f} kVA of apparent power. Real power cannot exceed "
         f"apparent power, so this reading is impossible by a factor of "
         f"{rep / apparent_kva:.0f} and the meter or its firmware is at fault. "
         f"Consumption is unaffected: it is taken from the meter's own energy register, and "
-        f"session detection uses current. The reported power is not displayed."
+        f"session detection uses current. The reported power is not displayed.{since}"
     )
-    logger.warning("[Meter] %s", message)
+    # Single log site: raise_meter_alarm logs it (meter_register.py). This function used to
+    # log the same text as well, which doubled a stream that was already too loud.
     try:
         from .meter_register import raise_meter_alarm
         raise_meter_alarm("meter_power_implausible", message, pedestal_id, severity="warning")

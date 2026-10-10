@@ -73,6 +73,15 @@ Q1_THREE_PHASE = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _clear_power_throttle():
+    """Each test is a fresh cabinet as far as the report throttle is concerned."""
+    from app.services import mqtt_handlers
+    mqtt_handlers._power_implausible_reports.clear()
+    yield
+    mqtt_handlers._power_implausible_reports.clear()
+
+
 def _check(payload, *, three_phase=False, pedestal_id=1):
     """Run the real detector against a payload, with the alarm suppressed."""
     from app.services.mqtt_handlers import check_power_plausible
@@ -173,6 +182,123 @@ def test_tc_pwr_03_every_captured_single_phase_socket_is_caught(payload):
         f"accepted"
     )
     assert alarm.called
+
+
+# ═══ TC-PWR-11 — the report throttle ═════════════════════════════════════════
+#
+# v3.46. Telemetry is every 5 s and a meter fault does not clear itself, so the detector
+# was writing a line per reading per socket — ~69k a day on the Krk cabinet with two bad
+# meters. journald rotates on size, so the cost was not a full disk but the eviction of
+# every other line of history.
+#
+# THE INVARIANT THESE TESTS EXIST TO PROTECT: the throttle suppresses the REPORT, never
+# the REFUSAL. If a throttled window ever returned True, the bad figure would reach the
+# display and the session gate for 5 minutes at a time — which is the original bug with a
+# timer bolted on.
+
+def test_tc_pwr_11_a_throttled_reading_is_still_refused():
+    """The one that matters. Quiet must never mean accepted."""
+    first_ok, first_alarm = _check(Q4_SINGLE_PHASE)
+    assert first_ok is False
+    assert first_alarm.called, "the first sighting must always be reported"
+
+    # Same socket, immediately after — inside the 5-minute window.
+    for n in range(12):
+        ok, alarm = _check(Q4_SINGLE_PHASE)
+        assert ok is False, (
+            f"reading {n + 2} was ACCEPTED while the report was throttled — the throttle "
+            f"has been wired to the verdict instead of to the logging"
+        )
+        assert not alarm.called, f"reading {n + 2} re-reported inside the window"
+
+
+def test_tc_pwr_11b_the_window_reopens_and_names_what_it_swallowed():
+    """After the interval the fault speaks again, and says how much was suppressed.
+
+    Without the count the throttle would hide the rate as well as the noise, and the rate
+    is the thing that tells you whether one meter is bad or four.
+    """
+    from app.services import mqtt_handlers
+    from app.services.mqtt_handlers import _POWER_ALARM_REPORT_INTERVAL_S
+
+    _check(Q4_SINGLE_PHASE)                       # reports, opens the window
+    for _ in range(7):
+        _check(Q4_SINGLE_PHASE)                   # suppressed
+
+    # Rewind the stored timestamp rather than sleeping 5 real minutes.
+    key = (1, "Q4")
+    assert key in mqtt_handlers._power_implausible_reports, "throttle key shape changed"
+    mqtt_handlers._power_implausible_reports[key][0] -= (_POWER_ALARM_REPORT_INTERVAL_S + 1)
+
+    ok, alarm = _check(Q4_SINGLE_PHASE)
+    assert ok is False
+    assert alarm.called, "the window never reopened — a permanent fault went silent"
+    msg = alarm.call_args[0][1]
+    assert "7 further implausible readings were suppressed" in msg, (
+        f"the reopened report does not account for what it swallowed: {msg}"
+    )
+    assert "discarded too" in msg, (
+        "the message must say the suppressed readings were also refused, or a reader will "
+        "assume silence meant they were accepted"
+    )
+
+
+def test_tc_pwr_11c_the_throttle_is_per_socket():
+    """Q3 going quiet must not silence Q4. Two faults are not one fault."""
+    _check(Q3_SINGLE_PHASE)
+    ok, alarm = _check(Q3_SINGLE_PHASE)
+    assert not alarm.called, "Q3 re-reported inside its own window"
+
+    ok, alarm = _check(Q4_SINGLE_PHASE)
+    assert ok is False
+    assert alarm.called, (
+        "Q4 was silenced by Q3's throttle — a second failing meter would never be seen"
+    )
+
+
+def test_tc_pwr_11d_the_throttle_is_per_pedestal():
+    """Same socket name on a different cabinet is a different fault."""
+    _check(Q4_SINGLE_PHASE, pedestal_id=1)
+    ok, alarm = _check(Q4_SINGLE_PHASE, pedestal_id=2)
+    assert ok is False
+    assert alarm.called, (
+        "cabinet 2 was silenced by cabinet 1 — in a multi-cabinet marina the second "
+        "cabinet's meter fault would never be reported"
+    )
+
+
+def test_tc_pwr_11e_a_restart_reports_immediately():
+    """The throttle is in-memory on purpose.
+
+    A process that has just come up should say what it finds, not inherit a five-minute
+    silence from before the restart.
+    """
+    from app.services import mqtt_handlers
+
+    _check(Q4_SINGLE_PHASE)
+    _, alarm = _check(Q4_SINGLE_PHASE)
+    assert not alarm.called
+
+    mqtt_handlers._power_implausible_reports.clear()        # restart
+    ok, alarm = _check(Q4_SINGLE_PHASE)
+    assert ok is False
+    assert alarm.called, "after a restart the first bad reading stayed silent"
+
+
+def test_tc_pwr_11f_single_log_site():
+    """The detector must not log the text itself — raise_meter_alarm does that.
+
+    Both used to log the same message, doubling an already-excessive stream. Asserting on
+    the source keeps the duplicate from creeping back under a refactor.
+    """
+    import inspect
+    from app.services.mqtt_handlers import check_power_plausible
+
+    src = inspect.getsource(check_power_plausible)
+    assert 'logger.warning("[Meter] %s", message)' not in src, (
+        "check_power_plausible logs the message again; meter_register.raise_meter_alarm "
+        "already does, so every fault would be recorded twice"
+    )
 
 
 # ═══ TC-PWR-04 ════════════════════════════════════════════════════════════════

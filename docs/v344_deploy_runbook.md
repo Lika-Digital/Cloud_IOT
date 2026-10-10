@@ -104,11 +104,11 @@ Record what the cabinet runs now, so "it broke" can be told from "it was already
 
 ```bash
 cd ~/Cloud_IOT && git rev-parse --abbrev-ref HEAD && git rev-parse --short HEAD
-systemctl is-active cloud-iot cloud-iot-guard mosquitto
+systemctl is-active cloud-iot-backend cloud-iot-guard mosquitto
 df -h / | tail -1
 ```
 
-**STOP if** the repo is not on `main`, or `cloud-iot` is not `active`. Something is already
+**STOP if** the repo is not on `main`, or `cloud-iot-backend` is not `active`. Something is already
 wrong and this is not the moment to add a deployment to it.
 
 **NOTE** the commit hash. It should read `773bca6`. That is the rollback target.
@@ -141,20 +141,111 @@ sudo bash ~/Cloud_IOT/nuc_image/upgrade.sh
 No argument. The standard command.
 
 ```bash
-systemctl is-active cloud-iot cloud-iot-guard
-journalctl -u cloud-iot -n 40 --no-pager | grep -iE "error|traceback" || echo "clean"
+systemctl is-active cloud-iot-backend cloud-iot-guard
+# The unit is cloud-iot-backend. `journalctl -u cloud-iot` names nothing, prints nothing,
+# and the `|| echo "clean"` below would then report clean having read no logs at all.
+journalctl -u cloud-iot-backend -n 40 --no-pager | grep -iE "error|traceback" || echo "clean"
 ```
 
-**STOP if** `cloud-iot` is not active, or the log shows a traceback. Roll back: check out
+**STOP if** `cloud-iot-backend` is not active, or the log shows a traceback. Roll back: check out
 `773bca6` and re-run the upgrade.
 
 **NOTE:** the first start applies the new migrations — `berth_assignments`, the valve state
 columns, the session register columns. All additive and idempotent; note the startup line
 that confirms it.
 
-**NOTE:** `pip install -r requirements.txt` runs during the upgrade, and `numpy` moved from a
-hard `==2.1.2` pin to `>=2.1,<3`. The loosened range is safer on this machine's Python 3.14,
-but this is the step most likely to fail. If it does, the log names the package.
+**NOTE:** `pip install -r requirements.txt` runs **only when the upgrade can see that
+`requirements.txt` changed, or when it cannot tell what changed at all** (v3.46 — see step
+2b). `numpy` moved from a hard `==2.1.2` pin to `>=2.1,<3`; the loosened range is safer on
+this machine's Python 3.14, but this is the step most likely to fail. If it does, the log
+names the package.
+
+---
+
+## STEP 2b — Exercise the sync-only path ON PURPOSE (10 min)
+
+**Do not skip this because step 2 passed. Step 2 does not test what this tests.**
+
+### Why this step exists
+
+`upgrade.sh` reaches the deploy by two routes, and they take different code:
+
+| route | when | changed files |
+|---|---|---|
+| `NEEDS_PULL` | new commits on `origin/main` | exact, from `git diff HEAD..origin/main` |
+| `NEEDS_SYNC` | git already current, `/opt` stale | **unknowable** — no commit range |
+
+The second route is reached only when someone runs `git pull` by hand before the script.
+On 2026-10-10 that happened for the first time, and it failed: `CHANGED_FILES` was assigned
+only on the first route but read on both, so under `set -u` the two dependency guards
+errored and — because they sit inside `if` conditions — evaluated as FALSE. **Both
+`npm install` and `pip install` were silently skipped while the upgrade reported success.**
+It did no damage only because the single requirements change that day was a numpy pin the
+machine already satisfied.
+
+A normal upgrade takes the `NEEDS_PULL` route, so **it never exercises the route that was
+repaired.** Shipping a fix that is never run on its own path is how this codebase
+accumulated the backlog in `docs/engineering_notes.md`. So reproduce the condition
+deliberately, every time this script changes.
+
+### Do it
+
+```bash
+cd ~/Cloud_IOT
+
+# 1. Put git ahead of /opt by hand. This is the condition under test.
+git pull origin main
+git log --oneline -1          # note the hash; git is now CURRENT
+
+# 2. Now run the upgrade. Because git is current, it MUST take the sync-only route.
+sudo bash ~/Cloud_IOT/nuc_image/upgrade.sh 2>&1 | tee /tmp/sync_only_upgrade.log
+```
+
+### What you must see
+
+Four things, and the absence of a fifth:
+
+```bash
+# a) it took the route under test
+grep -c "out of sync" /tmp/sync_only_upgrade.log            # expect >= 1
+
+# b) it SAYS it cannot tell what changed
+grep "cannot determine what changed" /tmp/sync_only_upgrade.log
+
+# c) npm install actually fired
+grep "Installing frontend dependencies" /tmp/sync_only_upgrade.log
+
+# d) pip install actually fired
+grep "Installing backend dependencies" /tmp/sync_only_upgrade.log
+
+# e) the bug is gone
+grep -c "unbound variable" /tmp/sync_only_upgrade.log       # expect 0
+```
+
+**STOP if** (e) is non-zero, or if (c) or (d) print nothing. (c) and (d) printing nothing is
+the exact failure this step exists to catch, and it is invisible in the upgrade's own
+success banner.
+
+**NOTE:** on this route the installs run even when nothing needed them. That is deliberate —
+a wasted minute against a backend that starts `active` and fails later on a lazily-imported
+package. `systemctl is-active` cannot tell you a package is missing.
+
+### The same check, without a cabinet
+
+Both routes are covered in the gate, so a regression fails before it reaches here:
+
+```bash
+pytest tests/backend/test_upgrade_script_deps.py -v
+```
+
+Those tests execute the real decision block out of the real `upgrade.sh`. To confirm they
+can still fail — a test never seen red is not evidence:
+
+```bash
+git show 773bca6:nuc_image/upgrade.sh > /tmp/old_upgrade.sh
+UPGRADE_SH_PATH=/tmp/old_upgrade.sh pytest tests/backend/test_upgrade_script_deps.py -q
+# expect 5 failed, including: bash: line NN: CHANGED_FILES: unbound variable
+```
 
 
 # ACCEPTANCE — five areas, in this order
@@ -385,7 +476,7 @@ cd ~/Cloud_IOT && git rev-parse --abbrev-ref HEAD      # must print: main
 | Area 4 switches the wrong outlet | **Stop immediately and roll back.** A customer is paying for someone else's socket. |
 | Area 5 rejected by myMarina | Turn the water toggle off. Do not roll back — everything else is working, and the history is kept. |
 
-**In every case, record what the log said before acting.** `journalctl -u cloud-iot -n 200`
+**In every case, record what the log said before acting.** `journalctl -u cloud-iot-backend -n 200`
 written to a file beats a remembered summary.
 
 ---

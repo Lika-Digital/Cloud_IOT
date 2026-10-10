@@ -22,7 +22,7 @@
 #
 # Requirements:
 #   - NUC must have internet access (GitHub reachable)
-#   - Git repo at /home/cloud_iot/Cloud_IOT
+#   - A git clone of this repo anywhere; the script locates it from its own path
 #   - Application running at /opt/cloud-iot
 # ============================================================================
 set -euo pipefail
@@ -30,8 +30,23 @@ set -euo pipefail
 # Branch to deploy. First positional argument; `main` when not given.
 BRANCH="${1:-main}"
 
-REPO_DIR="/home/cloud_iot/Cloud_IOT"
-APP_DIR="/opt/cloud-iot"
+# ── Where the repo is, and who owns it — DERIVED, not hardcoded ─────────────────
+#
+# This said REPO_DIR="/home/cloud_iot/Cloud_IOT" with an UNDERSCORE, and the service
+# account on at least one cabinet is `cloud-iot` with a HYPHEN. The script then refused
+# to run with "Git repo not found", while standing inside the very repo it could not
+# find — because `~` resolved to /home/cloud-iot and the script looked in /home/cloud_iot.
+#
+# The script knows where it is. `nuc_image/upgrade.sh` is always one directory below the
+# repo root, so the root is derivable with no assumption about the username, the home
+# directory, or even that the repo lives under /home at all. REPO_DIR= in the environment
+# still overrides it for anything unusual.
+#
+# The same underscore was baked into `chown cloud_iot:cloud_iot` and `export HOME`. Both
+# now read the actual owner of the checkout, which is the account git must run as.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="${REPO_DIR:-$(dirname "$SCRIPT_DIR")}"
+APP_DIR="${APP_DIR:-/opt/cloud-iot}"
 LOG_FILE="/var/log/cloud-iot/upgrade.log"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -44,25 +59,39 @@ phase() { echo -e "\n${CYAN}${BOLD}  ▶ $*${NC}" | tee -a "$LOG_FILE"; }
 
 # ── Guards ────────────────────────────────────────────────────────────────────
 [ "$(id -u)" -eq 0 ] || error "Run as root: sudo bash $0"
-[ -d "${REPO_DIR}/.git" ] || error "Git repo not found at ${REPO_DIR} — run: git clone https://github.com/Lika-Digital/Cloud_IOT.git ${REPO_DIR}"
+[ -d "${REPO_DIR}/.git" ] || error "Git repo not found at ${REPO_DIR} — this script expects to live at <repo>/nuc_image/upgrade.sh. Run it from inside the clone, or set REPO_DIR=/path/to/Cloud_IOT."
 [ -d "$APP_DIR" ]         || error "App not found at ${APP_DIR} — is Cloud IoT installed?"
 
-# Fix git ownership — running as root but repo belongs to cloud_iot.
+# Who owns the checkout? git must run as that account, not as a name baked in here.
+REPO_USER="$(stat -c '%U' "${REPO_DIR}/.git" 2>/dev/null || echo root)"
+REPO_GROUP="$(stat -c '%G' "${REPO_DIR}/.git" 2>/dev/null || echo root)"
+REPO_HOME="$(getent passwd "$REPO_USER" | cut -d: -f6)"
+[ -n "$REPO_HOME" ] || REPO_HOME="/root"
+
+# Fix git ownership — running as root but the repo belongs to the service account.
 # Without this, git commands fail or leave root-owned objects in .git/
-chown -R cloud_iot:cloud_iot "${REPO_DIR}/.git" 2>/dev/null || true
-export HOME="/home/cloud_iot"
+chown -R "${REPO_USER}:${REPO_GROUP}" "${REPO_DIR}/.git" 2>/dev/null || true
+export HOME="$REPO_HOME"
+
+# git refuses to operate on a repo owned by another user unless told it is safe. As root
+# on a checkout owned by the service account, that is exactly the situation.
+git config --global --add safe.directory "$REPO_DIR" 2>/dev/null || true
 
 mkdir -p /var/log/cloud-iot
 echo "" >> "$LOG_FILE"
 echo "════════════════════════════════════════════════" >> "$LOG_FILE"
 echo "  Upgrade started: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$LOG_FILE"
 echo "  Branch: ${BRANCH}" >> "$LOG_FILE"
+echo "  Repo:   ${REPO_DIR} (owner ${REPO_USER}:${REPO_GROUP})" >> "$LOG_FILE"
 echo "════════════════════════════════════════════════" >> "$LOG_FILE"
 
 echo ""
 echo "╔══════════════════════════════════════════════════════╗"
 echo "║         Cloud IoT NUC — Upgrade Script              ║"
 echo "╚══════════════════════════════════════════════════════╝"
+echo ""
+echo "  Repo:   ${REPO_DIR}"
+echo "  Owner:  ${REPO_USER}:${REPO_GROUP}"
 echo ""
 if [ "$BRANCH" != "main" ]; then
   # Said loudly, because a NUC left on a test branch silently stops receiving releases.
@@ -175,7 +204,7 @@ if [ ! -f "$VENV_PIP" ]; then
   [ -n "$PYTHON_BIN" ] || error "No python3 found — cannot create venv"
   "$PYTHON_BIN" -m venv "${APP_DIR}/backend/.venv" \
     2>&1 | tee -a "$LOG_FILE" || error "venv creation failed"
-  chown -R cloud_iot:cloud_iot "${APP_DIR}/backend/.venv" 2>/dev/null || true
+  chown -R "${REPO_USER}:${REPO_GROUP}" "${APP_DIR}/backend/.venv" 2>/dev/null || true
   info "Venv created with $PYTHON_BIN"
   info "Installing Python dependencies..."
   "${APP_DIR}/backend/.venv/bin/pip" install --upgrade pip -q \
@@ -212,7 +241,7 @@ if $FRONTEND_CHANGED; then
   npm run build 2>&1 | tee -a "$LOG_FILE" || error "Frontend build failed"
   info "Frontend built — copying to ${APP_DIR}/frontend/dist/"
   cp -r dist/* "${APP_DIR}/frontend/dist/"
-  chown -R cloud_iot:cloud_iot "${APP_DIR}/frontend/dist" 2>/dev/null || true
+  chown -R "${REPO_USER}:${REPO_GROUP}" "${APP_DIR}/frontend/dist" 2>/dev/null || true
   info "Frontend deployed"
 
   nginx -s reload 2>/dev/null && info "nginx reloaded" || warn "nginx reload failed — try: sudo systemctl restart nginx"
@@ -234,7 +263,7 @@ if $BACKEND_CHANGED; then
 
   info "Copying backend/app to ${APP_DIR}/backend/"
   cp -r "${REPO_DIR}/backend/app" "${APP_DIR}/backend/"
-  chown -R cloud_iot:cloud_iot "${APP_DIR}/backend/app" 2>/dev/null || true
+  chown -R "${REPO_USER}:${REPO_GROUP}" "${APP_DIR}/backend/app" 2>/dev/null || true
 
   phase "Restarting backend service"
   systemctl restart cloud-iot-backend.service

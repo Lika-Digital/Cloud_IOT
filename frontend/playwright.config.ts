@@ -15,7 +15,15 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: 0,
   workers: 1,
-  timeout: 15_000,
+  // 45 s, not 15 s. `webServer` waits for Vite to LISTEN, but the dev server still
+  // transforms modules on demand, so the FIRST page load of a run compiles the whole
+  // app and can take tens of seconds on a machine that has just run 1000 backend
+  // tests. TC-UIB-01 is usually that first test and timed out mid-assertion twice.
+  //
+  // A timeout exists to catch a hang, not to measure a dev-server cold start. The
+  // individual `toBeVisible` expectations keep their own short waits, so a genuinely
+  // broken page still fails fast — only the outer limit moved.
+  timeout: 45_000,
   reporter: [
     ['list'],
     ['json', { outputFile: '../tests/logs/playwright_last.json' }],

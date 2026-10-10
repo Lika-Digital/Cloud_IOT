@@ -77,25 +77,47 @@ if [ $PW_EXIT -eq 0 ]; then
 else
     # Parse JSON for a summary
     SUMMARY=$(python - "${LOG_DIR}/playwright_last.json" << 'PYEOF'
-import sys, json, os
+import sys, json, io, os
+
+# v3.45 — READ THE KEYS PLAYWRIGHT ACTUALLY EMITS.
+#
+# This read `stats.passed` and `stats.failed`. Neither exists. Playwright's JSON reporter
+# writes `expected` / `unexpected` / `skipped` / `flaky`, so every run reported
+# "PASSED=0 FAILED=0" regardless of what happened — on the run that found this, 7 tests had
+# passed and 1 had failed and the summary said 0 and 0.
+#
+# It also mislabelled `expected` as TOTAL, so the one number that was populated was wrong too.
+#
+# Opened with an explicit encoding: the default on Windows is cp1252 and the report contains
+# the test titles, which carry em dashes. That raised
+# "'charmap' codec can't decode byte 0x90" and turned the whole summary into a PARSE_ERROR.
 path = sys.argv[1]
 if not os.path.exists(path):
     print("PARSE_ERROR=no JSON output found")
     sys.exit(0)
 try:
-    with open(path) as f:
+    with io.open(path, encoding="utf-8") as f:
         data = json.load(f)
-    total  = data.get("stats", {}).get("expected", 0)
-    passed = data.get("stats", {}).get("passed", 0)
-    failed = data.get("stats", {}).get("failed", 0)
-    skipped= data.get("stats", {}).get("skipped", 0)
-    print(f"TOTAL={total} PASSED={passed} FAILED={failed} SKIPPED={skipped}")
-    for suite in data.get("suites", []):
-        for spec in suite.get("specs", []):
-            for test in spec.get("tests", []):
-                if test.get("status") == "failed":
-                    title = spec.get("title","?")
-                    print(f"FAIL={title}")
+    st       = data.get("stats", {})
+    passed   = st.get("expected", 0)
+    failed   = st.get("unexpected", 0)
+    skipped  = st.get("skipped", 0)
+    flaky    = st.get("flaky", 0)
+    total    = passed + failed + skipped + flaky
+    print(f"TOTAL={total} PASSED={passed} FAILED={failed} SKIPPED={skipped} FLAKY={flaky}")
+
+    # Suites nest, so walk them. The previous version looked one level deep and would have
+    # named no failing test even once the counts were right.
+    def walk(node):
+        for spec in node.get("specs", []) or []:
+            for test in spec.get("tests", []) or []:
+                if test.get("status") in ("unexpected", "flaky"):
+                    print(f"FAIL={spec.get('title', '?')}")
+        for child in node.get("suites", []) or []:
+            walk(child)
+
+    for suite in data.get("suites", []) or []:
+        walk(suite)
 except Exception as e:
     print(f"PARSE_ERROR={e}")
 PYEOF

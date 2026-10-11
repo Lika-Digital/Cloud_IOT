@@ -330,13 +330,30 @@ def test_tc_pwr_04_the_detector_does_not_correct():
 
 # ═══ TC-PWR-05 ════════════════════════════════════════════════════════════════
 
+# REWRITTEN 2026-10-11 (v3.48). TWO OF THE SIX CASES HERE ASSERTED THE DEFECT.
+#
+#   (228.0, 0.0,  2.747, "zero current — no basis for a ratio")
+#   (228.0, 0.02, 0.050, "below the 10 VA floor — quantisation noise, not a fault")
+#
+# Both expected True. Both are now refused, and both refusals are the fix:
+#
+#   * 2.747 kW at a reported 0.000 A. The old reasoning was "no basis for a ratio", but a
+#     reported zero is a MEASUREMENT with a known resolution — the true current is at most
+#     half a step, so apparent power is bounded at about 1.15 VA and 2747 W is impossible
+#     by a factor of 2400. The detector was making the zero-versus-unknown mistake about
+#     its own inputs.
+#
+#   * 50 W at 0.02 A. The case name calls this "quantisation noise". It is 8.8x over the
+#     most generous bound those readings permit. This is the exemption that let socket 2
+#     report 0.129 kW at 4.6 VA on the live cabinet, drifting to 0.189 kW within the hour.
+#
+# What remains "cannot tell" is a reading that is ABSENT, not one that is zero. They moved
+# to TC-PWR-05b below, with the distinction stated.
 @pytest.mark.parametrize("v,i,rep,why", [
-    (228.0, 0.0,  2.747, "zero current — no basis for a ratio"),
-    (0.0,   5.0,  2.747, "zero voltage — same"),
-    (None,  0.26, 2.747, "voltage missing from the payload"),
-    (228.0, None, 2.747, "current missing from the payload"),
+    (0.0,   5.0,  2.747, "zero voltage — no voltage reading is no basis at all"),
+    (None,  0.26, 2.747, "voltage ABSENT from the payload"),
+    (228.0, None, 2.747, "current ABSENT from the payload — not the same as 0.000 A"),
     (228.0, 0.26, None,  "no power reported at all"),
-    (228.0, 0.02, 0.050, "below the 10 VA floor — quantisation noise, not a fault"),
 ])
 def test_tc_pwr_05_cannot_tell_is_not_faulty(v, i, rep, why):
     """Missing or zero inputs must never alarm.
@@ -352,6 +369,87 @@ def test_tc_pwr_05_cannot_tell_is_not_faulty(v, i, rep, why):
                                    socket_name="Qx", pedestal_id=1)
     assert ok is True, f"alarmed when it could not tell: {why}"
     assert not alarm.called, f"raised an alarm when it could not tell: {why}"
+
+
+# ═══ TC-PWR-05b — a reported zero is a measurement ═══════════════════════════
+
+@pytest.mark.parametrize("v,i,rep,bound_va,why", [
+    (228.0, 0.000, 2.747, 1.14,
+     "2.747 kW at a reported 0.000 A is impossible by ~2400x; the old floor called it "
+     "'no basis for a ratio'"),
+    (228.0, 0.02,  0.050, 5.70,
+     "50 W at 0.02 A is 8.8x over the most generous bound; the old floor called it "
+     "quantisation noise"),
+    (229.9, 0.02,  0.129, 5.75,
+     "socket 2 on cabinet 1, measured 2026-10-11 — accepted by the old floor at 28x"),
+    (229.9, 0.02,  0.189, 5.75,
+     "socket 2 an hour later, at 41x — the value drifts, the acceptance did not"),
+])
+def test_tc_pwr_05b_a_reported_zero_is_bounded_not_exempt(v, i, rep, bound_va, why):
+    """A zero or near-zero CURRENT reading still bounds apparent power.
+
+    The floor these replace was expressed in apparent power but exempted reported power
+    without limit: a 10 VA floor does not let through 10 W, it lets through anything.
+    """
+    ok, alarm = _check({"id": "Qx", "currentAmps": i, "voltageV": v, "powerKw": rep})
+    assert ok is False, f"ACCEPTED {rep} kW against a ~{bound_va} VA bound: {why}"
+    assert alarm.called, "refused but raised no alarm"
+
+
+def test_tc_pwr_05c_an_idle_socket_reporting_rounding_noise_stays_quiet():
+    """The case the old floor was actually written for, kept working by the POWER floor.
+
+    A pure resolution bound would refuse 2 W at 0.000 A — technically correct, operationally
+    useless. `_POWER_REPORT_FLOOR_KW` keeps it quiet, and because that floor bounds the
+    REPORTED figure, nothing above 5 W is exempt at any current.
+    """
+    from app.services.mqtt_handlers import _POWER_REPORT_FLOOR_KW
+    assert _POWER_REPORT_FLOOR_KW == 0.005, "this test encodes the 5 W floor"
+
+    for rep in (0.000, 0.001, 0.002, 0.004):
+        ok, alarm = _check({"id": "Q1", "currentAmps": 0.000, "voltageV": 230.0,
+                            "powerKw": rep})
+        assert ok is True, f"{rep * 1000:.0f} W of rounding noise at 0.000 A alarmed"
+        assert not alarm.called
+
+    # And immediately above the floor it is refused — the gap has a lid.
+    ok, _ = _check({"id": "Q1", "currentAmps": 0.000, "voltageV": 230.0, "powerKw": 0.050})
+    assert ok is False, "50 W at 0.000 A was exempt — the power floor has no lid"
+
+
+def test_tc_pwr_05d_three_phase_gets_three_half_steps():
+    """A three-phase total is a SUM of three measured phases, so three half-steps.
+
+    Q1 is the meter that has never lied. It must not start alarming for the arithmetic
+    reason that it reports a sum — which it would if the bound used one half-step.
+    """
+    from app.services.mqtt_handlers import (
+        check_power_plausible, _METER_CURRENT_STEP_A, _METER_VOLTAGE_STEP_V,
+        _POWER_IMPLAUSIBLE_MARGIN,
+    )
+
+    v, i_total = 230.0, 0.03          # three phases of 0.01 A, every one at its own floor
+    v_max = v + _METER_VOLTAGE_STEP_V / 2.0
+    one = (i_total + _METER_CURRENT_STEP_A / 2.0) * v_max * 0.001
+    three = (i_total + 3 * _METER_CURRENT_STEP_A / 2.0) * v_max * 0.001
+    assert three > one, "the widening does nothing"
+
+    # A figure between the two bounds: refused on one half-step, allowed on three.
+    between = (one + three) / 2.0 * _POWER_IMPLAUSIBLE_MARGIN
+    assert between > 0.005, "pick a figure above the power floor or this proves nothing"
+
+    with patch("app.services.meter_register.raise_meter_alarm"):
+        assert check_power_plausible(between, voltage=v, current=i_total,
+                                     socket_name="Q1", pedestal_id=1,
+                                     current_steps=3) is True, (
+            "a three-phase total was called impossible using a single-phase bound"
+        )
+        assert check_power_plausible(between, voltage=v, current=i_total,
+                                     socket_name="Q1", pedestal_id=1,
+                                     current_steps=1) is False, (
+            "the single-phase bound no longer refuses what the three-phase bound allows, "
+            "so this test is not measuring the widening any more"
+        )
 
 
 # ═══ TC-PWR-06 ════════════════════════════════════════════════════════════════

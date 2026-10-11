@@ -2967,10 +2967,62 @@ async def _handle_opta_hardware_config(payload: str) -> None:
 # apparent. The old rule allowed 50x and did not fire on a meter that was 46x out.
 _POWER_IMPLAUSIBLE_MARGIN = 1.15
 
-# Below this apparent power the comparison is not made at all. Near zero, V x I is dominated
-# by quantisation in the current reading and a ratio means nothing — Q1 at 0.000 A would
-# otherwise alarm on any non-zero rounding in `powerKwTotal`.
-_POWER_CHECK_FLOOR_KVA = 0.010      # 10 VA
+# ── v3.48: THE FLOOR IS GONE. IT WAS A HOLE WITH A FIXED SIZE. ─────────────────
+#
+# This used to be `_POWER_CHECK_FLOOR_KVA = 0.010` — below 10 VA apparent, no comparison
+# was made at all. The reasoning was sound (near zero, V x I is dominated by quantisation
+# and a ratio means nothing) and the shape was wrong, in one specific way:
+#
+#   THE FLOOR WAS EXPRESSED IN THE QUANTITY BEING MEASURED AGAINST (apparent power) BUT
+#   EXEMPTED THE QUANTITY BEING CHECKED (reported real power) WITHOUT ANY BOUND.
+#
+# A 10 VA floor does not let through 10 W. It lets through anything. Measured on cabinet 1
+# on 2026-10-11: socket 2 at 0.02 A and 229.9 V is 4.6 VA apparent, below the floor, so its
+# reported 0.129 kW was ACCEPTED — 28x over the bound, drifting to 0.189 kW and 41x within
+# the hour. The same floor would have passed 129 kW.
+#
+# Replaced by two bounds, both derived from the instruments rather than from round numbers:
+#
+#   1. the MOST GENEROUS apparent power the readings permit, given their own resolution
+#   2. a small absolute floor on REPORTED POWER, which bounds the thing being checked
+#
+# The exemption now shrinks as the measurement becomes meaningful, instead of being a
+# fixed-size gap. Socket 2 is refused at 20x over the most generous possible reading; a
+# genuinely idle socket reporting 1-2 W of rounding noise stays quiet on the power floor.
+
+# ── Meter resolution, MEASURED — and the limit of that measurement ─────────────
+#
+# From a 120-second live MQTT capture of `opta/#` on MAR_KRK_ORM_01, 2026-10-11:
+#
+#   currentAmps : 0.02 0.06 0.07 0.25 0.27 0.29 0.31 0.34 0.35 0.37
+#                 every value exactly two decimals, smallest gap 0.01
+#   voltageV / voltageL1..L3 : all one decimal, gaps of 0.1
+#
+# THE LIMIT, STATED BECAUSE IT IS REAL: that capture spans 0.02-0.37 A under light load.
+# No payload above 0.37 A has ever been inspected, so a coarser format at HIGH current is
+# unmeasured. It is also harmless — the half-step term shrinks as current grows:
+#
+#     (I + 0.005)/I  =  1.25 at 0.02 A,  1.019 at 0.26 A,  1.0003 at 16 A
+#
+# so even a 0.1 A format at 16 A moves the bound by 0.3%, far inside the 15% margin. A
+# coarse format at high current cannot cause a false refusal.
+#
+# The residual risk is the reverse: a coarser format at LOW current, where the half-step
+# term dominates. That is exactly the range the capture covers, which is why these values
+# are trustworthy where it matters. If firmware ever emits a coarser low-current format,
+# REVISIT THESE CONSTANTS — they are measurements, not specifications.
+_METER_CURRENT_STEP_A = 0.01
+_METER_VOLTAGE_STEP_V = 0.1
+
+# The absolute floor, on REPORTED POWER — five counts of the 0.001 kW power field.
+#
+# Needed because a pure resolution bound is too sharp at the very bottom: an idle socket at
+# 0.000 A has a bound of (0.005 A x 230 V) = 1.15 VA, so a 2 W rounding artefact in
+# `powerKw` would alarm. Technically correct and operationally useless.
+#
+# This bounds the quantity being checked, which is the property the old apparent-power
+# floor lacked: nothing above 5 W is ever exempt, at any current.
+_POWER_REPORT_FLOOR_KW = 0.005      # 5 W
 
 # ── How often a faulty meter may speak ─────────────────────────────────────────
 #
@@ -3018,6 +3070,7 @@ def _should_report_implausible(pedestal_id, socket_name: str) -> int | None:
 
 def check_power_plausible(
     reported_kw, *, voltage, current, socket_name: str, pedestal_id: int | None = None,
+    current_steps: int = 1,
 ) -> bool:
     """Is the meter's reported power physically possible? Detect only — never correct.
 
@@ -3045,32 +3098,60 @@ def check_power_plausible(
     On the real fault: Q4 reported 2.747 kW with 0.26 A at 228 V, i.e. 0.0593 kVA available.
     46x beyond what the voltage and current permit. This fires. The previous 50x rule did not.
 
-    THREE-PHASE IS UNCHANGED IN EFFECT
-    ----------------------------------
-    The same invariant applies with S = V_avg x I_total, and Q1 — which reports honestly —
-    passes it. At zero current the floor short-circuits the check, so the meter that has
-    never lied cannot start alarming.
+    THREE-PHASE CARRIES THREE TIMES THE QUANTISATION
+    ------------------------------------------------
+    The same invariant applies with S = V_avg x I_total, but `I_total` is a SUM OF THREE
+    MEASURED PHASES, so its uncertainty is three half-steps, not one. `current_steps=3`
+    widens the bound accordingly. Q1 is the meter that has never lied and it must not start
+    alarming for the arithmetic reason that it reports a sum.
+
+    WHAT v3.48 CHANGED, AND WHY ZERO CURRENT NO LONGER SHORT-CIRCUITS
+    -----------------------------------------------------------------
+    The old code returned True whenever `i <= 0.0`, reasoning "no basis for a ratio". That
+    was the zero-versus-unknown confusion inside the detector itself: a reported 0.000 A is
+    a MEASUREMENT with a known resolution, so the true current is at most half a step and
+    the apparent power IS bounded. A meter claiming 2.747 kW at 0.000 A is impossible by a
+    factor of 2400, and the old rule called it "cannot tell".
+
+    A missing reading is still "cannot tell" — None voltage, None current, None power, or a
+    voltage of zero (no voltage reading at all means no basis). A negative current is
+    nonsense and also passes rather than alarming.
 
     Returns True when plausible (including "cannot tell"), False when impossible.
     """
-    if reported_kw is None:
+    # v3.48 — A MISSING READING IS NOT A READING OF ZERO, and this is the one place the
+    # distinction had to be made explicit rather than inherited.
+    #
+    # The old code coerced `current=None` to 0.0 and then exempted everything at zero current,
+    # so both cases came out the same. Now that a reported 0.000 A is treated as a measurement
+    # with a bounded true value, that coercion would turn "the payload had no current field"
+    # into "the socket drew nothing" — and alarm on it. None means we cannot tell; 0.000 means
+    # the meter told us zero. They get different answers.
+    if reported_kw is None or voltage is None or current is None:
         return True
     try:
-        v = float(voltage) if voltage is not None else 0.0
-        i = float(current) if current is not None else 0.0
+        v = float(voltage)
+        i = float(current)
         rep = float(reported_kw)
     except (TypeError, ValueError):
         return True
 
-    if v <= 0.0 or i <= 0.0:
-        # No basis for the comparison. "Cannot tell" is not "faulty".
+    # No VOLTAGE reading is no basis at all. A zero CURRENT reading is a measurement and is
+    # bounded below — see the docstring.
+    if v <= 0.0 or i < 0.0:
         return True
 
-    apparent_kva = v * i * 0.001
-    if apparent_kva < _POWER_CHECK_FLOOR_KVA:
-        return True
+    # The most generous apparent power these two readings permit, given their own
+    # resolution. Half a step on each, and three half-steps of current for a three-phase
+    # total because it is a sum of three measurements.
+    i_max = i + (current_steps * _METER_CURRENT_STEP_A) / 2.0
+    v_max = v + _METER_VOLTAGE_STEP_V / 2.0
+    apparent_kva = i_max * v_max * 0.001
 
-    if rep <= apparent_kva * _POWER_IMPLAUSIBLE_MARGIN:
+    # Refuse only what exceeds BOTH the generous bound and the absolute power floor. The
+    # floor bounds the reported figure, so nothing above it is exempt at any current.
+    threshold_kw = max(apparent_kva * _POWER_IMPLAUSIBLE_MARGIN, _POWER_REPORT_FLOOR_KW)
+    if rep <= threshold_kw:
         return True
 
     # The verdict is already decided; everything below is only about reporting it.
@@ -3087,7 +3168,8 @@ def check_power_plausible(
         )
     message = (
         f"Socket {socket_name}: the meter reports {rep:.3f} kW, but {v:.1f} V x {i:.3f} A "
-        f"is only {apparent_kva:.4f} kVA of apparent power. Real power cannot exceed "
+        f"permits at most {apparent_kva:.4f} kVA of apparent power even taking both "
+        f"readings at the most generous end of their resolution. Real power cannot exceed "
         f"apparent power, so this reading is impossible by a factor of "
         f"{rep / apparent_kva:.0f} and the meter or its firmware is at fault. "
         f"Consumption is unaffected: it is taken from the meter's own energy register, and "
@@ -3200,10 +3282,14 @@ async def _handle_opta_meter_telemetry(socket_name: str, payload: str) -> None:
                     _avg_v = None
             cfg.meter_power_kw_raw  = reported_kw
             # Same invariant for three-phase, with S = V_avg x I_total. Q1 reports honestly
-            # and passes; at zero current the floor short-circuits the check, so the meter
-            # that has never lied cannot start alarming.
+            # and passes. v3.48: there is no floor to short-circuit any more — Q1 at zero
+            # current stays quiet because its reported power is below the 5 W power floor,
+            # and under load because a three-phase total gets a three-half-step bound.
+            # current_steps=3: i_total is the sum of three measured phases, so it carries
+            # three half-steps of quantisation rather than one.
             if check_power_plausible(reported_kw, voltage=_avg_v, current=i_total,
-                                     socket_name=socket_name, pedestal_id=pedestal_id):
+                                     socket_name=socket_name, pedestal_id=pedestal_id,
+                                     current_steps=3):
                 cfg.meter_power_kw = reported_kw
             else:
                 cfg.meter_power_kw = None

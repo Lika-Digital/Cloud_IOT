@@ -2,9 +2,22 @@
 
 When Smart Mode is OFF the Opta runs the sockets and emits no control session,
 but it reports the meter. The standalone-usage watchdog turns sustained draw
-into a usage session (origin="standalone", customer blank), integrates energy
-(power x time, since the firmware reports energyKwh=0), and completes it when
+into a usage session (origin="standalone", customer blank) and completes it when
 the draw stops — so the consumption shows in Usage History in both modes.
+
+FINDING 8 (v3.46): this docstring used to say the watchdog "integrates energy (power x
+time, since the firmware reports energyKwh=0)". Both halves are now false.
+
+The firmware's cumulative register is live — cabinet 1 reads 275.87 -> 275.88 kWh over
+twelve minutes, about 50 W, which fits inside the V x I apparent-power bound — while the
+reported `powerKw` was measured 35-88x above what voltage and current permit. So the
+register is the trustworthy source and the integral is the fabricated one, which is the
+reverse of what this file claimed.
+
+Since v3.46 the watchdog CAPTURES THE OPENING REGISTER (it bypasses activate(), so it calls
+_capture_start_register directly) and the session's reported figure is the register delta.
+The power integral survives only as `energy_kwh_integrated`, a comparison figure never
+reported to the ERP. See tests/backend/test_register_chain.py.
 """
 from __future__ import annotations
 

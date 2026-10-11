@@ -1,9 +1,20 @@
-"""v3.35 — energy interval ledger: checkpoint session energy for billing.
+"""v3.35 — energy interval ledger: checkpoint session consumption for billing.
 
-The Opta's cumulative ``energyKwh`` register reads 0, so the real energy source
-is the backend's power x time integration accumulated on ``sessions.energy_kwh``
-(see ``mqtt_handlers._integrate_session_energy``). This service durably
-checkpoints that running total into ``energy_intervals`` rows:
+FINDING 6 (v3.46): the two paragraphs that used to open this file were both false, and
+both described the behaviour that eb8ba94 deliberately replaced.
+
+It said: "The Opta's cumulative ``energyKwh`` register reads 0, so the real energy source
+is the backend's power x time integration". That is INVERTED as of 2026-10-11. The
+register is live and correct — cabinet 1 shows 275.87 -> 275.88 kWh across twelve minutes,
+50 W average, which sits inside the V x I apparent-power bound independently — while the
+reported ``powerKw`` was measured 35-88x above what voltage and current permit. The
+register is the trustworthy source and the integration is the fabricated one.
+
+Each row is therefore a DELTA OF THE METER'S OWN CUMULATIVE REGISTER (see
+``_register_session_to_date``). ``sessions.energy_kwh`` is no longer its input; the power
+integral survives only as ``energy_kwh_integrated``, a comparison figure never reported.
+
+Checkpoints are written:
 
   * every ``settings.energy_log_interval_min`` minutes for each ACTIVE
     electricity session (``run_energy_interval_logger``), and
@@ -15,7 +26,17 @@ Each row stores the DELTA since the previous checkpoint. ``sessions.
 energy_logged_kwh`` is the high-water mark of energy already written, so a
 backend restart mid-session never re-logs (and never double-bills) energy.
 
-Empty intervals (< _MIN_LOG_KWH) are skipped — no zero rows.
+FINDING 7 (v3.46): this line used to read "Empty intervals (< _MIN_LOG_KWH) are skipped —
+no zero rows." The body does the OPPOSITE on purpose, and has since eb8ba94. A register
+that did not move is a real zero-consumption observation and IS written; see the comment
+at the ``delta < _MIN_LOG_KWH`` branch, which states the principle this whole module is
+built on:
+
+    "Suppressing it would make zero and we-could-not-read-it indistinguishable in the
+     ledger, which is the one thing they must not be."
+
+What is NOT written is an interval whose register could not be read at either boundary —
+that is UNKNOWN, it marks the session, and it is announced (see ``_interval_tick``).
 """
 from __future__ import annotations
 
@@ -179,6 +200,7 @@ def _interval_tick(now: datetime) -> int:
     """Checkpoint every active electricity session. Returns rows written."""
     db = SessionLocal()
     written = 0
+    skipped: list[int] = []
     try:
         active = (
             db.query(SessionModel)
@@ -188,17 +210,44 @@ def _interval_tick(now: datetime) -> int:
         for s in active:
             if flush_session_interval(db, s, now=now, final=False) is not None:
                 written += 1
+            else:
+                skipped.append(s.id)
         db.commit()
     finally:
         db.close()
+
     if written:
         logger.info("[EnergyInterval] wrote %d interval row(s)", written)
+
+    # v3.46 — SAY SOMETHING WHEN NOTHING IS WRITTEN.
+    #
+    # This used to log only on success, so a stopped ledger was indistinguishable from an
+    # idle marina. On cabinet 1 the table froze at 8675 rows on 2026-10-10 18:12 local and
+    # nobody noticed for eighteen hours across two restarts, because a grep for "interval"
+    # over 500 journal lines returned one hit — and it belonged to frame_buffer. No service
+    # announced that it writes intervals, so nothing announced that it had stopped.
+    #
+    # An alarm nobody reads is as mute as a check that cannot fail: same defect, other end.
+    if skipped:
+        logger.warning(
+            "[EnergyInterval] wrote NO row for %d active session(s) %s — the meter register "
+            "was unreadable at this boundary, so their consumption is UNKNOWN and nothing "
+            "reached the billing ledger. The ERP feed is SILENT for these sessions; this is "
+            "not an idle socket.",
+            len(skipped), skipped,
+        )
     return written
 
 
 async def run_energy_interval_logger() -> None:
     """Lifespan task — checkpoint active sessions every energy_log_interval_min."""
     period = max(1, int(settings.energy_log_interval_min)) * 60
+    # v3.46 — announce existence at startup. Nothing in the startup sequence used to name
+    # this writer, so there was no line to miss when it went quiet.
+    logger.info(
+        "[EnergyInterval] ledger writer started — checkpointing every %d min from the "
+        "meter register (not from integrated power)", period // 60,
+    )
     while True:
         await asyncio.sleep(period)
         try:

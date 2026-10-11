@@ -1240,7 +1240,28 @@ def _integrate_session_energy(db, pedestal_id: int, socket_id: int, power_kw, no
     if active is None:
         _meter_energy_last.pop(key, None)
         return
-    p = float(power_kw or 0.0)
+
+    # v3.46 — A REFUSED READING IS NOT A READING OF ZERO.
+    #
+    # This said `p = float(power_kw or 0.0)`. Since v3.45 `check_power_plausible` sets
+    # `cfg.meter_power_kw = None` when the meter reports more real power than V x I permits,
+    # and that None arrives here (call site below in the telemetry handler). `or 0.0` turned
+    # the refusal into a measurement of zero draw and integrated it: on cabinet 1, session
+    # 178 sat at energy_kwh = 0.0 for over two hours while its socket drew about 50 W.
+    #
+    # Upstream correctly refused to trust a number. One `or` downstream undid that and
+    # replaced it with a confident wrong one, which is worse than the original fault
+    # because a zero looks like an answer.
+    if power_kw is None:
+        # DROP THE ANCHOR. Returning while keeping `_meter_energy_last` would let the next
+        # usable sample compute dt across the whole unmeasured window and multiply it by an
+        # average of two readings taken either side of it — fabricating energy for exactly
+        # the period we admitted we could not measure. Forgetting the anchor makes the gap
+        # a gap.
+        _meter_energy_last.pop(key, None)
+        return
+
+    p = float(power_kw)
     last = _meter_energy_last.get(key)
     if last is not None and last[2] == active.id:
         dt_s = (now - last[0]).total_seconds()
@@ -1308,13 +1329,45 @@ async def _standalone_usage_tick(now: datetime) -> None:
             if _socket_delivering_power(sc, now=now):
                 _standalone_usage_low_since.pop(key, None)
                 if open_sess is None:
+                    # v3.46 — energy_kwh is NOT born 0.0 any more.
+                    #
+                    # It used to be, and that was a measurement of zero on a socket that is
+                    # by definition drawing power (this branch only runs when
+                    # `_socket_delivering_power` is true). The column is nullable and every
+                    # reader is None-safe — marina.py:498 already treats None as unknown —
+                    # so NULL says "not derived yet", which is the truth at this instant.
                     s = _Session(
                         pedestal_id=pid, socket_id=sid, type="electricity",
-                        status="active", started_at=now, energy_kwh=0.0,
+                        status="active", started_at=now,
                         customer_id=None, origin="standalone",
                     )
                     db.add(s)
-                    db.flush()
+                    db.flush()          # assigns s.id, needed by the capture log below
+
+                    # v3.46 — CAPTURE THE OPENING REGISTER HERE, NOT VIA activate().
+                    #
+                    # Since eb8ba94 the whole consumption chain is register-derived: the
+                    # session figure (session_service.complete) AND every row of the billing
+                    # ledger (energy_interval_service._register_session_to_date). Both return
+                    # None the moment `meter_energy_start_kwh` is NULL. This path never
+                    # called activate(), so it never captured a start — and on a cabinet in
+                    # Smart Mode OFF it is the ONLY path that creates sessions. Result on
+                    # cabinet 1: 128 standalone sessions, not one with a start register, and
+                    # energy_intervals frozen at 8675 rows while the ERP feed went silent.
+                    #
+                    # Calling activate() would get the capture, but activate() COMMITS
+                    # (session_service.py:118). This tick opens one DB session, loops every
+                    # socket and commits once at the end; committing per socket inside the
+                    # loop would break that batch and make a mid-pass failure non-atomic.
+                    # The capture is already its own method, so call it directly.
+                    try:
+                        _ss._capture_start_register(db, s)
+                    except Exception:
+                        # _capture_start_register already swallows and logs its own errors;
+                        # this is belt-and-braces so observing usage can never be what
+                        # breaks the watchdog pass.
+                        logger.exception(
+                            "[Standalone] could not capture opening register for session %s", s.id)
                     broadcasts.append(("session_created", s, pid, sid))
                 # Energy is integrated by the live meter handler (every ~5 s) for
                 # whatever session is active — including this standalone one — so

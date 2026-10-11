@@ -42,6 +42,17 @@ aiosqlite==0.20.0
 #   pydantic 2.12.5 + pydantic-settings 2.5.2
 #   pydantic 2.13.4 + pydantic-settings 2.14.1  (= cabinet 1 today)
 # 1030 passed, 34 skipped on all three, identical.
+#
+# CONFIRMED ON CABINET 1 (MAR_KRK_ORM_01), 2026-10-11 10:31 local. `pip install -r` ran to
+# completion with no error for the FIRST TIME SINCE 2026-06-13 — zero hits for "ERROR:
+# Failed building", "error: failed-wheel-build" and "pip install had errors". pip freeze
+# gained exactly two entries, both accounted for: reportlab==4.2.5 and chardet==7.6.0
+# (reportlab's own dependency — `pip show chardet` reports Required-by: reportlab).
+# openapi.json returned 200 afterwards.
+#
+# A CHANGED venv is the proof here. The night before, an UNCHANGED venv was the proof —
+# that the failed install had touched nothing. Same check, opposite sign, and which one
+# applies depends on what is being proved. See docs/engineering_notes.md.
 pydantic>=2.9,<3
 pydantic-settings>=2.5,<3
 email-validator==2.2.0

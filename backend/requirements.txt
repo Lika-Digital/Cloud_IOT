@@ -5,10 +5,76 @@ uvicorn==0.30.6
 paho-mqtt==2.1.0
 sqlalchemy==2.0.35
 aiosqlite==0.20.0
-pydantic==2.9.2
-pydantic-settings==2.5.2
+# ── pydantic / pydantic-settings: RANGES, measured 2026-10-10 ──────────────────
+#
+# These were `==2.9.2` and `==2.5.2`, and on the Python 3.14 cabinet they were
+# UNINSTALLABLE. pydantic 2.9.2 needs pydantic-core 2.23.x, which ships no cp314 wheel, so
+# pip fell back to a source build: maturin -> PyO3 0.22.2 -> "the configured Python
+# interpreter version (3.14) is newer than PyO3's maximum supported version (3.13)".
+#
+# AND PIP RESOLVES THIS FILE ATOMICALLY. One unbuildable package aborts the whole
+# `pip install -r requirements.txt` before anything is installed — proven on cabinet 1 on
+# 2026-10-10, where `pip freeze` before and after the failed install was byte-identical.
+# So this pin was not merely wrong about pydantic: it blocked EVERY package in this file
+# from ever installing, on every upgrade, since the 3.14 venv was hand-built on
+# 2026-06-13. `reportlab` was the visible casualty — declared here and absent from
+# production for four months.
+#
+# THE TRADE-OFF, STATED RATHER THAN HIDDEN. A range costs reproducibility: two cabinets
+# can resolve to different versions. But a pin that cannot install gives no
+# reproducibility at all, only a failed install and whatever happened to be there — which
+# is strictly worse, because it also looks like nothing happened. A range that resolves
+# beats a pin that does not.
+#
+# AND REPRODUCIBILITY IS NOT THIS FILE'S JOB. This file declares what our code is
+# COMPATIBLE with. What was actually INSTALLED belongs in a lockfile. PEP 508 markers
+# (`pydantic==X; python_version < "3.14"`) try to do the lockfile's job here and do it
+# badly: two lines per package, and a new branch every time an interpreter joins the
+# fleet. When we want reproducibility the answer is a constraints file generated from
+# `pip freeze` per cabinet, kept next to that cabinet — not branches in here.
+#
+# Lower bounds are the versions the Ubuntu 24.04 / Python 3.12 cabinet runs, so that
+# machine keeps working. Upper bounds are the next major, where these two break
+# compatibility on purpose.
+#
+# VERIFIED 2026-10-11, full backend suite on the dev box, three points across the range:
+#   pydantic 2.9.2  + pydantic-settings 2.5.2   (the old pin, = the 24.04 cabinet)
+#   pydantic 2.12.5 + pydantic-settings 2.5.2
+#   pydantic 2.13.4 + pydantic-settings 2.14.1  (= cabinet 1 today)
+# 1030 passed, 34 skipped on all three, identical.
+pydantic>=2.9,<3
+pydantic-settings>=2.5,<3
 email-validator==2.2.0
-scikit-learn==1.5.2
+# ── scikit-learn: RANGE, UNVERIFIED LOCALLY — DO NOT READ THIS LIKE THE TWO ABOVE ──
+#
+# Was `==1.5.2`; cabinet 1 runs 1.9.0, so pip had to downgrade it on every install —
+# another reason the atomic resolve above could never succeed.
+#
+# >>> CABINET ACCEPTANCE TEST RUN:  NOT YET RUN  <<<
+#     Stamp the date here when test_real_sklearn_recovers_a_known_linear_relationship
+#     passes on a cabinet. Until that date is filled in, this range rests on nothing but
+#     the stub tests, which do not touch scikit-learn.
+#
+# THE RANGES ABOVE WERE EARNED BY A THREE-POINT MATRIX. THIS ONE WAS NOT, AND CANNOT BE
+# ON THIS MACHINE. scikit-learn publishes no 32-bit Windows wheel and the dev interpreter
+# is Python 3.13 32-bit, so it is not installable here at ANY version — `pip install
+# scikit-learn==1.9.0 --dry-run` falls through to a source build and fails. The full suite
+# passed 1000+ tests without the library because nothing imported it, so running the suite
+# "against the installed version" would have produced a green number saying nothing about
+# scikit-learn at all.
+#
+# It is verified instead by tests/backend/test_prediction_service.py, which is split
+# deliberately:
+#   - stub tests run everywhere and pin OUR side (lazy import reached, X in minutes in an
+#     (n,1) matrix, y the right measurement, MIN_SESSIONS boundary, None not 0.0)
+#   - test_real_sklearn_recovers_a_known_linear_relationship SKIPS without the library and
+#     is run as a cabinet acceptance step. That test, on a machine that has scikit-learn,
+#     is the whole justification for this range.
+#
+# Usage is one call: `from sklearn.linear_model import LinearRegression`, fitted in flight
+# in prediction_service.py:27 and :42. Nothing is pickled, no model is persisted, and
+# backend/models/ is empty — so there is no pickle-compatibility risk across versions.
+scikit-learn>=1.5,<2
 # numpy: RANGE, not a hard pin, and deliberately so.
 #
 # The fleet spans Ubuntu 24.04 (Python 3.12) and 26.04 (Python 3.14). numpy 2.1.2
@@ -26,6 +92,22 @@ python-dotenv==1.0.1
 websockets==13.1
 httpx==0.27.2
 requests==2.32.3
+# reportlab — PIN LEFT ALONE DELIBERATELY (2026-10-10).
+#
+# It was the one package declared here and missing from cabinet 1, for four months,
+# because the atomic resolve above never got as far as installing it. Fixing the pydantic
+# range installs it as a side effect, which is the intended outcome: a pure-Python PDF
+# library costs nothing to have present.
+#
+# Its only consumers are make_contract_pdf / make_invoice_pdf in services/pdf_service.py,
+# reached from three routes (customer invoice PDF, customer contract PDF, admin contract
+# PDF). Those are legacy business logic from an early testing phase: this pedestal does
+# not invoice anyone — the ERP does — and the mobile app talks to the ERP, not to us. Four
+# months of those three routes returning ImportError with no complaint is evidence that
+# they are unused, not a missed outage.
+#
+# Whether that code belongs on a pedestal at all is an open decision, and a separate
+# change. Do not drop this line or those routes as part of a dependency fix.
 reportlab==4.2.5
 zeroconf==0.132.2
 pysnmp==6.2.6

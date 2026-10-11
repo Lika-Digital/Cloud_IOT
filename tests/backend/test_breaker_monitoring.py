@@ -368,14 +368,23 @@ def _trip_socket(socket_id: int) -> int:
 
 
 def test_internal_reset_rejects_when_not_tripped(client, auth_headers):
+    """The STATE precondition, kept testing state.
+
+    v3.49 added a capability precondition that is checked FIRST, so without a motorised
+    capability this test would still see 409 — for the wrong reason — and silently stop
+    covering the state check it was written for. The seed below keeps it honest.
+    """
     # Seed Q1 to closed.
     _simulate("opta/breakers/Q1/status", {
         "cabinetId": CABINET, "socketId": "Q1", "breakerState": "closed",
     })
     pid = _pedestal_id_for_cabinet()
+    _seed_socket_config(pid, 1, breaker_remote_reset="motorised")
     r = client.post(f"/api/pedestals/{pid}/sockets/1/breaker/reset", headers=auth_headers)
     assert r.status_code == 409
-    assert "not in tripped state" in r.json()["detail"].lower()
+    assert "not in tripped state" in r.json()["detail"].lower(), (
+        f"expected the STATE refusal, got: {r.json()['detail']}"
+    )
 
 
 def test_internal_reset_publishes_and_writes_audit(client, auth_headers):
@@ -385,6 +394,7 @@ def test_internal_reset_publishes_and_writes_audit(client, auth_headers):
         published.append((topic, payload))
 
     pid = _trip_socket(1)
+    _seed_socket_config(pid, 1, breaker_remote_reset="motorised")
 
     broadcasts: list[dict] = []
 
@@ -444,6 +454,7 @@ def test_erp_reset_rejects_when_not_tripped(client):
 
 def test_erp_reset_publishes_and_writes_audit(client):
     pid = _trip_socket(2)
+    _seed_socket_config(pid, 2, breaker_remote_reset="motorised")
     _enable_ext_endpoints(["breakers.socket_reset_ext"])
     _set_smart_mode(pid, True)   # breaker reset is a control action — requires Smart Mode ON
 
@@ -695,3 +706,174 @@ def test_breaker_status_rcd_yes_coerced_true():
     assert cfg.breaker_rcd is True              # "yes" coerced to bool
     assert cfg.breaker_state == "closed"
     assert cfg.breaker_type == "RCBO"
+
+# ═══ v3.49 — THE REMOTE-RESET CAPABILITY PRECONDITION ════════════════════════
+#
+# Cabinet 1's breakers are ordinary MCBs (owner, 2026-10-11). Before this precondition,
+# pressing Reset flipped `breaker_state` to 'resetting', wrote a breaker_events row and
+# published an MQTT command nothing acts on — so the operator watched a reset in progress
+# that could never complete, and SocketBreakerPanel's 15 s watchdog then reported "overload
+# condition may still be present", which was the wrong diagnosis entirely.
+#
+# The state flip is the part that matters most in these tests: a refusal that still mutates
+# the breaker record would leave the UI exactly as broken as before.
+
+
+def _capability_case(client, auth_headers, capability):
+    """Trip a socket, set its capability, attempt a reset. Returns (response, config)."""
+    pid = _trip_socket(1)
+    _seed_socket_config(pid, 1, breaker_remote_reset=capability)
+    r = client.post(f"/api/pedestals/{pid}/sockets/1/breaker/reset", headers=auth_headers)
+    return r, _get_socket_config(pid, 1)
+
+
+def test_reset_refused_when_capability_never_established(client, auth_headers):
+    """NULL refuses, and the message names what to do about it."""
+    r, cfg = _capability_case(client, auth_headers, None)
+    assert r.status_code == 409, r.text
+    detail = r.json()["detail"]
+    assert "never been established" in detail, detail
+    assert "breaker_remote_reset" in detail, (
+        "the refusal does not name the field an operator must set"
+    )
+    assert cfg.breaker_state == "tripped", (
+        f"the breaker was moved to {cfg.breaker_state!r} by a REFUSED reset — this is the "
+        f"exact failure the precondition exists to prevent"
+    )
+
+
+def test_reset_refused_for_an_ordinary_mcb(client, auth_headers):
+    """'no' refuses, and says the reset is manual rather than merely unavailable."""
+    r, cfg = _capability_case(client, auth_headers, "no")
+    assert r.status_code == 409, r.text
+    detail = r.json()["detail"]
+    assert "by hand" in detail or "manual" in detail.lower(), detail
+    assert cfg.breaker_state == "tripped", "a refused reset still mutated the record"
+
+
+def test_a_refused_reset_publishes_nothing_and_writes_no_event(client, auth_headers):
+    """No MQTT, no audit row. A refusal must leave no trace of an attempt."""
+    from app.models.breaker_event import BreakerEvent
+    published = []
+
+    def fake_publish(topic, payload, *args, **kwargs):
+        published.append((topic, payload))
+
+    pid = _trip_socket(1)
+    _seed_socket_config(pid, 1, breaker_remote_reset="no")
+
+    db = _TestSession()
+    try:
+        before = db.query(BreakerEvent).filter(
+            BreakerEvent.pedestal_id == pid, BreakerEvent.event_type == "reset_attempted",
+        ).count()
+    finally:
+        db.close()
+
+    with patch("app.services.mqtt_client.mqtt_service.publish", side_effect=fake_publish):
+        r = client.post(f"/api/pedestals/{pid}/sockets/1/breaker/reset", headers=auth_headers)
+    assert r.status_code == 409
+
+    assert not [t for t, _ in published if "breaker" in t], (
+        f"a refused reset published to the hardware anyway: {published}"
+    )
+    db = _TestSession()
+    try:
+        after = db.query(BreakerEvent).filter(
+            BreakerEvent.pedestal_id == pid, BreakerEvent.event_type == "reset_attempted",
+        ).count()
+    finally:
+        db.close()
+    assert after == before, "a refused reset wrote a reset_attempted audit row"
+
+
+def test_capability_is_checked_before_tripped_state(client, auth_headers):
+    """Order matters: "cannot be reset remotely" outranks "not tripped right now".
+
+    Giving the state answer first would imply the action becomes available once it trips,
+    which on an ordinary MCB it never does.
+    """
+    _simulate("opta/breakers/Q1/status", {
+        "cabinetId": CABINET, "socketId": "Q1", "breakerState": "closed",
+    })
+    pid = _pedestal_id_for_cabinet()
+    _seed_socket_config(pid, 1, breaker_remote_reset="no")
+    r = client.post(f"/api/pedestals/{pid}/sockets/1/breaker/reset", headers=auth_headers)
+    assert r.status_code == 409
+    detail = r.json()["detail"].lower()
+    assert "not in tripped state" not in detail, (
+        "a closed, non-motorised breaker was told it is not tripped — which implies the "
+        "reset would work once it trips"
+    )
+
+
+def test_erp_reset_is_refused_by_the_same_precondition(client, auth_headers):
+    """The ERP path must not be a way around it — it shares perform_breaker_reset.
+
+    ORDERING, FOUND BY WRITING THIS TEST: ext_breaker_endpoints.py:189 checks Smart Mode
+    BEFORE delegating, so on a standalone cabinet the ERP gets the Smart-Mode refusal and
+    never reaches the capability one. That is the right precedence — Smart Mode is the
+    master gate for NUC action — but it means Smart Mode has to be ON here for this test
+    to be about capability at all. Without this line it passed on the wrong refusal.
+    """
+    pid = _trip_socket(1)
+    _set_smart_mode(pid, True)
+    _seed_socket_config(pid, 1, breaker_remote_reset=None)
+    _enable_ext_endpoints(["breakers.socket_reset_ext"])
+    r = client.post(
+        f"/api/ext/pedestals/{pid}/sockets/1/breaker/reset",
+        headers={"Authorization": f"Bearer {_make_ext_jwt()}"},
+    )
+    assert r.status_code == 409, r.text
+    assert "never been established" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("capability,available,reason_contains", [
+    ("motorised", True,  None),
+    ("no",        False, "manual"),
+    (None,        False, "not established"),
+])
+def test_status_exposes_the_capability_and_a_reason(client, auth_headers,
+                                                     capability, available, reason_contains):
+    """The UI renders from these three fields, so they are part of the contract.
+
+    `remote_reset_unavailable_reason` follows FacilityLine's shape: the reason is shown
+    rather than the control being silently absent, so an operator learns what to do instead
+    of wondering where the button went.
+    """
+    pid = _trip_socket(1)
+    _seed_socket_config(pid, 1, breaker_remote_reset=capability)
+    r = client.get(f"/api/pedestals/{pid}/sockets/1/breaker/status", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    assert body["breaker_remote_reset"] == capability
+    assert body["remote_reset_available"] is available
+    if reason_contains is None:
+        assert body["remote_reset_unavailable_reason"] is None
+    else:
+        assert reason_contains in (body["remote_reset_unavailable_reason"] or "").lower(), (
+            body["remote_reset_unavailable_reason"]
+        )
+
+
+def test_capability_is_never_set_from_mqtt(client, auth_headers):
+    """Firmware cannot know whether an installer fitted a motor operator.
+
+    Every other breaker metadata field IS populated from `opta/breakers/+/status`. This one
+    must not be, and a payload claiming it must be ignored — inferring live-hardware
+    capability from a string the firmware supplies is the cloud_iot/cloud-iot bug again.
+    """
+    pid = _trip_socket(1)
+    _seed_socket_config(pid, 1, breaker_remote_reset=None)
+    _simulate("opta/breakers/Q1/status", {
+        "cabinetId": CABINET, "socketId": "Q1", "breakerState": "tripped",
+        "breakerType": "ABB S201-C16 MOTORISED",
+        "remoteReset": "motorised",
+        "breaker_remote_reset": "motorised",
+    })
+    cfg = _get_socket_config(pid, 1)
+    assert cfg.breaker_remote_reset is None, (
+        f"MQTT set the capability to {cfg.breaker_remote_reset!r}. The firmware cannot know "
+        f"this, and a free-text breakerType must never be parsed into it."
+    )

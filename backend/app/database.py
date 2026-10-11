@@ -176,6 +176,10 @@ def _migrate_schema():
         ("socket_configs", "breaker_poles",           "TEXT"),
         ("socket_configs", "breaker_rcd",             "INTEGER"),
         ("socket_configs", "breaker_rcd_sensitivity", "TEXT"),
+        # v3.49 — remote-reset capability. NULL on every existing row by design: no
+        # cabinet has ever had this established, and NULL is what makes the reset endpoint
+        # refuse. A DEFAULT of 'no' would claim we had checked.
+        ("socket_configs", "breaker_remote_reset",    "TEXT"),
         # v3.8 — machine-readable session end reason (e.g. "breaker_trip").
         ("sessions",       "end_reason",              "TEXT"),
         # v3.26 — NFC: ERP user attached via scan flow; cabinet provisioning mode.

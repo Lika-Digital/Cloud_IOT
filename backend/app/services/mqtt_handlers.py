@@ -2546,6 +2546,14 @@ async def _handle_opta_breaker_status(socket_name: str, payload: str):
             cfg.breaker_rcd_sensitivity = data["rcdSensitivity"]
 
         db.commit()
+        # v3.49 — read the capability HERE, while the session is still open.
+        #
+        # Every other field in the broadcast below comes from `data`, the MQTT payload,
+        # so none of them touch the ORM after close(). This one comes from OUR record,
+        # and reading it after `db.close()` raised DetachedInstanceError on every
+        # breaker status message — which swallowed the whole handler and stopped the
+        # broadcast entirely. Caught by test_breaker_state_changed_includes_metadata.
+        _remote_reset = getattr(cfg, "breaker_remote_reset", None) if cfg else None
     finally:
         db.close()
 
@@ -2561,6 +2569,17 @@ async def _handle_opta_breaker_status(socket_name: str, payload: str):
             "breaker_poles": data.get("poles"),
             "breaker_rcd": _coerce_bool(data.get("rcd")),
             "breaker_rcd_sensitivity": data.get("rcdSensitivity"),
+            # v3.49 — the remote-reset capability, read from OUR record and never from
+            # the payload. Every other field here comes from `data`; this one must not,
+            # because the firmware cannot know whether an installer fitted a motor
+            # operator, and parsing it out of a free-text breakerType is the
+            # cloud_iot/cloud-iot bug in different clothes.
+            "remote_reset_available": _remote_reset == "motorised",
+            "remote_reset_unavailable_reason": (
+                None if _remote_reset == "motorised"
+                else "manual reset — ordinary MCB" if _remote_reset == "no"
+                else "remote reset capability not established for this outlet"
+            ),
             "timestamp": now_iso(),
         },
     })

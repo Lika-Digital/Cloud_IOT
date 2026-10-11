@@ -40,6 +40,14 @@ export interface BreakerStatus {
   breaker_poles: string | null
   breaker_rcd: boolean | null
   breaker_rcd_sensitivity: string | null
+  // v3.49 — can this breaker be re-closed by command at all?
+  //   null        nobody has established it -> the backend REFUSES a reset
+  //   "no"        ordinary MCB, manual only -> REFUSES
+  //   "motorised" -> the reset proceeds
+  // Never inferred from breaker_type. The derived pair below is what the UI renders.
+  breaker_remote_reset: 'motorised' | 'no' | null
+  remote_reset_available: boolean
+  remote_reset_unavailable_reason: string | null
 }
 
 export interface BreakerEvent {

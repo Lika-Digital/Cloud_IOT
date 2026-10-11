@@ -47,6 +47,21 @@ export default function SocketBreakerPanel({ pedestalId, socketId, isAdmin, onFe
   const isTripped = state === 'tripped'
   const isResetting = state === 'resetting'
 
+  // v3.49 — do not offer a reset this breaker cannot perform.
+  //
+  // Cabinet 1 has ordinary MCBs (owner, 2026-10-11). Until the backend gained its
+  // capability precondition, pressing Reset flipped breaker_state to 'resetting' and
+  // published a command nothing acts on — so this panel showed "Resetting breaker…"
+  // forever, and the 15 s watchdog below then blamed a persistent overload, which was
+  // the wrong diagnosis entirely.
+  //
+  // Default FALSE when the field is absent: an older backend that does not send it
+  // cannot be assumed to have the precondition either.
+  const canRemoteReset = breaker?.remote_reset_available === true
+  const noResetReason =
+    breaker?.remote_reset_unavailable_reason ??
+    'remote reset capability not established for this outlet'
+
   // Clear the 15 s watchdog the moment we observe a return to closed.
   useEffect(() => {
     if (state === 'closed' && watchdogRef.current) {
@@ -140,7 +155,16 @@ export default function SocketBreakerPanel({ pedestalId, socketId, isAdmin, onFe
         </div>
 
         {/* ── Admin-only Reset button (config mode only) ─────── */}
-        {isConfig && isAdmin && isTripped && (
+        {/* v3.49 — gated on the hardware capability, not only on role and state.
+            The reason is SHOWN rather than the control silently vanishing, so an
+            operator learns the reset is manual instead of wondering where the button
+            went — the same shape as FacilityLine's unavailable_reason. */}
+        {isConfig && isAdmin && isTripped && !canRemoteReset && (
+          <div className="w-full text-xs px-2 py-1.5 rounded border border-gray-700 bg-gray-800/60 text-gray-300 text-center">
+            Reset by hand at the cabinet — {noResetReason}
+          </div>
+        )}
+        {isConfig && isAdmin && isTripped && canRemoteReset && (
           <button
             type="button"
             onClick={() => setConfirmOpen(true)}

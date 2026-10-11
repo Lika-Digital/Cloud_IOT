@@ -40,6 +40,32 @@ class SocketConfig(Base):
     breaker_rcd              = Column(Boolean, nullable=True)
     breaker_rcd_sensitivity  = Column(String, nullable=True)
 
+    # v3.49 — CAN THIS BREAKER BE RE-CLOSED BY COMMAND AT ALL?
+    #
+    #   NULL         never established -> the reset endpoint REFUSES
+    #   "no"         ordinary MCB, manual reset only -> REFUSES
+    #   "motorised"  motor-operated -> the reset endpoint proceeds
+    #
+    # A TRI-STATE AND NOT A BOOLEAN, for the reason this project keeps relearning: a
+    # boolean has no "we have not looked" value, so it defaults to False and then reads as
+    # an established fact about the hardware. On cabinet 1 that default would be
+    # accidentally correct — its breakers are ordinary MCBs, confirmed by the owner
+    # 2026-10-11 — and wrong on the first cabinet that has motorised ones, which would ship
+    # claiming "checked, not motorised" when nobody had asked. NULL says nobody asked.
+    #
+    # ON socket_configs AND NOT pedestal_configs because the breaker is per outlet: a
+    # retrofit can motorise one circuit and not the others, and every other breaker field
+    # already lives here per socket.
+    #
+    # NEVER INFERRED FROM `breaker_type`. Parsing "is this model motorised" out of a free
+    # text string the firmware supplies is the cloud_iot/cloud-iot bug in different
+    # clothes: one unexpected spelling and the system silently believes the wrong thing
+    # about live hardware. This field is set deliberately or it is NULL.
+    #
+    # Unlike the metadata above it is NOT populated from MQTT — the firmware cannot know
+    # whether an installer fitted a motor operator.
+    breaker_remote_reset     = Column(String, nullable=True)
+
     # v3.11 — meter hardware configuration reported by Arduino on
     # `opta/config/hardware`. Same no-overwrite-with-null rule as breaker
     # metadata: a missing key in a subsequent payload preserves the previous

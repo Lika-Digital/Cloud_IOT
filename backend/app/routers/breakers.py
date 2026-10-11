@@ -66,6 +66,10 @@ def serialize_breaker_status(cfg: SocketConfig | None) -> dict:
             "breaker_poles": None,
             "breaker_rcd": None,
             "breaker_rcd_sensitivity": None,
+            # v3.49 — no config row at all is the strongest form of "nobody asked".
+            "breaker_remote_reset": None,
+            "remote_reset_available": False,
+            "remote_reset_unavailable_reason": "no hardware record for this outlet",
         }
     return {
         "breaker_state": cfg.breaker_state or "unknown",
@@ -77,6 +81,17 @@ def serialize_breaker_status(cfg: SocketConfig | None) -> dict:
         "breaker_poles": cfg.breaker_poles,
         "breaker_rcd": cfg.breaker_rcd,
         "breaker_rcd_sensitivity": cfg.breaker_rcd_sensitivity,
+        # v3.49 — the capability, plus the derived pair the UI renders from. Same shape as
+        # FacilityLine's `available` / `unavailable_reason`: the reason is shown rather
+        # than the control being silently absent, so an operator learns what to do instead
+        # of wondering where the button went.
+        "breaker_remote_reset": cfg.breaker_remote_reset,
+        "remote_reset_available": cfg.breaker_remote_reset == "motorised",
+        "remote_reset_unavailable_reason": (
+            None if cfg.breaker_remote_reset == "motorised"
+            else "manual reset — ordinary MCB" if cfg.breaker_remote_reset == "no"
+            else "remote reset capability not established for this outlet"
+        ),
     }
 
 
@@ -102,9 +117,22 @@ def perform_breaker_reset(
     """Core reset flow shared by admin + ERP endpoints.
 
     Raises HTTPException(404) if pedestal/socket not found.
+    Raises HTTPException(409) if the breaker cannot be reset remotely (v3.49).
     Raises HTTPException(409) if breaker_state != 'tripped'.
     On success: flips state to 'resetting', appends breaker_events row, publishes
     MQTT, broadcasts `breaker_state_changed`, returns a status dict.
+
+    v3.49 — THE CAPABILITY PRECONDITION, AND WHY IT IS NOT A FEATURE FLAG.
+
+    Cabinet 1's breakers are ordinary MCBs (confirmed by the owner, 2026-10-11). Until
+    this check existed, pressing Reset flipped `breaker_state` to 'resetting' and
+    published an MQTT command nothing acts on — so an operator watched a reset in progress
+    that could never complete, and the panel's 15 s watchdog then reported "overload
+    condition may still be present", which was the wrong diagnosis entirely.
+
+    A flag defaulting to off would still ship a reachable endpoint that lies about the
+    hardware, and someone has to remember to leave it off. A precondition on the hardware
+    record cannot be forgotten, because forgetting IS the NULL case and NULL refuses.
     """
     if db.get(Pedestal, pedestal_id) is None:
         raise HTTPException(status_code=404, detail="Pedestal not found")
@@ -115,6 +143,27 @@ def perform_breaker_reset(
     ).first()
     if cfg is None:
         raise HTTPException(status_code=404, detail="Socket not found")
+
+    # Checked BEFORE the tripped-state test on purpose: "this breaker cannot be reset
+    # remotely at all" is a more fundamental answer than "it is not tripped right now",
+    # and giving the state answer first would imply the action becomes available later.
+    capability = getattr(cfg, "breaker_remote_reset", None)
+    if capability != "motorised":
+        if capability is None:
+            detail = (
+                f"Whether socket {socket_id}'s breaker can be re-closed by command has "
+                f"never been established, so this reset is refused rather than sent into "
+                f"the dark. Set socket_configs.breaker_remote_reset to 'motorised' or "
+                f"'no' for this outlet once someone has looked at the hardware."
+            )
+        else:
+            detail = (
+                f"Socket {socket_id}'s breaker is recorded as '{capability}' — it cannot "
+                f"be re-closed by command. Reset it by hand at the cabinet. Sending the "
+                f"command anyway would mark the breaker 'resetting' and wait forever."
+            )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
     if cfg.breaker_state != "tripped":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -154,6 +203,11 @@ async def broadcast_resetting(pedestal_id: int, socket_id: int) -> None:
             "socket_id": socket_id,
             "breaker_state": "resetting",
             "trip_cause": None,
+            # v3.49 — only ever broadcast from a path the capability check allowed, so
+            # this is True by construction here. Sent explicitly rather than implied,
+            # so the store never has to guess.
+            "remote_reset_available": True,
+            "remote_reset_unavailable_reason": None,
             "timestamp": now_iso(),
         },
     })

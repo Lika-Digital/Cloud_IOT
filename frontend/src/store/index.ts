@@ -216,6 +216,13 @@ interface AppStore {
     breaker_rcd_sensitivity?: string | null
     last_trip_at?: string | null
     trip_count?: number
+    // v3.49 — whether this breaker can be re-closed by command. Static hardware
+    // configuration, carried on the state event alongside the other metadata because
+    // that is where this panel reads everything from. Optional on purpose: a backend
+    // that does not send it has not got the capability precondition either, and the
+    // panel treats absence as "cannot reset" rather than as permission.
+    remote_reset_available?: boolean
+    remote_reset_unavailable_reason?: string | null
     updated_at: string
   }>
   setBreakerState: (

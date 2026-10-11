@@ -61,10 +61,17 @@ email-validator==2.2.0
 # Was `==1.5.2`; cabinet 1 runs 1.9.0, so pip had to downgrade it on every install —
 # another reason the atomic resolve above could never succeed.
 #
-# >>> CABINET ACCEPTANCE TEST RUN:  NOT YET RUN  <<<
-#     Stamp the date here when test_real_sklearn_recovers_a_known_linear_relationship
-#     passes on a cabinet. Until that date is filled in, this range rests on nothing but
-#     the stub tests, which do not touch scikit-learn.
+# >>> CABINET ACCEPTANCE TEST RUN: 2026-10-11, cabinet 1 (MAR_KRK_ORM_01) — PASSED <<<
+#     scripts/verify_sklearn_range.py -> 9/9 checks, exit 0.
+#     scikit-learn 1.9.0 on Python 3.14.4 (64-bit); "1.9.0 in >=1.5,<2" evaluated True.
+#     Recovered y = 0.5x from a clean linear set: predict(200) = 100.00000000000003,
+#     coef_[0] = 0.5 and intercept_ = -0.0, which is what proves X is in MINUTES — a /60
+#     error would still train and still predict, with every coefficient out by 60 and no
+#     error anywhere. Also confirmed there: an untrained model returns None not 0.0, and
+#     four sessions do not train.
+#
+#     This range now rests on a measurement. Before that date it rested only on the stub
+#     tests, which do not touch scikit-learn, and the comment said so.
 #
 # THE RANGES ABOVE WERE EARNED BY A THREE-POINT MATRIX. THIS ONE WAS NOT, AND CANNOT BE
 # ON THIS MACHINE. scikit-learn publishes no 32-bit Windows wheel and the dev interpreter
@@ -78,9 +85,15 @@ email-validator==2.2.0
 # deliberately:
 #   - stub tests run everywhere and pin OUR side (lazy import reached, X in minutes in an
 #     (n,1) matrix, y the right measurement, MIN_SESSIONS boundary, None not 0.0)
-#   - test_real_sklearn_recovers_a_known_linear_relationship SKIPS without the library and
-#     is run as a cabinet acceptance step. That test, on a machine that has scikit-learn,
-#     is the whole justification for this range.
+#   - test_real_sklearn_recovers_a_known_linear_relationship SKIPS without the library.
+#
+# And the pytest form of that second half CANNOT RUN WHERE THE LIBRARY LIVES: the
+# production venv has 58 packages and pytest is not among them. A check placed where it
+# cannot run is a check that gets skipped and read as passed — which is why the executable
+# form is scripts/verify_sklearn_range.py, a plain script with no framework that asserts
+# the same things, prints expected-vs-got for each, and exits 2 saying "on a CABINET this
+# is a FAILURE, not a skip" when scikit-learn is absent. That script is the justification
+# for this range; the pytest case is its development-box twin.
 #
 # Usage is one call: `from sklearn.linear_model import LinearRegression`, fitted in flight
 # in prediction_service.py:27 and :42. Nothing is pickled, no model is persisted, and

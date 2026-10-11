@@ -30,17 +30,38 @@ export interface NfcScanResult {
   expires_at: string // ISO 8601
 }
 
+/**
+ * The ERP session payload. Specified in docs/erp_session_payload_contract.md — keep
+ * the two in step.
+ *
+ * v3.47. This interface was wrong in three ways before today, two of them predating
+ * this change:
+ *   - `energy_kwh: number` was never nullable here, yet water sessions have returned
+ *     null for it since v3.43
+ *   - `power_kw_current: number` likewise; it is null when the meter reading was
+ *     refused as physically impossible, which is NOT the same as 0.0 (idle)
+ *   - `estimated_cost` no longer exists: the cabinet does not price consumption
+ *
+ * A null consumption figure means DO NOT BILL THIS SESSION. It is not zero, and in
+ * TypeScript `null * tariff === 0`, so it must be checked rather than multiplied.
+ */
 export interface NfcSessionStatus {
   session_id: number
   cabinet_id: string | null
-  socket_id: string | null
+  socket_id: string | null          // "Q1".."Q4" | "V1".."V2" — reconcile on this
+  session_type: 'electricity' | 'water'
   customer_id: string
-  status: string // "active" | "ended"
+  status: string                    // "active" | "ended"
   activated_at: string
   duration_minutes: number
-  energy_kwh: number
-  power_kw_current: number
-  estimated_cost: number | null
+  energy_kwh: number | null         // session DELTA, never a cumulative total
+  water_liters: number | null       // session DELTA, never a cumulative total
+  meter_energy_start_kwh: number | null
+  meter_energy_end_kwh: number | null
+  meter_water_start_l: number | null
+  meter_water_end_l: number | null
+  consumption_source: 'register' | 'integrated_legacy' | 'unknown' | null
+  power_kw_current: number | null    // null = reading refused; 0.0 = idle
 }
 
 /** Pre-register intent to charge on the socket this tag is provisioned to. */

@@ -42,7 +42,13 @@ export default function ScanScreen() {
   const [error, setError] = useState<string | null>(null)
   const [lastUid, setLastUid] = useState<string | null>(null)
   const [now, setNow] = useState(Date.now())
-  const [estCost, setEstCost] = useState<number | null>(null)
+  // v3.47 — was `estCost`. The ERP payload no longer carries a price: the cabinet does
+  // not bill, and the price it used to send was computed from a substituted lifetime
+  // meter register. What it carries now is the consumption figure and how it was derived,
+  // so that is what this screen shows.
+  const [usage, setUsage] = useState<
+    { value: number | null; unit: string; source: string | null } | null
+  >(null)
   const [stopping, setStopping] = useState(false)
 
   const keyOk = erpApiKeyConfigured()
@@ -65,16 +71,25 @@ export default function ScanScreen() {
     }
   }, [now, nfcPending, activeSession, setNfcPending])
 
-  // While active, poll the authoritative NFC status for the estimated cost.
+  // While active, poll the authoritative NFC status for the consumption figure.
   useEffect(() => {
     if (!activeSession) {
-      setEstCost(null)
+      setUsage(null)
       return
     }
     let active = true
     const poll = () =>
       getNfcSession(activeSession.id)
-        .then((s) => { if (active) setEstCost(s.estimated_cost) })
+        .then((s) => {
+          if (!active) return
+          // Exactly one of the two carries a figure, and either may be null — which means
+          // "not derivable", never zero. See docs/erp_session_payload_contract.md.
+          setUsage(
+            s.session_type === 'water'
+              ? { value: s.water_liters, unit: 'L', source: s.consumption_source }
+              : { value: s.energy_kwh, unit: 'kWh', source: s.consumption_source },
+          )
+        })
         .catch(() => { /* non-fatal */ })
     poll()
     const iv = setInterval(poll, 15_000)
@@ -179,13 +194,23 @@ export default function ScanScreen() {
                 <Metric t={t} label="Energy" value={`${liveKwh.toFixed(4)} kWh`} />
               </>
             )}
-            {/* The estimated cost comes from GET /api/nfc/session, which prices kWh only.
-                A water session therefore has no figure to show, and a euro amount computed
-                from an electricity tariff would be worse than a dash. */}
+            {/* v3.47 — consumption and its provenance, not a price. The cabinet does not
+                bill; the ERP does. A null figure renders as "not derivable" rather than as
+                a dash or a zero, because those read as "nothing was used" and the truth is
+                "we could not work it out". */}
             <Metric
               t={t}
-              label="Est. cost"
-              value={!isWater && estCost != null ? `€${estCost.toFixed(2)}` : '—'}
+              label="Consumption"
+              value={
+                usage == null
+                  ? '—'
+                  : usage.value == null
+                    ? 'not derivable'
+                    : `${usage.value.toFixed(3)} ${usage.unit}` +
+                      (usage.source && usage.source !== 'register'
+                        ? ` (${usage.source})`
+                        : '')
+              }
             />
           </View>
           <TouchableOpacity style={[s.btn, { backgroundColor: t.danger }]} onPress={handleStop} disabled={stopping}>

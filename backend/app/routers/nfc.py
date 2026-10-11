@@ -722,9 +722,15 @@ def nfc_sessions_by_user(
 
     Lets the ERP reconcile its own records against our DB by *its own* user id —
     the `nfc_user_id` we stored from POST /api/nfc/scan. Each entry uses the same
-    spending payload as GET /api/nfc/session/{id} (session_id, energy_kwh,
-    duration_minutes, estimated_cost, status, …). Optional `status` narrows to
-    active or ended; `limit` caps the result (default 100, max 500).
+    payload as GET /api/nfc/session/{id} — 16 keys, specified in
+    docs/erp_session_payload_contract.md. Optional `status` narrows to active or
+    ended; `limit` caps the result (default 100, max 500).
+
+    v3.47 — this said the payload carried `estimated_cost`. It no longer does: the
+    cabinet does not price consumption, the ERP does. The payload now also carries both
+    meter boundary readings and `consumption_source`, so the ERP can recompute each
+    figure and see how it was derived. A consumption figure may be null, which means
+    "do not bill this session" and never zero.
 
     A customer may list only their own sessions. 403 rather than 404 here, and deliberately:
     the `user_id` in the path was supplied by the caller, so refusing it plainly leaks nothing

@@ -557,26 +557,42 @@ async def test_tc_six_12_truncated_config_does_not_erase_the_valves(
 
 
 # ═══ TC-SIX-13 ════════════════════════════════════════════════════════════════
+#
+# REWRITTEN 2026-10-11, AND WHY MATTERS MORE THAN WHAT.
+#
+# The two cases here used to assert the substitution AS THE CONTRACT:
+#
+#     assert body["water_liters"] == 42.5      # == vc.meter_total_l, the LIFETIME total
+#     assert body["energy_kwh"]   == 12.25     # == sc.meter_energy_kwh, likewise
+#
+# Neither session had a derivable figure. 42.5 and 12.25 were the valve's and the socket's
+# cumulative lifetime registers, substituted by `build_session_payload` into a field whose
+# name says "this session's consumption". The tests pinned that as correct, which is part of
+# why it survived to be found by reading the function instead of by running the suite.
+#
+# These cases were right about what they were built for — a water session must not be
+# reported as "Q1" and must not borrow socket 1's electricity register. That purpose is kept
+# and strengthened. What changed is the expected value: no derivable figure is NULL, and the
+# lifetime register must appear NOWHERE in the payload.
+#
+# The "appears nowhere" assertion is deliberately blunt: it scans every value in the payload
+# for the register number. Any future substitution, into any field, fails it.
 
-def test_tc_six_13_erp_payload_for_a_water_session(client, auth_headers, six_pid):
-    """What we send ERP for a water session, and what we must NOT send.
+def _assert_absent_everywhere(body: dict, needle: float, what: str):
+    """No field anywhere in the payload may carry this number."""
+    hits = [k for k, v in body.items()
+            if isinstance(v, (int, float)) and v is not None and abs(float(v) - needle) < 1e-9]
+    assert not hits, (
+        f"{what} ({needle}) appears in the ERP payload at {hits}. A cumulative lifetime "
+        f"register in a per-session field is the defect this test exists to prevent: the ERP "
+        f"cannot tell it from a real figure, and there is no start value for it to check "
+        f"against."
+    )
 
-    `build_session_payload` assumed electricity in three places. Because V1 and Q1 are both
-    `socket_id=1`, each one silently returned the other outlet's data:
 
-      * the outlet was reported as `"Q1"` — an outlet the customer never touched, and one that
-        may have its own session running at the same moment;
-      * `energy_kwh` fell back to socket 1's cumulative ELECTRICITY register, so ERP received a
-        plausible kWh figure for a session that drew litres;
-      * `estimated_cost` priced those borrowed kWh at the electricity tariff.
-
-    Unreachable before, because water tags could not be provisioned. Enabling the six-tag
-    model is what made it reachable.
-
-    The litres/kWh separation is asserted as `is None`, not as falsy: 0.0 means a register that
-    did not move, which is a measurement. None means this outlet does not measure that
-    quantity at all. Conflating them is the mistake the register work was built to prevent.
-    """
+def test_tc_six_13_water_session_with_no_figure_sends_null_not_a_lifetime_total(
+        client, auth_headers, six_pid):
+    """A water session ERP cannot be given a figure for sends null — and no register leaks."""
     from app.models.session import Session
     from app.models.socket_config import SocketConfig
     from app.models.valve_config import ValveConfig
@@ -585,8 +601,8 @@ def test_tc_six_13_erp_payload_for_a_water_session(client, auth_headers, six_pid
 
     db = _S()
     try:
-        # Socket 1's electricity register holds a large number. Valve 1's holds a small one.
-        # If the payload reads the wrong one, the figures say which.
+        # Socket 1's electricity register holds a large number, valve 1's a small one. If any
+        # field reads the wrong one, the figures say which.
         sc = db.query(SocketConfig).filter(
             SocketConfig.pedestal_id == six_pid, SocketConfig.socket_id == 1).first()
         sc.meter_energy_kwh = 987.6
@@ -595,6 +611,7 @@ def test_tc_six_13_erp_payload_for_a_water_session(client, auth_headers, six_pid
             ValveConfig.pedestal_id == six_pid, ValveConfig.valve_id == 1).first()
         vc.meter_total_l = 42.5
 
+        # No start/end water registers: the session is not derivable.
         ses = Session(pedestal_id=six_pid, socket_id=1, type="water", status="active",
                       started_at=datetime.utcnow(), nfc_user_id="erp-six-water")
         db.add(ses)
@@ -612,47 +629,23 @@ def test_tc_six_13_erp_payload_for_a_water_session(client, auth_headers, six_pid
         f"on this string, so Q1 attributes the litres to an electricity socket"
     )
     assert body["session_type"] == "water"
-    assert body["water_liters"] == 42.5, (
-        f"expected the valve's register, got {body.get('water_liters')!r}"
+
+    assert body["water_liters"] is None, (
+        f"no start register was captured, so this session's volume is not derivable — got "
+        f"{body['water_liters']!r}. The removed fallback returned the valve's LIFETIME total "
+        f"(42.5) here."
     )
     assert body["energy_kwh"] is None, (
-        f"a water session reported energy_kwh={body['energy_kwh']!r} — socket 1's electricity "
-        f"register (987.6) leaking into a water session is a billing fault. None, not 0.0: "
-        f"this outlet does not measure kWh, which is different from measuring zero"
-    )
-    # Rewritten 2026-10-01. This asserted `estimated_cost is None` on the reasoning that "a
-    # euro figure priced from the kWh tariff must not be attached to litres" — right reasoning,
-    # wrong conclusion. `BillingConfig.liter_price_eur` has existed all along and
-    # `invoice_service` has always used it, so None was not "no tariff exists", it was this
-    # function not reaching for the one that does. A customer filling a tank in MODE 2 saw a
-    # blank where the running cost belongs, on the screen whose purpose is the running cost.
-    # The tariff is read through the API, not through a directly-opened session: the app and a
-    # hand-opened UserSessionLocal do not necessarily resolve to the same file under the test
-    # harness, and an assertion built on the wrong one fails for a reason that has nothing to
-    # do with the behaviour under test.
-    cfg = client.get("/api/billing/config", headers=auth_headers)
-    assert cfg.status_code == 200, cfg.text
-    liter_price = cfg.json()["liter_price_eur"]
-    kwh_price = cfg.json()["kwh_price_eur"]
-
-    assert body["estimated_cost"] == round(body["water_liters"] * liter_price, 4), (
-        f"a water session must be priced at the WATER tariff: expected "
-        f"{round(body['water_liters'] * liter_price, 4)} "
-        f"({body['water_liters']} L x {liter_price}), got {body['estimated_cost']!r}"
-    )
-    assert body["estimated_cost"] != round(body["water_liters"] * kwh_price, 4), (
-        "litres priced at the kWh tariff — the two tariffs must not be interchangeable "
-        "(if they are numerically equal, change one in the test fixture)"
+        "a water session must not carry a kWh figure — None, not 0.0: this outlet does not "
+        "measure kWh, which differs from measuring zero"
     )
 
+    _assert_absent_everywhere(body, 42.5, "valve 1's lifetime water register")
+    _assert_absent_everywhere(body, 987.6, "socket 1's lifetime electricity register")
 
-def test_tc_six_13b_erp_payload_for_an_electricity_session_is_unchanged(
-        client, auth_headers, six_pid):
-    """The electricity path must be untouched by the water fix.
 
-    Paired with TC-SIX-13 deliberately: a fix that got water right by breaking electricity
-    would pass the case above on its own.
-    """
+def test_tc_six_13b_electricity_session_with_no_figure_sends_null(client, auth_headers, six_pid):
+    """The electricity path, same rule. Paired so a fix to one cannot break the other."""
     from app.models.session import Session
     from app.models.socket_config import SocketConfig
 
@@ -678,10 +671,209 @@ def test_tc_six_13b_erp_payload_for_an_electricity_session_is_unchanged(
 
     assert body["socket_id"] == "Q2"
     assert body["session_type"] == "electricity"
-    assert body["energy_kwh"] == 12.25
-    assert body["power_kw_current"] == 2.0
+    assert body["energy_kwh"] is None, (
+        f"no start register, so no derivable figure — got {body['energy_kwh']!r}. The removed "
+        f"fallback returned the socket's LIFETIME register (12.25) here, and estimated_cost "
+        f"was priced from it."
+    )
     assert body["water_liters"] is None, (
         "an electricity session must not carry a litre figure, not even 0.0"
+    )
+    # power_kw_current is a live reading, not a session figure, so it IS reported.
+    assert body["power_kw_current"] == 2.0
+
+    _assert_absent_everywhere(body, 12.25, "socket 2's lifetime electricity register")
+
+
+def test_tc_six_13c_a_derivable_session_sends_the_delta_and_both_registers(
+        client, auth_headers, six_pid):
+    """The positive case neither original test covered.
+
+    With both boundary readings present the payload carries the DELTA, both readings, and the
+    provenance — so the ERP can recompute 14.50 - 12.25 itself and disagree with us. A figure
+    the consumer cannot check is a figure it has to trust.
+    """
+    from app.models.session import Session
+    from app.models.socket_config import SocketConfig
+
+    _clear(six_pid)
+
+    db = _S()
+    try:
+        sc = db.query(SocketConfig).filter(
+            SocketConfig.pedestal_id == six_pid, SocketConfig.socket_id == 3).first()
+        sc.meter_energy_kwh = 14.50
+        ses = Session(pedestal_id=six_pid, socket_id=3, type="electricity", status="completed",
+                      started_at=datetime.utcnow(), ended_at=datetime.utcnow(),
+                      nfc_user_id="erp-six-delta",
+                      meter_energy_start_kwh=12.25, meter_energy_end_kwh=14.50,
+                      energy_kwh=2.25, consumption_source="register")
+        db.add(ses)
+        db.commit()
+        sid = ses.id
+    finally:
+        db.close()
+
+    body = client.get(f"/api/nfc/session/{sid}", headers=_erp()).json()
+
+    assert body["energy_kwh"] == 2.25
+    assert body["meter_energy_start_kwh"] == 12.25, "the opening reading is not on the wire"
+    assert body["meter_energy_end_kwh"] == 14.50, "the closing reading is not on the wire"
+    assert body["consumption_source"] == "register", (
+        "session.py:87 calls consumption_source 'part of the ERP contract, permanently'; "
+        "until v3.47 the payload did not carry it"
+    )
+    assert (round(body["meter_energy_end_kwh"] - body["meter_energy_start_kwh"], 4)
+            == body["energy_kwh"]), (
+        "the delta the ERP would compute from the two registers disagrees with the figure we "
+        "sent — they must agree by construction"
+    )
+    # Water fields stay null on an electricity session.
+    assert body["meter_water_start_l"] is None
+    assert body["meter_water_end_l"] is None
+
+
+def test_tc_six_13d_water_delta_and_registers(client, auth_headers, six_pid):
+    """Water gets its pair for the same reason, and more so — it has no interval ledger."""
+    from app.models.session import Session
+
+    _clear(six_pid)
+
+    db = _S()
+    try:
+        ses = Session(pedestal_id=six_pid, socket_id=2, type="water", status="completed",
+                      started_at=datetime.utcnow(), ended_at=datetime.utcnow(),
+                      nfc_user_id="erp-six-water-delta",
+                      meter_water_start_l=100.0, meter_water_end_l=137.5,
+                      water_liters=37.5, consumption_source="register")
+        db.add(ses)
+        db.commit()
+        sid = ses.id
+    finally:
+        db.close()
+
+    body = client.get(f"/api/nfc/session/{sid}", headers=_erp()).json()
+
+    assert body["socket_id"] == "V2"
+    assert body["water_liters"] == 37.5
+    assert body["meter_water_start_l"] == 100.0
+    assert body["meter_water_end_l"] == 137.5
+    assert body["consumption_source"] == "register"
+    assert (round(body["meter_water_end_l"] - body["meter_water_start_l"], 3)
+            == body["water_liters"])
+    assert body["meter_energy_start_kwh"] is None
+    assert body["meter_energy_end_kwh"] is None
+
+
+def test_tc_six_13e_refused_power_is_null_not_zero(client, auth_headers, six_pid):
+    """The third substitution: `(… else 0.0) or 0.0` reported 0.0 kW on a refused reading.
+
+    `check_power_plausible` sets `meter_power_kw = None` when the meter claims more real power
+    than V x I permits — live on Q3 and Q4 of cabinet 1. Reporting 0.0 told the ERP the socket
+    was idle. An idle socket and a socket whose meter we have stopped believing must not share
+    a value.
+    """
+    from app.models.session import Session
+    from app.models.socket_config import SocketConfig
+
+    _clear(six_pid)
+
+    db = _S()
+    try:
+        sc = db.query(SocketConfig).filter(
+            SocketConfig.pedestal_id == six_pid, SocketConfig.socket_id == 4).first()
+        sc.meter_power_kw = None          # refused by the plausibility check
+        sc.meter_power_kw_raw = 7.922     # what the meter claimed; kept as evidence
+        ses = Session(pedestal_id=six_pid, socket_id=4, type="electricity", status="active",
+                      started_at=datetime.utcnow(), nfc_user_id="erp-six-refused")
+        db.add(ses)
+        db.commit()
+        sid = ses.id
+    finally:
+        db.close()
+
+    body = client.get(f"/api/nfc/session/{sid}", headers=_erp()).json()
+
+    assert body["power_kw_current"] is None, (
+        f"a refused meter reading was reported as {body['power_kw_current']!r} kW. 0.0 means "
+        f"idle; this socket was measured drawing current and we chose not to trust its power "
+        f"figure. Those are different states."
+    )
+    _assert_absent_everywhere(body, 7.922, "the raw refused power reading")
+
+
+def test_tc_six_13f_the_payload_carries_no_price_at_all(client, auth_headers, six_pid):
+    """`estimated_cost` is REMOVED, not nulled.
+
+    This cabinet does not bill — the ERP does. A payload that carries a price is the cabinet
+    doing billing, and the finding that produced this change WAS a price: a cost computed from
+    a substituted lifetime register. We send consumption and provenance; the ERP prices it.
+
+    Asserted as key-absence rather than as a null value, because a nullable price field invites
+    a consumer to start depending on it again.
+    """
+    from app.models.session import Session
+
+    _clear(six_pid)
+
+    db = _S()
+    try:
+        ses = Session(pedestal_id=six_pid, socket_id=1, type="electricity", status="completed",
+                      started_at=datetime.utcnow(), ended_at=datetime.utcnow(),
+                      nfc_user_id="erp-six-noprice",
+                      meter_energy_start_kwh=1.0, meter_energy_end_kwh=3.0,
+                      energy_kwh=2.0, consumption_source="register")
+        db.add(ses)
+        db.commit()
+        sid = ses.id
+    finally:
+        db.close()
+
+    body = client.get(f"/api/nfc/session/{sid}", headers=_erp()).json()
+
+    for forbidden in ("estimated_cost", "cost", "price", "cost_eur", "amount"):
+        assert forbidden not in body, (
+            f"the ERP payload carries {forbidden!r}. Pricing belongs to the ERP; the cabinet "
+            f"sends consumption and how it was derived."
+        )
+
+
+def test_tc_six_13g_the_payload_key_set_is_exactly_the_documented_contract(
+        client, auth_headers, six_pid):
+    """The contract in docs/erp_session_payload_contract.md is 16 keys. Pin it.
+
+    The ERP is being built against this set right now, so a key appearing or vanishing
+    unannounced is a consumer-side break. If this test fails, update the document in the same
+    commit — that is the point of pinning it here.
+    """
+    from app.models.session import Session
+
+    _clear(six_pid)
+    db = _S()
+    try:
+        ses = Session(pedestal_id=six_pid, socket_id=1, type="electricity", status="active",
+                      started_at=datetime.utcnow(), nfc_user_id="erp-six-keys")
+        db.add(ses)
+        db.commit()
+        sid = ses.id
+    finally:
+        db.close()
+
+    body = client.get(f"/api/nfc/session/{sid}", headers=_erp()).json()
+
+    expected = {
+        "session_id", "cabinet_id", "socket_id", "session_type", "customer_id", "status",
+        "activated_at", "duration_minutes",
+        "energy_kwh", "water_liters",
+        "meter_energy_start_kwh", "meter_energy_end_kwh",
+        "meter_water_start_l", "meter_water_end_l",
+        "consumption_source", "power_kw_current",
+    }
+    assert set(body.keys()) == expected, (
+        f"ERP payload key set drifted.\n"
+        f"  added  : {sorted(set(body.keys()) - expected)}\n"
+        f"  removed: {sorted(expected - set(body.keys()))}\n"
+        f"Update docs/erp_session_payload_contract.md in the same commit."
     )
 
 

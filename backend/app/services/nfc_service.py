@@ -307,8 +307,33 @@ def build_session_payload(db, user_db, session) -> dict:
     """Build the ERP-facing session view used by GET /api/nfc/session/{id} and
     the ERP webhook. `db` = pedestal.db session, `user_db` = users.db session.
 
-    estimated_cost uses the global BillingConfig.kwh_price_eur (energy_kwh * price);
-    None when no BillingConfig row exists, and None for a water session (see below).
+    v3.47 — THREE SUBSTITUTIONS REMOVED, AND THE PRICE REMOVED.
+
+    This function used to answer a question it had not been asked. When a session had no
+    derivable figure it substituted the OUTLET'S LIFETIME CUMULATIVE REGISTER into the
+    session field — `sc.meter_energy_kwh` for energy, `vc.meter_total_l` for water — and
+    then priced it. On cabinet 1, where `session.energy_kwh` is NULL on virtually every
+    row, the first attributable session on socket 1 would have reported 481.76 kWh as that
+    session's consumption, with a cost to match. The payload carried no start register, so
+    the ERP had no way to notice.
+
+    A third `or 0.0` reported `power_kw_current` as 0.0 whenever `check_power_plausible`
+    had refused the meter's reading — a measurement of zero draw on a socket we know is
+    drawing, live on Q3 and Q4. The same `or 0.0` that was removed from
+    `_integrate_session_energy`, on the wire instead of in the database.
+
+    THE RULE IS NEVER SUBSTITUTE, ALWAYS LABEL. A figure that cannot be derived is null,
+    and `consumption_source` says why. Both registers are sent so the ERP can compute the
+    delta itself and check ours — the same property the weekly report page has, applied to
+    the wire.
+
+    `estimated_cost` is GONE, not nullable. This cabinet does not bill; the ERP does. A
+    payload that carries a price is the cabinet doing billing, and this whole finding began
+    as a price computed from a substituted lifetime register. `BillingConfig` is untouched
+    and still read by `billing.py` and `invoice_service.py`.
+
+    See docs/erp_session_payload_contract.md — the five nullable fields and what a consumer
+    must do with them.
 
     v3.43 — WATER SESSIONS REACH THIS FUNCTION NOW, and it assumed electricity throughout.
     Since a water session on V1 and an electricity session on Q1 are both `socket_id=1`,
@@ -350,45 +375,50 @@ def build_session_payload(db, user_db, session) -> dict:
     # Energy and litres are reported in their own fields and never substituted for one
     # another. A water session has energy_kwh = None, not 0.0 — the same distinction the
     # register work drew: zero means measured zero, and this outlet measures no kWh at all.
+    # v3.47 — THE SESSION DELTA OR NULL. Never a cumulative total.
+    #
+    # The removed fallback read `sc.meter_energy_kwh`, the socket's LIFETIME register, into
+    # a field whose name and position say "this session's consumption". It is not a less
+    # precise answer to the same question; it is a precise answer to a different one.
     energy_kwh = None if is_water else session.energy_kwh
-    if not is_water and energy_kwh is None and sc is not None:
-        # Live register total while the session runs; the session field once it completes.
-        energy_kwh = sc.meter_energy_kwh
     energy_kwh = round(energy_kwh, 4) if energy_kwh is not None else None
 
     water_liters = getattr(session, "water_liters", None) if is_water else None
-    if is_water and water_liters is None and vc is not None:
-        water_liters = vc.meter_total_l
     water_liters = round(water_liters, 3) if water_liters is not None else None
 
-    power_kw_current = (sc.meter_power_kw if (is_active and sc is not None) else 0.0) or 0.0
+    # The two register readings the figure is a delta OF, so the ERP can recompute it and
+    # disagree with us. Water gets its pair for the same reason energy does, and more so:
+    # water has no interval ledger behind it, so this is the only way its figure can be
+    # checked at all.
+    meter_energy_start_kwh = None if is_water else session.meter_energy_start_kwh
+    meter_energy_end_kwh   = None if is_water else session.meter_energy_end_kwh
+    meter_water_start_l    = session.meter_water_start_l if is_water else None
+    meter_water_end_l      = session.meter_water_end_l if is_water else None
+
+    # v3.47 — `(... else 0.0) or 0.0` became null.
+    #
+    # `check_power_plausible` sets `meter_power_kw = None` when the meter reports more real
+    # power than V x I permits. `or 0.0` turned that refusal into a reported 0.0 kW — zero
+    # draw on a socket measured at 0.46 A. An idle socket and a socket whose meter we have
+    # stopped believing are different states and must not share a value.
+    power_kw_current = sc.meter_power_kw if (is_active and sc is not None) else None
 
     end = session.ended_at or datetime.utcnow()
     duration_minutes = round(max(0.0, (end - session.started_at).total_seconds()) / 60.0, 2)
 
-    # Priced from the tariff that matches the session type. An estimate for DISPLAY only —
-    # never the invoice (invoice_service writes that) and irrelevant in MODE 1, where the ERP
-    # prices everything.
+    # v3.47 — `estimated_cost` IS NOT SENT. Removed, not nulled.
     #
-    # v3.43 — water is priced too. `BillingConfig.liter_price_eur` has existed since the
-    # billing config was introduced and `invoice_service` has always used it, so returning
-    # None for water was not "no tariff exists" — it was this function not reaching for the
-    # one that does. A customer filling a tank in MODE 2 saw a blank where the running cost
-    # should be, on the screen that exists to show them the running cost.
+    # The cabinet does not bill — the ERP does, and has from the start. The pedestal's own
+    # pricing survives only from the mobile-API phase, which does not talk to this cabinet.
+    # A payload carrying a price is the cabinet doing billing, and the finding that produced
+    # this change WAS a price: a cost computed from a substituted lifetime register.
     #
-    # Stays None when the quantity itself is None: a cost computed from an unknown
-    # consumption would be a number with nothing behind it.
-    estimated_cost = None
-    try:
-        from ..auth.customer_models import BillingConfig
-        billing = user_db.get(BillingConfig, 1)
-        if billing is not None:
-            if is_water and water_liters is not None:
-                estimated_cost = round(water_liters * (billing.liter_price_eur or 0.0), 4)
-            elif not is_water and energy_kwh is not None:
-                estimated_cost = round(energy_kwh * (billing.kwh_price_eur or 0.0), 4)
-    except Exception:
-        estimated_cost = None
+    # We send consumption and its provenance. The ERP prices it.
+    #
+    # `BillingConfig` is untouched and still read by routers/billing.py:89 (admin spending
+    # page) and services/invoice_service.py:27 (legacy invoice path), so nothing is
+    # stranded by this removal. `user_db` stays in the signature: callers pass it and it is
+    # used for customer-name resolution elsewhere in this module.
 
     # The outlet name follows the session TYPE. The numbers overlap between the two kinds
     # (V1 and Q1 are both 1), so the prefix is the only thing that says which outlet this
@@ -408,8 +438,28 @@ def build_session_payload(db, user_db, session) -> dict:
         "duration_minutes": duration_minutes,
         # Exactly one of these carries a figure. The other is None — NOT 0.0, which would
         # read as "measured nothing" for a quantity this outlet does not measure.
+        #
+        # EITHER MAY BE NULL EVEN FOR ITS OWN OUTLET. Null means no derivable figure; it is
+        # NOT zero, and a consumer must read it as "do not bill this session". See
+        # docs/erp_session_payload_contract.md.
         "energy_kwh": energy_kwh,
         "water_liters": water_liters,
-        "power_kw_current": round(power_kw_current, 3),
-        "estimated_cost": estimated_cost,
+        # The readings the figure is a delta of. Supplied so the ERP can recompute it
+        # independently rather than taking ours on trust.
+        "meter_energy_start_kwh": (round(meter_energy_start_kwh, 4)
+                                   if meter_energy_start_kwh is not None else None),
+        "meter_energy_end_kwh": (round(meter_energy_end_kwh, 4)
+                                 if meter_energy_end_kwh is not None else None),
+        "meter_water_start_l": (round(meter_water_start_l, 3)
+                                if meter_water_start_l is not None else None),
+        "meter_water_end_l": (round(meter_water_end_l, 3)
+                              if meter_water_end_l is not None else None),
+        # HOW the figure was derived. session.py:87 has called this "part of the ERP
+        # contract, permanently" since v3.43; until v3.47 the payload did not carry it, so
+        # the comment described a contract the code did not keep.
+        "consumption_source": getattr(session, "consumption_source", None),
+        # None when the meter's reading was refused as physically impossible — distinct
+        # from 0.0, which means the socket is idle.
+        "power_kw_current": (round(power_kw_current, 3)
+                             if power_kw_current is not None else None),
     }

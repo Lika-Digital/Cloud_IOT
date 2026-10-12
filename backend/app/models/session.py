@@ -70,6 +70,13 @@ class Session(Base):
     # detector go quiet whenever a customer opened the app.
     last_reconciled_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
 
+    # D6.1 step c (2026-10-12) — WHEN THE ERP SAID IT HAD BILLED THIS SESSION, via
+    # POST /api/nfc/sessions/ack. Replaces last_reconciled_at as the detector's signal: that
+    # column was stamped whenever the ERP READ a session — including while it was still running
+    # — so "read" passed for "billed". It is kept (history is not rewritten) and no longer
+    # written. Only a FINAL session with an erp_ref can be acknowledged.
+    erp_acked_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
     # v3.43 — METER REGISTER ENDPOINTS. What the outlet's cumulative register read when this
     # session started and ended. `energy_kwh` / `water_liters` are now the DELTA of these, so
     # what we report to ERP is the meter's own arithmetic rather than a figure we derived.

@@ -804,10 +804,11 @@ def nfc_session_status(session_id: int, db: DBSession = Depends(get_db),
     # v3.43 — a machine caller reading this IS reconciliation; a customer reading their own
     # charge is not. Stamping both would silence the divergence detector every time someone
     # opened the app.
-    # D6.1: the only caller is the ERP machine key, so this always applied. Removed in step c
-    # (reads must not stamp; the ERP will acknowledge explicitly).
+    # D6.1 step c (2026-10-12): a read has NO side effects. It used to stamp the session as
+    # reconciled, so reading it mid-charge took it out of the backlog for good. The ERP now
+    # says what it billed: POST /api/nfc/sessions/ack.
     # if customer is None:
-    erp_reconciliation.mark_reconciled(db, [session])
+    #     erp_reconciliation.mark_reconciled(db, [session])
     return nfc_service.build_session_payload(db, user_db, session)
 
 
@@ -900,7 +901,7 @@ def nfc_sessions(
     boundary never drops or repeats a row while the set is unchanged.
 
     A READ WITH NO SIDE EFFECTS. Unlike the endpoint it replaces, it stamps nothing as
-    reconciled — the ERP acknowledges what it billed explicitly (step c).
+    reconciled — the ERP acknowledges what it billed with POST /api/nfc/sessions/ack.
     """
     if (ended_from is None) != (ended_to is None):
         raise HTTPException(status_code=400,
@@ -936,6 +937,31 @@ def nfc_sessions(
         "next_offset": nxt if nxt < total else None,
         "sessions": [nfc_service.build_session_payload(db, user_db, s) for s in rows],
     }
+
+
+class NfcAckBody(BaseModel):
+    session_ids: List[int] = Field(..., min_length=1,
+                                   max_length=erp_reconciliation.ACK_MAX_IDS)
+
+
+@router.post("/sessions/ack")
+def nfc_sessions_ack(body: NfcAckBody, db: DBSession = Depends(get_db),
+                     _: str = Depends(require_erp_api_key)):
+    """The ERP acknowledges sessions it has BILLED (D6.1 step c, 2026-10-12).
+
+    Call it only once a session is really billed: this is what the reconciliation detector
+    measures, and the backlog it alarms on is "ended, attributed, not acknowledged". Reading a
+    session never counts.
+
+    Idempotent — acknowledging twice keeps the first timestamp. Every id comes back in exactly
+    one bucket: `acked` (with its erp_acked_at), `unknown`, `not_final` (still running), or
+    `not_attributed` (no erp_ref — never yours to bill). 1..500 ids per call.
+    """
+    out = erp_reconciliation.acknowledge(db, body.session_ids)
+    logger.info("[ERP] ack: %d acked, %d unknown, %d not final, %d not attributed",
+                len(out["acked"]), len(out["unknown"]), len(out["not_final"]),
+                len(out["not_attributed"]))
+    return out
 
 
 @router.post("/session/{session_id}/stop")

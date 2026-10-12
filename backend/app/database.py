@@ -273,6 +273,8 @@ def _migrate_schema():
         ("sessions",       "consumption_source",     "TEXT"),
         # D6.1 (2026-10-12) — the ERP's reference, from POST /api/nfc/scan.
         ("sessions",       "erp_ref",                "TEXT"),
+        # D6.1 step c — the ERP's explicit acknowledgement that it billed the session.
+        ("sessions",       "erp_acked_at",           "DATETIME"),
         # v3.43 — cumulative water register per valve, mirroring socket_configs.meter_energy_kwh
         # for electricity. Forwarded to ERP as-is; also the source of the session delta.
         ("valve_configs",  "meter_total_l",          "REAL"),

@@ -279,3 +279,113 @@ def test_tc_d61_08_commented_out_routes_are_absent(client, auth_headers, pid):
     ):
         r = client.request(method, path, headers=hdrs, json={} if method == "POST" else None)
         assert r.status_code in (404, 405), f"{method} {path} is still served: {r.status_code}"
+
+
+# ═══ Step c — the ERP acknowledges what it BILLED ════════════════════════════
+#
+#  TC-D61-09  every id lands in exactly one bucket: acked / unknown / not_final / not_attributed
+#  TC-D61-10  idempotent: a second ack keeps the FIRST timestamp
+#  TC-D61-11  the request is bounded: no ids, or more than 500, is a 422
+#  TC-D61-12  THE DEFECT: a session read while it was running stays in the backlog until acked
+#  TC-D61-13  the detector moves on an ack, not on a read
+
+def _ack(client, ids):
+    return client.post("/api/nfc/sessions/ack", headers=_erp(), json={"session_ids": ids})
+
+
+def _acked_at(sid):
+    from app.models.session import Session
+    db = _S()
+    try:
+        return db.get(Session, sid).erp_acked_at
+    finally:
+        db.close()
+
+
+def test_tc_d61_09_every_id_lands_in_exactly_one_bucket(client, pid):
+    _clear(pid)
+    done = _seed(pid, "ACK-A", ended_at=datetime.utcnow() - timedelta(hours=1))
+    running = _seed(pid, "ACK-A", socket_id=2)
+    nobody = _seed(pid, None, ended_at=datetime.utcnow() - timedelta(hours=1), socket_id=3)
+
+    body = _ack(client, [done, running, nobody, 99999999, done]).json()
+    assert [a["session_id"] for a in body["acked"]] == [done], body
+    assert body["not_final"] == [running]
+    assert body["not_attributed"] == [nobody], (
+        "a real session with no erp_ref must not be reported as unknown — that claims it "
+        "does not exist")
+    assert body["unknown"] == [99999999]
+    assert _acked_at(done) is not None
+    assert _acked_at(running) is None and _acked_at(nobody) is None
+    _clear(pid)
+
+
+def test_tc_d61_10_a_second_ack_keeps_the_first_timestamp(client, pid):
+    _clear(pid)
+    sid = _seed(pid, "ACK-TWICE", ended_at=datetime.utcnow() - timedelta(hours=1))
+    first = _ack(client, [sid]).json()["acked"][0]["erp_acked_at"]
+    stamped = _acked_at(sid)
+    second = _ack(client, [sid]).json()["acked"][0]["erp_acked_at"]
+    assert second == first and _acked_at(sid) == stamped, (
+        "a repeated ack moved the timestamp that says when billing happened")
+    _clear(pid)
+
+
+def test_tc_d61_11_the_request_is_bounded(client, pid):
+    assert _ack(client, []).status_code == 422
+    assert _ack(client, list(range(1, 502))).status_code == 422
+    assert _ack(client, list(range(1, 501))).status_code == 200
+    r = client.post("/api/nfc/sessions/ack", json={"session_ids": [1]})
+    assert r.status_code == 401, "the ack endpoint must require the ERP key"
+
+
+def test_tc_d61_12_a_session_read_mid_charge_stays_in_the_backlog(client, pid):
+    """The defect step c exists for. Before it, the ERP reading a session WHILE IT RAN stamped
+    it reconciled, so when it ended unbilled it never appeared in the backlog."""
+    from app.models.session import Session
+    from app.services import erp_reconciliation
+    _clear(pid)
+    sid = _seed(pid, "ACK-MIDCHARGE", started_at=datetime.utcnow() - timedelta(days=20))
+    assert client.get(f"/api/nfc/session/{sid}", headers=_erp()).status_code == 200  # mid-charge
+
+    db = _S()
+    try:
+        s = db.get(Session, sid)
+        s.status, s.ended_at = "completed", datetime.utcnow() - timedelta(days=19)
+        db.commit()
+    finally:
+        db.close()
+
+    db = _S()
+    try:
+        rows = erp_reconciliation.divergent_sessions(db)
+    finally:
+        db.close()
+    assert sid in [r["session_id"] for r in rows], (
+        "a session read while running and never acknowledged left the backlog")
+    _clear(pid)
+
+
+def test_tc_d61_13_the_detector_moves_on_an_ack_not_a_read(client, pid):
+    from app.services import erp_reconciliation
+
+    def state():
+        db = _S()
+        try:
+            return next(r for r in erp_reconciliation.status_by_pedestal(db)
+                        if r.pedestal_id == pid).state
+        finally:
+            db.close()
+
+    _clear(pid)
+    sid = _seed(pid, "ACK-DETECT", ended_at=datetime.utcnow() - timedelta(days=30),
+                started_at=datetime.utcnow() - timedelta(days=31))
+    assert state() == erp_reconciliation.STATE_SILENT_WITH_BACKLOG
+
+    client.get(f"/api/nfc/session/{sid}", headers=_erp())
+    client.get("/api/nfc/sessions", headers=_erp(), params={"erp_ref": "ACK-DETECT"})
+    assert state() == erp_reconciliation.STATE_SILENT_WITH_BACKLOG, "a READ silenced the detector"
+
+    _ack(client, [sid])
+    assert state() == erp_reconciliation.STATE_IDLE, "an ack did not clear the backlog"
+    _clear(pid)

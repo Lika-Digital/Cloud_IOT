@@ -13,6 +13,7 @@ whoever is building the ERP side.
 | `GET /api/nfc/sessions?erp_ref=…` and/or `?ended_from=…&ended_to=…` | paged list — see *Reading sessions* |
 | ERP webhook (`session_created` / `session_updated` / `session_completed`) | pushed, when `webhook_url` is configured; **only for a session carrying an `erp_ref`** |
 | `POST /api/nfc/session/{id}/stop` | the stopped session |
+| `POST /api/nfc/sessions/ack` | **not the payload** — acknowledges sessions you billed; see *Acknowledging what you billed* |
 
 All three are built by one function, `nfc_service.build_session_payload`, so they cannot
 disagree.
@@ -79,7 +80,24 @@ the cabinet is in standalone (smart mode off).
 * Pages: `limit` (≤ 500, default 100) and `offset`. The reply carries `total` and
   `next_offset` (null on the last page).
 
-**Reading has no side effects.** It does not mark anything as reconciled.
+**Reading has no side effects** — neither this nor `GET /api/nfc/session/{id}` marks anything.
+
+### Acknowledging what you billed
+
+`POST /api/nfc/sessions/ack` with `{"session_ids": [ … ]}` (1–500 ids). **Call it only once a
+session is really billed.** It is the only signal the cabinet's reconciliation watchdog reads:
+a session that has ended, carries your `erp_ref` and is not acknowledged is *backlog*, and a
+pedestal whose backlog sits unacknowledged for the configured number of days raises an
+alarm ("ERP has not acknowledged a billed session since …").
+
+Every id comes back in exactly one list:
+
+| list | meaning |
+|---|---|
+| `acked` | recorded, with its `erp_acked_at`. Acknowledging again is harmless and keeps the **first** timestamp |
+| `unknown` | no such session |
+| `not_final` | still running — nothing final to bill yet; acknowledge it after it ends |
+| `not_attributed` | exists, but carries no `erp_ref` — never yours to bill (and never pushed to you) |
 
 ---
 
@@ -202,6 +220,7 @@ yourselves.
 | attribution key | `customer_id` (your `user_id`) | **`erp_ref`** (your reference) — still 16 keys |
 | `POST /api/nfc/scan` body | `{nfc_tag_id, user_id}` — the cabinet resolved the tag | **`{cabinet_id, outlet, erp_ref}`** — you resolve it |
 | `GET /api/nfc/sessions/by-user/{user_id}` | existed; reading it marked rows reconciled | **removed** → `GET /api/nfc/sessions` (no side effects) |
+| reconciliation | **any read** of a session marked it reconciled — even mid-charge | reads mark nothing; **`POST /api/nfc/sessions/ack`** after you bill |
 | water | a water session never carried the user, so it was never pushed | carries `erp_ref` and is pushed like electricity |
 | valve opening | could open after diagnostics with no scan | **only** on your activate command, after a reservation |
 | `/api/nfc/tags*`, customer tokens on `/api/nfc/*` | existed | **removed** — one caller: your `X-API-Key` |

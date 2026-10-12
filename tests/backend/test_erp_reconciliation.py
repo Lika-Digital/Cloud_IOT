@@ -108,7 +108,8 @@ def _session(pid: int, *, user: str = "erp-recon-user", status: str = "completed
             ended_at=None if status == "active"
             else datetime.utcnow() - timedelta(days=started_days_ago - 0.01),
             energy_kwh=energy, erp_ref=user,  # D6.1: was nfc_user_id
-            last_reconciled_at=None if reconciled_days_ago is None
+            # D6.1 step c: an acknowledgement is what counts now (was last_reconciled_at).
+            erp_acked_at=None if reconciled_days_ago is None
             else datetime.utcnow() - timedelta(days=reconciled_days_ago),
         )
         db.add(s)
@@ -123,7 +124,7 @@ def _reconciled_at(session_id: int):
 
     db = _S()
     try:
-        return db.get(Session, session_id).last_reconciled_at
+        return db.get(Session, session_id).erp_acked_at  # D6.1 step c
     finally:
         db.close()
 
@@ -159,57 +160,77 @@ async def _run_check():
 
 # ═══ TC-ERPR-01 ══════════════════════════════════════════════════════════════
 
-def test_tc_erpr_01_erp_read_stamps_but_customer_read_does_not(client, recon_pid):
-    # Step c turns this around: a read will stamp nothing, the ERP will acknowledge explicitly.
-    """The distinction the whole detector rests on.
+def test_tc_erpr_01_a_read_stamps_nothing_an_ack_does(client, recon_pid):
+    """D6.1 step c (2026-10-12) — the distinction the whole detector rests on, moved.
 
-    A customer opening the app to check their charge is not the billing system reconciling.
-    Stamping both would silence the silence detector every time anyone looked at their own
-    session — the alarm would then only fire at marinas with no app users.
+    Reading a session used to stamp it reconciled, so a session the ERP read while it was
+    still running left the backlog for good — billed or not. Now no read stamps anything, and
+    the ERP says what it billed.
     """
     sid = _session(recon_pid)
-    assert _reconciled_at(sid) is None
+    for path in (f"/api/nfc/session/{sid}", "/api/nfc/sessions?erp_ref=erp-recon-user"):
+        r = client.get(path, headers=_erp())
+        assert r.status_code == 200, r.text
+        assert _reconciled_at(sid) is None, f"GET {path} stamped the session"
 
-    # Machine caller — this IS reconciliation.
-    r = client.get(f"/api/nfc/session/{sid}", headers=_erp())
+    r = client.post("/api/nfc/sessions/ack", headers=_erp(), json={"session_ids": [sid]})
     assert r.status_code == 200, r.text
-    stamped = _reconciled_at(sid)
-    assert stamped is not None, "an ERP read did not record that reconciliation happened"
+    assert [a["session_id"] for a in r.json()["acked"]] == [sid]
+    assert _reconciled_at(sid) is not None, "the acknowledgement was not recorded"
 
-    # D6.1 (2026-10-12): MODE 2 and customer tokens on /api/nfc/* are commented out, so
-    # there is no customer read left to tell apart. The customer half, commented out:
-    # # Now a customer reading the same session must NOT move the timestamp. The customer is
-    # # created here rather than borrowed from whatever the session has seeded: this negative
-    # # half is the more important one, and a skip because no customer happened to exist would
-    # # leave the actual claim unverified.
-    # email = "recon-customer@example.com"
-    # client.post("/api/customer/auth/register", json={
-    #     "email": email, "password": "customer1234",
-    #     "name": "Recon Customer", "ship_name": "Recon Vessel",
-    # })
-    # login = client.post("/api/customer/auth/login",
-    #                     json={"email": email, "password": "customer1234"})
-    # assert login.status_code == 200, login.text
-    # token = login.json()["access_token"]
-    # me = client.get("/api/customer/auth/me",
-    #                 headers={"Authorization": f"Bearer {token}"})
-    # customer_id = me.json()["id"]
 
-    # # Attach the session to that customer so the ownership check lets the read through.
-    # from app.models.session import Session
-    # db = _S()
-    # try:
-    #     db.get(Session, sid).customer_id = customer_id
-    #     db.commit()
-    # finally:
-    #     db.close()
-    # r2 = client.get(f"/api/nfc/session/{sid}",
-    #                 headers={**_erp(), "Authorization": f"Bearer {token}"})
-    # assert r2.status_code == 200, r2.text
-    # assert _reconciled_at(sid) == stamped, (
-    #     "a customer reading their own session advanced last_reconciled_at, which would mute "
-    #     "the silence detector whenever someone opened the app"
-    # )
+# ── The pre-step-c version of TC-ERPR-01, commented out, not deleted: ──
+# def test_tc_erpr_01_erp_read_stamps_but_customer_read_does_not(client, recon_pid):
+#     # Step c turns this around: a read will stamp nothing, the ERP will acknowledge explicitly.
+#     """The distinction the whole detector rests on.
+
+#     A customer opening the app to check their charge is not the billing system reconciling.
+#     Stamping both would silence the silence detector every time anyone looked at their own
+#     session — the alarm would then only fire at marinas with no app users.
+#     """
+#     sid = _session(recon_pid)
+#     assert _reconciled_at(sid) is None
+
+#     # Machine caller — this IS reconciliation.
+#     r = client.get(f"/api/nfc/session/{sid}", headers=_erp())
+#     assert r.status_code == 200, r.text
+#     stamped = _reconciled_at(sid)
+#     assert stamped is not None, "an ERP read did not record that reconciliation happened"
+
+#     # D6.1 (2026-10-12): MODE 2 and customer tokens on /api/nfc/* are commented out, so
+#     # there is no customer read left to tell apart. The customer half, commented out:
+#     # # Now a customer reading the same session must NOT move the timestamp. The customer is
+#     # # created here rather than borrowed from whatever the session has seeded: this negative
+#     # # half is the more important one, and a skip because no customer happened to exist would
+#     # # leave the actual claim unverified.
+#     # email = "recon-customer@example.com"
+#     # client.post("/api/customer/auth/register", json={
+#     #     "email": email, "password": "customer1234",
+#     #     "name": "Recon Customer", "ship_name": "Recon Vessel",
+#     # })
+#     # login = client.post("/api/customer/auth/login",
+#     #                     json={"email": email, "password": "customer1234"})
+#     # assert login.status_code == 200, login.text
+#     # token = login.json()["access_token"]
+#     # me = client.get("/api/customer/auth/me",
+#     #                 headers={"Authorization": f"Bearer {token}"})
+#     # customer_id = me.json()["id"]
+
+#     # # Attach the session to that customer so the ownership check lets the read through.
+#     # from app.models.session import Session
+#     # db = _S()
+#     # try:
+#     #     db.get(Session, sid).customer_id = customer_id
+#     #     db.commit()
+#     # finally:
+#     #     db.close()
+#     # r2 = client.get(f"/api/nfc/session/{sid}",
+#     #                 headers={**_erp(), "Authorization": f"Bearer {token}"})
+#     # assert r2.status_code == 200, r2.text
+#     # assert _reconciled_at(sid) == stamped, (
+#     #     "a customer reading their own session advanced last_reconciled_at, which would mute "
+#     #     "the silence detector whenever someone opened the app"
+#     # )
 
 
 # ═══ TC-ERPR-02 ══════════════════════════════════════════════════════════════
@@ -273,7 +294,7 @@ async def test_tc_erpr_04_backlog_plus_silence_alarms_and_explains(recon_pid):
     alarms = _alarms()
     assert len(alarms) == 1, f"expected one alarm, got {len(alarms)}"
     msg = alarms[0].message
-    assert "has not reconciled this pedestal since" in msg, (
+    assert "has not acknowledged a billed session on this pedestal since" in msg, (
         f"the message must name what has not happened and since when, or it reads as generic "
         f"staleness and gets muted: {msg}"
     )

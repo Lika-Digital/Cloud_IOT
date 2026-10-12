@@ -8,7 +8,8 @@ nothing required it to and nothing noticed if it stopped.
 
 Three things close that, and the third is the one that matters:
 
-1. **`sessions.last_reconciled_at`** — stamped when the ERP reads a session as a machine caller.
+1. **`sessions.erp_acked_at`** (D6.1 step c; was `last_reconciled_at`, stamped on every ERP
+   READ) — set when the ERP acknowledges a billed session via POST /api/nfc/sessions/ack.
    Turns "ERP has never looked at this" from an assumption into a fact.
 2. **A divergence view** — sessions with an `erp_ref` (D6.1) that ERP has never acknowledged, oldest
    first. Divergence you can see is a problem.
@@ -95,12 +96,13 @@ def _explain(r: PedestalReconciliation) -> str:
         return ("Nothing is waiting to be reconciled. This pedestal is quiet, which is not a "
                 "fault.")
     if r.state == STATE_RECONCILING:
-        return (f"ERP last reconciled this pedestal "
+        return (f"ERP last acknowledged a billed session on this pedestal "
                 f"{'never' if r.last_reconciled_at is None else iso_z(r.last_reconciled_at)}"
                 f" and there are {r.unreconciled_count} session(s) still to acknowledge.")
-    seen = ("has never reconciled this pedestal"
+    seen = ("has never acknowledged a billed session on this pedestal"
             if r.last_reconciled_at is None
-            else f"has not reconciled this pedestal since {iso_z(r.last_reconciled_at)}")
+            else f"has not acknowledged a billed session on this pedestal since "
+                 f"{iso_z(r.last_reconciled_at)}")
     return (
         f"ERP {seen}, while {r.unreconciled_count} finished session(s) "
         f"({r.unreconciled_energy_kwh:.2f} kWh) are waiting to be billed — the oldest since "
@@ -109,19 +111,61 @@ def _explain(r: PedestalReconciliation) -> str:
     )
 
 
-def mark_reconciled(db: DBSession, sessions: list[Session]) -> None:
-    """Stamp `last_reconciled_at` on sessions the ERP has just read.
+# ── D6.1 step c (2026-10-12): mark_reconciled is COMMENTED OUT, not deleted. ─────────────
+# It stamped last_reconciled_at whenever the ERP READ a session — including a session still
+# running — so a read passed for "billed", and a session read mid-charge and never again
+# vanished from the backlog. The ERP now acknowledges explicitly: acknowledge() below.
+# def mark_reconciled(db: DBSession, sessions: list[Session]) -> None:
+#     """Stamp `last_reconciled_at` on sessions the ERP has just read.
 
-    Called only from the machine-caller path. A customer reading their own session must not
-    stamp it: that is someone checking their charge, not the billing system reconciling, and
-    conflating them would silence the detector whenever a customer opened the app.
+#     Called only from the machine-caller path. A customer reading their own session must not
+#     stamp it: that is someone checking their charge, not the billing system reconciling, and
+#     conflating them would silence the detector whenever a customer opened the app.
+#     """
+#     if not sessions:
+#         return
+#     now = datetime.utcnow()
+#     for s in sessions:
+#         s.last_reconciled_at = now
+#     db.commit()
+
+
+ACK_MAX_IDS = 500
+
+
+def acknowledge(db: DBSession, session_ids: list[int]) -> dict:
+    """The ERP says it has billed these sessions (POST /api/nfc/sessions/ack).
+
+    Each id lands in exactly one bucket, so the ERP can see what did not take:
+
+      acked           final + carries an erp_ref. Stamped erp_acked_at — or, if it already
+                      was, left alone: a repeated ack is idempotent and never moves the
+                      original timestamp, which is the one that says when billing happened.
+      unknown         no such session.
+      not_final       still pending or active — nothing final has been billed yet.
+      not_attributed  exists but has no erp_ref, so it was never the ERP's to bill (never
+                      pushed to it). Distinct from unknown, which would claim it does not exist.
+
+    Duplicate ids in one request are treated as one.
     """
-    if not sessions:
-        return
     now = datetime.utcnow()
-    for s in sessions:
-        s.last_reconciled_at = now
+    wanted = list(dict.fromkeys(session_ids))
+    found = {s.id: s for s in db.query(Session).filter(Session.id.in_(wanted)).all()}
+    out = {"acked": [], "unknown": [], "not_final": [], "not_attributed": []}
+    for sid in wanted:
+        s = found.get(sid)
+        if s is None:
+            out["unknown"].append(sid)
+        elif s.status in ("pending", "active"):
+            out["not_final"].append(sid)
+        elif not s.erp_ref:
+            out["not_attributed"].append(sid)
+        else:
+            if s.erp_acked_at is None:
+                s.erp_acked_at = now
+            out["acked"].append({"session_id": sid, "erp_acked_at": iso_z(s.erp_acked_at)})
     db.commit()
+    return out
 
 
 def _window_start() -> datetime:
@@ -149,15 +193,17 @@ def status_by_pedestal(db: DBSession) -> list[PedestalReconciliation]:
 
     out: list[PedestalReconciliation] = []
     for pid, sessions in sorted(by_pedestal.items()):
-        reconciled_times = [s.last_reconciled_at for s in sessions
-                            if s.last_reconciled_at is not None]
+        # D6.1 step c: an ACKNOWLEDGEMENT is what counts, not a read (was last_reconciled_at).
+        # The field names below keep "reconciled" so the dashboard's JSON does not change.
+        reconciled_times = [s.erp_acked_at for s in sessions
+                            if s.erp_acked_at is not None]
         last_seen = max(reconciled_times) if reconciled_times else None
 
         # A session counts as a backlog item only once it has ENDED. An in-progress session has
         # nothing final to reconcile, so counting it would raise an alarm for a customer who is
         # simply still plugged in.
         pending = [s for s in sessions
-                   if s.last_reconciled_at is None and s.status != "active"]
+                   if s.erp_acked_at is None and s.status != "active"]
 
         if not pending:
             state = STATE_IDLE
@@ -188,7 +234,8 @@ def divergent_sessions(db: DBSession, limit: int = 200) -> list[dict]:
         .filter(
             # D6.1: Session.nfc_user_id.isnot(None),
             Session.erp_ref.isnot(None),
-            Session.last_reconciled_at.is_(None),
+            # D6.1 step c: Session.last_reconciled_at.is_(None),
+            Session.erp_acked_at.is_(None),
             Session.status != "active",
         )
         .order_by(Session.started_at.asc())

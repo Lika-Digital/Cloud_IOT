@@ -26,7 +26,6 @@ Tokens are minted here, from the test secret — no credential is stored anywher
 """
 from __future__ import annotations
 
-import time
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -135,14 +134,24 @@ def test_tc_wsa_06_a_valid_operator_token_is_accepted_and_receives_broadcasts(
 
 
 def test_tc_wsa_07_the_connection_closes_when_the_token_expires(client):
+    """2026-10-12: this used to sleep 3 s and then ping, i.e. it bet on a 1 s margin over the
+    server's expiry task. Under full-gate load the task ran after the ping, the client got
+    "pong", and the gate failed once on correct code. It now waits for the CLOSE itself, with an
+    upper bound: no margin to lose, and a server that never closes still fails (after 10 s)
+    instead of hanging."""
+    import queue
+    import threading
     tok = _admin_token(exp=datetime.now(timezone.utc) + timedelta(seconds=2))
     with client.websocket_connect("/ws", subprotocols=["bearer", tok]) as ws:
         ws.send_text("ping")
         assert ws.receive_text() == "pong"
-        time.sleep(3)
-        with pytest.raises(WebSocketDisconnect):
-            ws.send_text("ping")
-            ws.receive_text()
+        got: queue.Queue = queue.Queue()
+        threading.Thread(target=lambda: got.put(ws.receive()), daemon=True).start()
+        try:
+            msg = got.get(timeout=10)
+        except queue.Empty:
+            pytest.fail("the connection was still open 10 s after its token expired")
+        assert msg["type"] == "websocket.close" and msg.get("code") == 1008, msg
 
 
 def test_tc_wsa_08_ws_checks_the_same_user_database_as_http(client):

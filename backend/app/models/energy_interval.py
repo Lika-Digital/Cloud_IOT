@@ -23,7 +23,13 @@ join back to sessions:
       ("berth-marina" = Smart Mode OFF standalone draw, no customer)
   - ``customer_id`` / ``nfc_user_id``: set for attributed sessions, else NULL
   - ``berth_ref``: the pedestal's berth reference (Option A) — the berth-config
-      label for standalone per-socket daily billing.
+      label for standalone per-socket daily billing. NOT a berth identifier: it is ONE free-text
+      label per PEDESTAL, so all four berths of a cabinet carry the same value (measured
+      2026-10-12, docs/ui_v2_spec.md §6). Left exactly as it is — no row is ever re-keyed.
+  - ``berth_id`` (2026-10-12, decision 9): ``berths.id`` of the berth this socket served when
+      the row was written, from ``berth_assignments`` by (pedestal_id, socket_id). **NULL means
+      NOT KNOWN** — the row predates the column, or the socket is not assigned to a berth. It
+      is never 0 and never a guess. Every row written before 2026-10-12 is NULL.
 
 Daily billing history is computed by aggregating these rows per (date, socket)
 on read — there is no separate daily table to drift out of sync.
@@ -48,6 +54,11 @@ class EnergyInterval(Base):
     customer_id: Mapped[int] = mapped_column(Integer, nullable=True)
     nfc_user_id: Mapped[str] = mapped_column(String(128), nullable=True)
     berth_ref: Mapped[str] = mapped_column(String(128), nullable=True)
+    # Decision 9. NULL = NOT KNOWN: the row predates the column (2026-10-12), or the socket is not assigned to a berth. Never read it as 0 or as a berth.
+    berth_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+        comment="NULL = NOT KNOWN: the row predates the column (2026-10-12), or the socket is not assigned to a berth. Never read it as 0 or as a berth.",
+    )
 
     interval_start: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     interval_end: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)

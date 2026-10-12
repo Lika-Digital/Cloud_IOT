@@ -75,6 +75,17 @@ def _berth_ref(db, pedestal_id: int) -> str | None:
     return getattr(cfg, "berth_ref", None) if cfg else None
 
 
+def _berth_id(db, pedestal_id: int, socket_id: int) -> int | None:
+    """The berth this socket serves, from berth_assignments (unique per socket). None means
+    NOT KNOWN — the socket is not assigned — and is written as NULL, never as 0 or a guess."""
+    from ..models.berth_assignment import BerthAssignment
+    a = db.query(BerthAssignment).filter(
+        BerthAssignment.pedestal_id == pedestal_id,
+        BerthAssignment.socket_id == socket_id,
+    ).first()
+    return a.berth_id if a else None
+
+
 def _register_session_to_date(db, session: SessionModel) -> float | None:
     """Consumption so far this session, per the meter's own cumulative register.
 
@@ -188,6 +199,7 @@ def flush_session_interval(
         # D6.1: the ledger column is still named nfc_user_id; it now carries the erp_ref.
         nfc_user_id=session.erp_ref or session.nfc_user_id,
         berth_ref=_berth_ref(db, session.pedestal_id),
+        berth_id=_berth_id(db, session.pedestal_id, session.socket_id),  # decision 9; None = not known
         interval_start=start,
         interval_end=now,
         kwh=round(delta, 6),

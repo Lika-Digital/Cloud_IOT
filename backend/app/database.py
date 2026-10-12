@@ -279,6 +279,9 @@ def _migrate_schema():
         # for electricity. Forwarded to ERP as-is; also the source of the session delta.
         ("valve_configs",  "meter_total_l",          "REAL"),
         ("valve_configs",  "meter_updated_at",       "DATETIME"),
+        # 2026-10-12, decision 9 — the berth an interval belongs to. Nullable with NO default:
+        # every existing row stays NULL, which means "not known" (models/energy_interval.py).
+        ("energy_intervals", "berth_id",             "INTEGER"),
     ]
 
     with engine.connect() as conn:

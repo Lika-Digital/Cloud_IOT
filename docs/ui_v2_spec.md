@@ -40,7 +40,7 @@ overruled, so a correction costs one line from you rather than a conversation.
 | 6 | — | `/marina/water` exists | **CODE.** It enters the spec | §5 |
 | 7 | No marina component over 250 lines; profile under 1 200 | 377 / 302 lines; 1 890 total | **SPEC.** The limits stay. Files are split inside block 4, because they are being rewritten anyway — no separate refactor | §9 |
 | 8 | Live values by websocket | 15 s polling | **WS — but only AFTER part B** (role filtering, §14). *Part B built 2026-10-12, so this no longer blocks; the switch is block 4 work.* The broadcast carries `customer_id`; switching `/marina` to WS before filtering would put customer identity on the page. Polling stays until then | §7 |
-| 9 | New `energy_intervals` rows carry `berth_id` | Only `berth_ref` | **SPEC.** Built — see the measured reason in §6 | §6 |
+| 9 | New `energy_intervals` rows carry `berth_id` | Only `berth_ref` | **SPEC.** Built 2026-10-12 (block 2): NULL = not known; old rows stay NULL — see the measured reason in §6 | §6, §13.9 20a, §13.10 27 |
 
 ## 0.2 Status of the main items (2026-10-12)
 
@@ -670,7 +670,7 @@ an interval has never been attributable to a berth — not a renaming risk, attr
 existed. The stable identifier is `berths.id`, mapped per socket by `berth_assignments`
 (unique per socket and per berth).
 
-So `energy_intervals.berth_id INTEGER NULL`, filled at write time from `berth_assignments` by
+**BUILT 2026-10-12 (block 2)** — `test_energy_interval_berth_id.py` TC-EIB-01..04, failing on the code before; cabinet checks §13.9 20a and §13.10 27. So `energy_intervals.berth_id INTEGER NULL`, filled at write time from `berth_assignments` by
 `(pedestal_id, socket_id)`. **NULL means "not known"** — the row predates the column, or the
 socket is not assigned to a berth — and must never be read as zero or as a berth. That goes in
 the column comment and in the model. The 8675 existing rows stay NULL. The ledger writes a row
@@ -1024,6 +1024,7 @@ in the shell as `TOK=...` and nowhere else; it is never written into this list o
 | 18 | Dry run | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 ~/Cloud_IOT/scripts/stamp_consumption_source.py --db /opt/cloud-iot/backend/pedestal.db` | Four counts; "partition all … exactly"; exit 0. Record the counts | STOP — do not apply; record the refusal | ☐ |
 | 19 | Apply | The same command with `--apply` (0.5 has saved the DB) | `APPLIED.`; "remaining with no source" equals the D count | Restore the database by the §13.11 procedure — stop, copy, REMOVE `-wal`/`-shm`, restore the owner. Never a bare `cp` | ☐ |
 | 20 | Stamps on the 149 sessions | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;c=sqlite3.connect('/opt/cloud-iot/backend/pedestal.db');print(c.execute('SELECT consumption_source,COUNT(*) FROM sessions GROUP BY 1').fetchall());print(c.execute('SELECT COUNT(*) FROM sessions WHERE consumption_source IS NULL AND (energy_kwh IS NOT NULL OR water_liters IS NOT NULL)').fetchone())"` | No session with a figure and no source (second line `(0,)`); A + B add up to the sessions that had a figure | RECORD | ☐ |
+| 20a | `energy_intervals.berth_id` exists, every old row NULL (decision 9) | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;c=sqlite3.connect('/opt/cloud-iot/backend/pedestal.db');print('berth_id' in [r[1] for r in c.execute('PRAGMA table_info(energy_intervals)')]);print(c.execute('SELECT COUNT(*),COUNT(berth_id) FROM energy_intervals').fetchone())"` | `True`, then `(N, 0)` — N the existing rows (8675 when measured), and **0** carrying a berth: NULL means not known, the old rows are never back-filled | RECORD — the column is missing: the migration did not run; investigate before R1 | ☐ |
 
 ## 13.10 R1 — last, and the only check that decides Krk
 
@@ -1035,6 +1036,7 @@ in the shell as `TOK=...` and nowhere else; it is never written into this list o
 | 24 | Plug in within 5 minutes | Plug into Q1; `curl -s "http://localhost/api/nfc/sessions?erp_ref=R1-TEST-1" -H "X-API-Key: $ERP_KEY"` | One `active` session carrying `erp_ref` `R1-TEST-1` | STOP — R1 fails | ☐ |
 | 25 | Draw, then stop | Draw well above the meter's resolution; stop with `curl -s -X POST http://localhost/api/nfc/session/<id>/stop -H "X-API-Key: $ERP_KEY"` | Session `ended` | STOP — R1 fails | ☐ |
 | 26 | The figures agree | Read Q1's physical meter again; fetch the session as in 24 | `energy_kwh` = `meter_energy_end_kwh − meter_energy_start_kwh` exactly; matches the physical meter's delta within its resolution; `consumption_source` = `register` | **R1 fails — this decides Krk** | ☐ |
+| 27 | The R1 interval rows name their berth | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;c=sqlite3.connect('/opt/cloud-iot/backend/pedestal.db');print(c.execute('SELECT berth_id FROM berth_assignments WHERE pedestal_id=1 AND socket_id=1').fetchall());print(c.execute('SELECT DISTINCT berth_id FROM energy_intervals WHERE session_id=<id>').fetchall())"` (`<id>` from 24) | At least one interval row for the session (none = the ledger did not write, RECORD as unproven). If Q1 is assigned to a berth: the same `berth_id` on every row. If it is not: `[(None,)]` — not known, which is correct, but then the berth attribution is UNPROVEN at R1: RECORD it, do not count it as a pass | RECORD — does not decide R1 | ☐ |
 
 ## 13.11 Rollback
 

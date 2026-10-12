@@ -347,6 +347,42 @@ cabinet shows the session and the consumption, not the customer's name or identi
 admin sees more. Today one broadcast goes to everyone authenticated; filtering by role is
 part B (planned, not built).
 
+## 14. The same check, with the opposite sign — know which one you are proving
+
+*The owner's words, quoted verbatim:*
+
+> when a fix must install something, an unchanged venv is the failure; when a fix must install
+> nothing, an unchanged venv is the proof. Same check, opposite sign, and which applies depends
+> on what is being proved.
+
+The general form: an acceptance check proves nothing until you have said which outcome is the
+pass. The night the cabinet's venv was rebuilt, "the venv did not change" was the proof that a
+sync-only deploy installed nothing. For a fix whose whole point is to install a dependency, the
+same observation is the failure. Write the expected sign next to the check before running it.
+
+## 15. A skip caused by the environment says what is missing, why, and where it gets verified instead
+
+*Formulation by Claude (2026-10-12), not the owner's words; the owner asked for the rule in this
+form after the shape below had already been applied to the skips in two test files.*
+
+A test that skips has not verified its claim (rule 4), so a skip caused by the ENVIRONMENT —
+not by the code — must carry three things in its message:
+
+1. **what is missing** on this machine;
+2. **why** it is missing, if that is a permanent property of the setup;
+3. **where** the verification is performed instead, so the claim still has an owner.
+
+Example, from `tests/backend/test_prediction_service.py`:
+
+> scikit-learn absent (no 32-bit Windows wheel on the dev box) — this verification belongs to
+> the cabinet acceptance run
+
+A bare "skipped: sklearn not installed" reads as an inconvenience and is forgotten. The three
+parts make it a hand-over: someone, somewhere, still has to answer the question. The dev box
+(32-bit, Python 3.13, Windows) and the cabinet (64-bit, Python 3.14, Linux) differ for good, so
+this class of skip is permanent — and checks that only the cabinet can answer belong on the
+spec's §13 list.
+
 ## Appendix — things that look like over-engineering and are not
 
 One line each on what they prevent, for whoever maintains this next. Each looks like needless

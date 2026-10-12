@@ -30,6 +30,18 @@ Everything below follows from that.
 
 ---
 
+## For the ERP team — corrections to apply on your side (2026-10-12)
+
+These are not fixes we can make for you; they are facts your integration must match. The owner
+forwards this list.
+
+| # | What | Before (wrong) | Correct |
+|---|---|---|---|
+| 1 | Webhook `event` names | this document listed `session_created` / `session_updated` / `session_completed` | the cabinet has only ever sent **`session_activated`**, **`telemetry`** (at most every 60 s) and **`session_ended`** |
+| 2 | `/scan` reply field `berth_id` | reads as a berth id | today it carries `berth_ref`, one label per PEDESTAL (same for all its berths). Will carry the real berth id later; the name stays |
+
+---
+
 ## Who owns what (D6.1)
 
 **The ERP is the only owner of the NFC mapping and of the customer.** The cabinet keeps no
@@ -65,7 +77,11 @@ session it cannot attribute to an `erp_ref` you sent.
 | `outlet` | string | exactly `Q1`–`Q4` or `V1`–`V2`. A bare number is **400**: `"1"` cannot say socket or valve |
 | `erp_ref` | string, 1–128 | your reference; comes back on every session payload |
 
-Answers **200** with `status: "pending"` and `expires_at`; **409** if the outlet is in use or
+Answers **200** with `status: "pending"` and `expires_at`. **The reply's `berth_id` field does
+not contain a berth id today** (2026-10-12): it carries `berth_ref` — ONE free-text label per
+pedestal, the same for every berth on that pedestal, editable by the cabinet's operator. Do not
+key anything on it. It will carry the real berth id when that column arrives; the field name
+will not change, so your integration does not break. Other answers: **409** if the outlet is in use or
 already reserved; **503** if the cabinet is not responding or the socket is faulted; **409** if
 the cabinet is in standalone (smart mode off).
 

@@ -11,7 +11,7 @@ whoever is building the ERP side.
 |---|---|
 | `GET /api/nfc/session/{id}` | one session |
 | `GET /api/nfc/sessions?erp_ref=…` and/or `?ended_from=…&ended_to=…` | paged list — see *Reading sessions* |
-| ERP webhook (`session_created` / `session_updated` / `session_completed`) | pushed, when `webhook_url` is configured; **only for a session carrying an `erp_ref`** |
+| ERP webhook — `event`: `session_activated` / `telemetry` (at most every 60 s) / `session_ended` | pushed, when `webhook_url` is configured; **only for a session carrying an `erp_ref`**. *Corrected 2026-10-12: this row named `session_created` / `session_updated` / `session_completed`, which the code has never sent.* |
 | `POST /api/nfc/session/{id}/stop` | the stopped session |
 | `POST /api/nfc/sessions/ack` | **not the payload** — acknowledges sessions you billed; see *Acknowledging what you billed* |
 

@@ -1,7 +1,15 @@
 # UI v2 — Marina Monitoring & Control profile: specification
 
-**Date:** 2026-10-01 · **Version:** 2 (supersedes the 2026-09-28 draft) · **Status:** for
-approval in one pass. **No UI code written.**
+**Date:** 2026-10-01 · **Version:** 2 (supersedes the 2026-09-28 draft) · **Status:** approved
+2026-10-01; **PARTLY BUILT** since (`4eb381e` onwards). *Corrected 2026-10-12: this line said
+"No UI code written", which stopped being true on 2026-10-03.* Where this text and the code
+differ, the status review of 2026-10-12 lists each difference; each awaits the owner's decision
+on which side is right, and until then this document is NOT updated to match the code.
+**§13 is the list of checks that can be run only on the cabinet.**
+
+**The ERP contract is not in this document.** It lives in ONE place,
+`docs/erp_session_payload_contract.md`, and is only referenced here — two copies of a contract
+drift apart.
 
 **Reads with:** `docs/architecture.md` (how the system works), `docs/ui_v2_audit.md` (what
 exists today, with evidence), `docs/ui_v2_spec_inputs.md` (the foundation deltas, now folded
@@ -780,3 +788,160 @@ Found during the foundation work. **Yours to prioritise; none of it is in the bu
 - **No notification path**, not even disabled.
 - **No QR.**
 - **No multi-tenant keying.** One NUC per marina; the ext-API key is per-marina by deployment.
+
+
+---
+
+# 13. Checks after the upgrade — cabinet-only
+
+**Added 2026-10-12.** Every check here can be performed ONLY on the cabinet. Run it top to
+bottom, tick each line as it is done, and do not skip ahead: access comes first, because if
+access fails nothing below it matters.
+
+## 13.0 The decision this list exists for
+
+**One upgrade, at the end, deliberately.** Everything accumulates on `develop`, each push
+through the full gate. `main` is what the cabinet pulls (`upgrade.sh` deploys `origin/main`), so
+it is touched ONCE, immediately before that one upgrade — an unplanned upgrade (for example
+during a cabinet recovery) must never deploy an unchecked batch. `main` stays at `e80a4c1`
+until then. The NFC scan and R1 are the end-to-end test and come LAST, when everything else
+exists.
+
+**Accepted risk, named, not overlooked.** Until that upgrade, cabinet 1 runs the old code, and
+everything only the cabinet can reveal stays unrevealed. Concretely, until then:
+
+- `/ws` is open to anyone, via Cloudflare, with the whole telemetry stream;
+- REST routes without any login are reachable the same way, among them `GET /api/sessions`
+  with `customer_id` / `customer_name` / `nfc_user_id` / `erp_ref`;
+- `POST /api/predictions/train` runs without login. **That one is not a leak but CPU
+  consumption** — the NUC is an Atom without a GPU — and must not be read as the same kind of
+  finding as `/ws`.
+
+The customer fields are `null` today because there are no NFC sessions. **The first real NFC
+session before the upgrade changes this assessment.**
+
+**The rule from now on:** whoever finishes anything that can be proven only on the cabinet adds
+its check to this list IN THE SAME COMMIT. The list grows with the work and is never
+reconstructed from memory.
+
+Each check states what to do if it fails:
+
+- **ROLLBACK** — stop and roll back now (§13.11).
+- **RECORD** — write down the outcome and continue; nothing that worked before is broken.
+- **STOP** — do not run the steps that depend on it.
+
+Secrets are never typed on a command line: read them with `read -s` and pass them in a header.
+
+## 13.1 Before the upgrade (step 0)
+
+| # | Check | Command / step | Expected | If it fails | Outcome |
+|---|---|---|---|---|---|
+| 0.1 | A second session is open, through BOTH ways in | Open one session via `ssh2.lika.solutions` and one via Tailscale; keep both open until 13.3 passes | Both live | STOP — do not start | ☐ |
+| 0.2 | The current commit is recorded | `git -C ~/Cloud_IOT rev-parse HEAD \| sudo tee /root/pre-release.commit` | A hash | STOP | ☐ |
+| 0.3 | The backend unit is saved | `U=$(systemctl show -p FragmentPath --value cloud-iot-backend.service); sudo cp -a "$U" /root/cloud-iot-backend.service.pre-release` | File exists | STOP | ☐ |
+| 0.4 | The venv is saved | `sudo cp -a /opt/cloud-iot/backend/.venv /opt/cloud-iot/backend/.venv.pre-release` | Copy exists | STOP | ☐ |
+| 0.5 | The database is saved | `sudo cp -a /opt/cloud-iot/backend/pedestal.db /root/pedestal.db.pre-release` | Copy exists | STOP | ☐ |
+| 0.6 | No other unit has pending changes that our `daemon-reload` would activate | `systemctl list-unit-files 'ssh*' --no-legend` (note the name), then `systemctl show -p NeedDaemonReload cloudflared tailscaled docker nginx <ssh-unit>` | Every line `NeedDaemonReload=no` | STOP — find out who changed what | ☐ |
+| 0.7 | Baseline of the bind | `ss -ltn 'sport = :8000'` | `0.0.0.0:8000` (the old state) | RECORD | ☐ |
+
+## 13.2 The upgrade
+
+| # | Check | Command / step | Expected | If it fails | Outcome |
+|---|---|---|---|---|---|
+| U.1 | The one upgrade | `sudo bash ~/Cloud_IOT/nuc_image/upgrade.sh` | Ends with `Upgrade complete.`; prints `Backend bound to loopback only: 127.0.0.1:8000` | ROLLBACK | ☐ |
+
+## 13.3 Access — before anything else
+
+| # | Check | Command / step | Expected | If it fails | Outcome |
+|---|---|---|---|---|---|
+| 1 | SSH through the tunnel | From the second, already-open machine: a NEW connection to `ssh2.lika.solutions` | Login prompt, login works | ROLLBACK from the session still open — never close the last live connection | ☐ |
+| 2 | Tailscale | `tailscale status \| head -3` on the NUC, plus a NEW CLI connection over the tailnet from another machine | Cabinet online; connection works | ROLLBACK | ☐ |
+| 3 | The web UI | Open `https://marina2.lika.solutions`, log in with 2FA | Dashboard loads | ROLLBACK | ☐ |
+| 4 | Services | `systemctl is-active cloudflared tailscaled docker nginx <ssh-unit> cloud-iot-backend` | Every line `active` | ROLLBACK | ☐ |
+
+## 13.4 Bind
+
+| # | Check | Command / step | Expected | If it fails | Outcome |
+|---|---|---|---|---|---|
+| 5 | Loopback only | `ss -ltn 'sport = :8000'` | Only `127.0.0.1:8000` | ROLLBACK (upgrade.sh should already have stopped) | ☐ |
+| 6 | Refused from the LAN | From another machine on the cabinet LAN: `curl -m 5 -s -o /dev/null -w '%{http_code}\n' http://<NUC-LAN-IP>:8000/health` | Connection refused (`000`) | RECORD — nothing that worked is broken; investigate | ☐ |
+
+## 13.5 Backend health and dependencies
+
+| # | Check | Command / step | Expected | If it fails | Outcome |
+|---|---|---|---|---|---|
+| 7 | Starts without an import error | `journalctl -u cloud-iot-backend --since "15 min ago" --no-pager \| grep -iE "Traceback\|ImportError\|ModuleNotFoundError"`, then `curl -s http://127.0.0.1:8000/health` | No match; health answers | ROLLBACK (venv) | ☐ |
+| 8 | Security series re-measured | `python3 -m venv /tmp/pa && /tmp/pa/bin/pip install -q pip-audit`; `/opt/cloud-iot/backend/.venv/bin/python -m pip freeze --exclude-editable \| grep '==' > /tmp/nuc_freeze.txt`; `/tmp/pa/bin/pip-audit -r /tmp/nuc_freeze.txt --no-deps --disable-pip` | None of PyJWT, Pillow, pydantic-settings, python-dotenv, urllib3, anyio, pyasn1 in the list; record the count | RECORD | ☐ |
+| 9 | Fatal pip | **No cabinet check.** It cannot be shown on the cabinet without deliberately breaking an install. It is proven on dev: `tests/backend/test_upgrade_script_deps.py::test_pip_failure_stops_the_upgrade` and `::test_pip_missing_stops_the_upgrade`, each failing against the previous script (f591426) as a negative control. | — | — | n/a |
+
+## 13.6 `/ws`
+
+| # | Check | Command / step | Expected | If it fails | Outcome |
+|---|---|---|---|---|---|
+| 10 | Anonymous is refused | `curl -s -o /dev/null -w '%{http_code}\n' --http1.1 -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' https://marina2.lika.solutions/ws` | `403` (was `101`) | RECORD — the hole stays open; investigate before R1 | ☐ |
+| 11 | Logged-in UI still updates itself | Log in; the WebSocket dot is green; a socket state change appears without a reload | Live updates | RECORD — the data still arrives via REST | ☐ |
+
+## 13.7 Water and D6.1
+
+| # | Check | Command / step | Expected | If it fails | Outcome |
+|---|---|---|---|---|---|
+| 12 | A valve never opens itself | With smart mode ON, after a diagnostic response: `journalctl -u cloud-iot-backend --since "10 min ago" --no-pager \| grep ValveAutoOpen` | `SKIPPED: ERP mode`, and no valve opened | STOP — water is open to nobody; turn smart mode off | ☐ |
+| 13 | The new `/scan` works | `read -s ERP_KEY`, then `curl -s -X POST http://localhost/api/nfc/scan -H "X-API-Key: $ERP_KEY" -H 'Content-Type: application/json' -d '{"cabinet_id":"MAR_KRK_ORM_01","outlet":"Q2","erp_ref":"CHECK-SCAN"}'`, on an outlet with NOTHING plugged in; let it expire after 5 min | `"status":"pending"` | RECORD | ☐ |
+| 14 | The old `/scan` body is refused | Same curl with `-d '{"nfc_tag_id":"X","user_id":"Y"}'` | HTTP 422 | RECORD | ☐ |
+| 15 | The ack endpoint answers | `curl -s -X POST http://localhost/api/nfc/sessions/ack -H "X-API-Key: $ERP_KEY" -H 'Content-Type: application/json' -d '{"session_ids":[999999999]}'` | `"unknown":[999999999]` | RECORD | ☐ |
+| 16 | The session list answers | `curl -s "http://localhost/api/nfc/sessions" -H "X-API-Key: $ERP_KEY"` (no filter), then with `?erp_ref=CHECK-SCAN` | 400, then 200 | RECORD | ☐ |
+
+## 13.8 D17
+
+| # | Check | Command / step | Expected | If it fails | Outcome |
+|---|---|---|---|---|---|
+| 17 | Reproduce the `/api/ext/*` 401 — seen so far only on the cabinet | `read -s EXT_KEY` (the gateway key), then `curl -s -w '\n%{http_code}\n' -H "Authorization: Bearer $EXT_KEY" http://localhost/api/ext/pedestals/1/status` | A MEASUREMENT, not pass/fail: record the code and the body. `401` confirms D17; `200` means it does not reproduce after the upgrade | RECORD | ☐ |
+
+## 13.9 Migration — the four populations
+
+| # | Check | Command / step | Expected | If it fails | Outcome |
+|---|---|---|---|---|---|
+| 18 | Dry run | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 ~/Cloud_IOT/scripts/stamp_consumption_source.py --db /opt/cloud-iot/backend/pedestal.db` | Four counts; "partition all … exactly"; exit 0. Record the counts | STOP — do not apply; record the refusal | ☐ |
+| 19 | Apply | The same command with `--apply` (0.5 has saved the DB) | `APPLIED.`; "remaining with no source" equals the D count | Restore `/root/pedestal.db.pre-release` | ☐ |
+| 20 | Stamps on the 149 sessions | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;c=sqlite3.connect('/opt/cloud-iot/backend/pedestal.db');print(c.execute('SELECT consumption_source,COUNT(*) FROM sessions GROUP BY 1').fetchall());print(c.execute('SELECT COUNT(*) FROM sessions WHERE consumption_source IS NULL AND (energy_kwh IS NOT NULL OR water_liters IS NOT NULL)').fetchone())"` | No session with a figure and no source (second line `(0,)`); A + B add up to the sessions that had a figure | RECORD | ☐ |
+
+## 13.10 R1 — last, and the only check that decides Krk
+
+| # | Check | Command / step | Expected | If it fails | Outcome |
+|---|---|---|---|---|---|
+| 21 | Ready | In the UI: switch the pedestal to NFC mode (sockets' auto-activate off) and turn smart mode on | Auto-activate off on every socket | STOP | ☐ |
+| 22 | Physical meter before | Read Q1's physical meter | Reading noted | — | ☐ |
+| 23 | Scan | `/scan` as in 13 with `"outlet":"Q1","erp_ref":"R1-TEST-1"` | `pending` | STOP | ☐ |
+| 24 | Plug in within 5 minutes | Plug into Q1; `curl -s "http://localhost/api/nfc/sessions?erp_ref=R1-TEST-1" -H "X-API-Key: $ERP_KEY"` | One `active` session carrying `erp_ref` `R1-TEST-1` | STOP — R1 fails | ☐ |
+| 25 | Draw, then stop | Draw well above the meter's resolution; stop with `curl -s -X POST http://localhost/api/nfc/session/<id>/stop -H "X-API-Key: $ERP_KEY"` | Session `ended` | STOP — R1 fails | ☐ |
+| 26 | The figures agree | Read Q1's physical meter again; fetch the session as in 24 | `energy_kwh` = `meter_energy_end_kwh − meter_energy_start_kwh` exactly; matches the physical meter's delta within its resolution; `consumption_source` = `register` | **R1 fails — this decides Krk** | ☐ |
+
+## 13.11 Rollback
+
+```bash
+U=$(systemctl show -p FragmentPath --value cloud-iot-backend.service)
+sudo cp -a /root/cloud-iot-backend.service.pre-release "$U"
+sudo systemctl daemon-reload
+sudo systemctl restart cloud-iot-backend.service
+ss -ltn 'sport = :8000'                      # 0.0.0.0:8000, as before
+# if the venv is at fault:
+sudo systemctl stop cloud-iot-backend.service
+sudo rm -rf /opt/cloud-iot/backend/.venv && sudo mv /opt/cloud-iot/backend/.venv.pre-release /opt/cloud-iot/backend/.venv
+sudo systemctl start cloud-iot-backend.service
+# if the database is at fault (after 19):
+sudo systemctl stop cloud-iot-backend.service
+sudo cp -a /root/pedestal.db.pre-release /opt/cloud-iot/backend/pedestal.db
+sudo systemctl start cloud-iot-backend.service
+```
+
+The next `upgrade.sh` binds loopback again (the step is idempotent): a rollback holds until it
+is decided otherwise. Nothing in this list touches sshd, cloudflared, tailscaled or any network
+or firewall configuration.
+
+## 13.12 Not yet on this list
+
+These are not built yet, so they have no check yet. Each gets its own check in the commit that
+builds it:
+
+- REST authentication on the routes reachable without login;
+- part B — role filtering of the broadcast and of `GET /api/sessions`.

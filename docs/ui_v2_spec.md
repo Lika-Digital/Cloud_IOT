@@ -840,9 +840,10 @@ Secrets are never typed on a command line: read them with `read -s` and pass the
 | 0.2 | The current commit is recorded | `git -C ~/Cloud_IOT rev-parse HEAD \| sudo tee /root/pre-release.commit` | A hash | STOP | ☐ |
 | 0.3 | The backend unit is saved | `U=$(systemctl show -p FragmentPath --value cloud-iot-backend.service); sudo cp -a "$U" /root/cloud-iot-backend.service.pre-release` | File exists | STOP | ☐ |
 | 0.4 | The venv is saved | `sudo cp -a /opt/cloud-iot/backend/.venv /opt/cloud-iot/backend/.venv.pre-release` | Copy exists | STOP | ☐ |
-| 0.5 | The database is saved | `sudo cp -a /opt/cloud-iot/backend/pedestal.db /root/pedestal.db.pre-release` | Copy exists | STOP | ☐ |
-| 0.6 | No other unit has pending changes that our `daemon-reload` would activate | `systemctl list-unit-files 'ssh*' --no-legend` (note the name), then `systemctl show -p NeedDaemonReload cloudflared tailscaled docker nginx <ssh-unit>` | Every line `NeedDaemonReload=no` | STOP — find out who changed what | ☐ |
+| 0.5 | Both databases are saved — ONLINE, never with `cp` | **Not `cp`:** the databases run in WAL mode, and copying a live one can produce an inconsistent copy without the `-wal` contents. Use SQLite's backup API, which is consistent while the backend runs: `sudo python3 -c "import sqlite3;[sqlite3.connect(s).backup(sqlite3.connect(d)) for s,d in (('/opt/cloud-iot/backend/pedestal.db','/root/pedestal.db.pre-release'),('/opt/cloud-iot/backend/data/users.db','/root/users.db.pre-release'))]"`, then check both copies: `sudo python3 -c "import sqlite3;print([sqlite3.connect(f).execute('PRAGMA integrity_check').fetchone()[0] for f in ('/root/pedestal.db.pre-release','/root/users.db.pre-release')])"`; and note the owner: `stat -c '%U:%G' /opt/cloud-iot/backend/pedestal.db \| sudo tee /root/db.owner` | `['ok', 'ok']`; an owner such as `cloud-iot:cloud-iot` | STOP | ☐ |
+| 0.6 | No other unit has pending changes that our `daemon-reload` would activate | `systemctl list-unit-files 'ssh*' --no-legend` — note which of `ssh.service` / `ssh.socket` is ENABLED: on recent Ubuntu SSH is often socket-activated, and then the service can read `inactive` while SSH works, then `for u in cloudflared tailscaled docker nginx <ssh-unit>; do echo "$u $(systemctl show -p NeedDaemonReload --value $u)"; done` | Every line ends in `no` | STOP — find out who changed which unit | ☐ |
 | 0.7 | Baseline of the bind | `ss -ltn 'sport = :8000'` | `0.0.0.0:8000` (the old state) | RECORD | ☐ |
+| 0.8 | The ERP key is configured — without printing it | `sudo grep -c '^ERP_API_KEY=.\+' /opt/cloud-iot/backend/.env` | `1` — without it every `/scan` below answers 503 | STOP for 13.7 and 13.10 | ☐ |
 
 ## 13.2 The upgrade
 
@@ -857,7 +858,7 @@ Secrets are never typed on a command line: read them with `read -s` and pass the
 | 1 | SSH through the tunnel | From the second, already-open machine: a NEW connection to `ssh2.lika.solutions` | Login prompt, login works | ROLLBACK from the session still open — never close the last live connection | ☐ |
 | 2 | Tailscale | `tailscale status \| head -3` on the NUC, plus a NEW CLI connection over the tailnet from another machine | Cabinet online; connection works | ROLLBACK | ☐ |
 | 3 | The web UI | Open `https://marina2.lika.solutions`, log in with 2FA | Dashboard loads | ROLLBACK | ☐ |
-| 4 | Services | `systemctl is-active cloudflared tailscaled docker nginx <ssh-unit> cloud-iot-backend` | Every line `active` | ROLLBACK | ☐ |
+| 4 | Services | `systemctl is-active cloudflared tailscaled docker nginx <ssh-unit> cloud-iot-backend`, where `<ssh-unit>` is the one ENABLED in 0.6 (`ssh.socket` if SSH is socket-activated) | Every line `active` — and check 1 already proved SSH works | ROLLBACK | ☐ |
 
 ## 13.4 Bind
 
@@ -885,11 +886,14 @@ Secrets are never typed on a command line: read them with `read -s` and pass the
 
 | # | Check | Command / step | Expected | If it fails | Outcome |
 |---|---|---|---|---|---|
-| 12 | A valve never opens itself | With smart mode ON, after a diagnostic response: `journalctl -u cloud-iot-backend --since "10 min ago" --no-pager \| grep ValveAutoOpen` | `SKIPPED: ERP mode`, and no valve opened | STOP — water is open to nobody; turn smart mode off | ☐ |
+| P.1 | Precondition — NFC mode BEFORE smart mode | In the UI, switch the pedestal to NFC mode FIRST, then turn smart mode on. Check: `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;print(sqlite3.connect('/opt/cloud-iot/backend/pedestal.db').execute('SELECT socket_id,auto_activate FROM socket_configs').fetchall())"` | Every socket `0`. **The order matters:** smart mode on with a socket still at `auto_activate=1` energises it on plug-in without a scan — a silent pass that proves nothing | STOP — turn smart mode off again | ☐ |
+| 12 | A valve never opens itself | Trigger diagnostics: UI → pedestal → Config → Diagnostics (it calls `POST /api/pedestals/1/diagnostics/run`). Then `journalctl -u cloud-iot-backend --since "10 min ago" --no-pager \| grep ValveAutoOpen` | One `SKIPPED: ERP mode` line per valve, and no valve opened. **No `ValveAutoOpen` line at all means the diagnostic response never arrived: that is NOT a pass — RECORD it as unproven** | STOP — water is open to nobody; turn smart mode off | ☐ |
 | 13 | The new `/scan` works | `read -s ERP_KEY`, then `curl -s -X POST http://localhost/api/nfc/scan -H "X-API-Key: $ERP_KEY" -H 'Content-Type: application/json' -d '{"cabinet_id":"MAR_KRK_ORM_01","outlet":"Q2","erp_ref":"CHECK-SCAN"}'`, on an outlet with NOTHING plugged in; let it expire after 5 min | `"status":"pending"` | RECORD | ☐ |
-| 14 | The old `/scan` body is refused | Same curl with `-d '{"nfc_tag_id":"X","user_id":"Y"}'` | HTTP 422 | RECORD | ☐ |
+| 14 | The old `/scan` body is refused | Same curl, with `-o /dev/null -w '%{http_code}
+'` added and `-d '{"nfc_tag_id":"X","user_id":"Y"}'` | `422` | RECORD | ☐ |
 | 15 | The ack endpoint answers | `curl -s -X POST http://localhost/api/nfc/sessions/ack -H "X-API-Key: $ERP_KEY" -H 'Content-Type: application/json' -d '{"session_ids":[999999999]}'` | `"unknown":[999999999]` | RECORD | ☐ |
-| 16 | The session list answers | `curl -s "http://localhost/api/nfc/sessions" -H "X-API-Key: $ERP_KEY"` (no filter), then with `?erp_ref=CHECK-SCAN` | 400, then 200 | RECORD | ☐ |
+| 16 | The session list answers | `curl -s -o /dev/null -w '%{http_code}
+' "http://localhost/api/nfc/sessions" -H "X-API-Key: $ERP_KEY"` (no filter), then the same with `?erp_ref=CHECK-SCAN` | `400`, then `200` | RECORD | ☐ |
 
 ## 13.8 D17
 
@@ -902,14 +906,14 @@ Secrets are never typed on a command line: read them with `read -s` and pass the
 | # | Check | Command / step | Expected | If it fails | Outcome |
 |---|---|---|---|---|---|
 | 18 | Dry run | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 ~/Cloud_IOT/scripts/stamp_consumption_source.py --db /opt/cloud-iot/backend/pedestal.db` | Four counts; "partition all … exactly"; exit 0. Record the counts | STOP — do not apply; record the refusal | ☐ |
-| 19 | Apply | The same command with `--apply` (0.5 has saved the DB) | `APPLIED.`; "remaining with no source" equals the D count | Restore `/root/pedestal.db.pre-release` | ☐ |
+| 19 | Apply | The same command with `--apply` (0.5 has saved the DB) | `APPLIED.`; "remaining with no source" equals the D count | Restore the database by the §13.11 procedure — stop, copy, REMOVE `-wal`/`-shm`, restore the owner. Never a bare `cp` | ☐ |
 | 20 | Stamps on the 149 sessions | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;c=sqlite3.connect('/opt/cloud-iot/backend/pedestal.db');print(c.execute('SELECT consumption_source,COUNT(*) FROM sessions GROUP BY 1').fetchall());print(c.execute('SELECT COUNT(*) FROM sessions WHERE consumption_source IS NULL AND (energy_kwh IS NOT NULL OR water_liters IS NOT NULL)').fetchone())"` | No session with a figure and no source (second line `(0,)`); A + B add up to the sessions that had a figure | RECORD | ☐ |
 
 ## 13.10 R1 — last, and the only check that decides Krk
 
 | # | Check | Command / step | Expected | If it fails | Outcome |
 |---|---|---|---|---|---|
-| 21 | Ready | In the UI: switch the pedestal to NFC mode (sockets' auto-activate off) and turn smart mode on | Auto-activate off on every socket | STOP | ☐ |
+| 21 | Still ready | P.1 still holds: the same `socket_configs` query, and smart mode on | Every socket `0`; smart mode on | STOP | ☐ |
 | 22 | Physical meter before | Read Q1's physical meter | Reading noted | — | ☐ |
 | 23 | Scan | `/scan` as in 13 with `"outlet":"Q1","erp_ref":"R1-TEST-1"` | `pending` | STOP | ☐ |
 | 24 | Plug in within 5 minutes | Plug into Q1; `curl -s "http://localhost/api/nfc/sessions?erp_ref=R1-TEST-1" -H "X-API-Key: $ERP_KEY"` | One `active` session carrying `erp_ref` `R1-TEST-1` | STOP — R1 fails | ☐ |
@@ -928,9 +932,13 @@ ss -ltn 'sport = :8000'                      # 0.0.0.0:8000, as before
 sudo systemctl stop cloud-iot-backend.service
 sudo rm -rf /opt/cloud-iot/backend/.venv && sudo mv /opt/cloud-iot/backend/.venv.pre-release /opt/cloud-iot/backend/.venv
 sudo systemctl start cloud-iot-backend.service
-# if the database is at fault (after 19):
+# if a database is at fault (after 19). The -wal and -shm files MUST go: a stale WAL replayed
+# over the restored file corrupts it. And the copy belongs to root — give it back its owner.
 sudo systemctl stop cloud-iot-backend.service
-sudo cp -a /root/pedestal.db.pre-release /opt/cloud-iot/backend/pedestal.db
+sudo cp /root/pedestal.db.pre-release /opt/cloud-iot/backend/pedestal.db
+sudo rm -f /opt/cloud-iot/backend/pedestal.db-wal /opt/cloud-iot/backend/pedestal.db-shm
+sudo chown "$(sudo cat /root/db.owner)" /opt/cloud-iot/backend/pedestal.db
+#   same three lines for /opt/cloud-iot/backend/data/users.db from /root/users.db.pre-release, only if users.db is at fault
 sudo systemctl start cloud-iot-backend.service
 ```
 

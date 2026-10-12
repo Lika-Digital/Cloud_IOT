@@ -25,31 +25,32 @@ export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   useEffect(() => { setSidebarOpen(false) }, [location.pathname])
 
-  // Customers is visible to every operator now, so poll the unread badge for all.
+  // The unread badge sits on Customers, which is admin-only since 2026-10-12 — so only an admin
+  // polls it (the route answers 403 to everyone else).
   useEffect(() => {
+    if (!isAdmin) return
     getUnreadCount().then((r) => setUnreadChatCount(r.unread_customers)).catch(() => {})
     const interval = setInterval(() => {
       getUnreadCount().then((r) => setUnreadChatCount(r.unread_customers)).catch(() => {})
     }, 30_000)
     return () => clearInterval(interval)
-  }, [])
+  }, [isAdmin])
 
   type NavItem = { to: string; label: string; icon: string; badge: number; hwAlarm?: 'none' | 'warning' | 'critical' | 'auto_stop' }
-  // v3.34 — Dashboard/Analytics/History + Billing/Customers/Contracts/Berths are
-  // shared by all operators; only the three admin sections are gated by isAdmin.
+  // v3.34 — Dashboard/Analytics/History/Berths are shared by all operators; the admin sections
+  // are gated by isAdmin. (2026-10-12: Billing, Customers, Contracts moved into the admin block.)
   const NAV_ITEMS: NavItem[] = [
     { to: '/marina', label: 'Marina', icon: '⚓', badge: 0 },
     { to: '/dashboard', label: 'Dashboard', icon: '⚡', badge: 0 },
     { to: '/analytics', label: 'Analytics', icon: '📊', badge: 0 },
     { to: '/history', label: 'History', icon: '📋', badge: 0 },
-    // 2026-10-12, part B: Billing is LEGACY and its API is admin-only (backend/app/routers/billing.py) —
-    // marina staff must not see customer data. A shared nav item would lead staff to a page of 403s.
-    // { to: '/billing', label: 'Billing', icon: '💰', badge: 0 },
-    { to: '/users', label: 'Customers', icon: '👥', badge: unreadChatCount },
-    { to: '/contracts', label: 'Contracts', icon: '📝', badge: 0 },
     { to: '/berths', label: 'Berth Occupancy', icon: '⚓', badge: 0 },
     ...(isAdmin ? [
+      // 2026-10-12: Billing, Customers and Contracts are LEGACY and admin-only on the API
+      // (routers/billing.py, chat.py, contracts.py) — marina staff must not see customer data.
       { to: '/billing', label: 'Billing', icon: '💰', badge: 0 },
+      { to: '/users', label: 'Customers', icon: '👥', badge: unreadChatCount },
+      { to: '/contracts', label: 'Contracts', icon: '📝', badge: 0 },
       { to: '/system-health', label: 'System Health', icon: '🔧', badge: newErrorCount, hwAlarm: hwAlarmLevel },
     ] : []),
     ...(canApi ? [

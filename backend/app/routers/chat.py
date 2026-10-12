@@ -8,12 +8,19 @@ from sqlalchemy.orm import Session as DBSession
 from ..auth.user_database import get_user_db
 from ..auth.customer_models import Customer, ChatMessage
 from ..auth.customer_dependencies import require_customer
-from ..auth.dependencies import require_any_role, require_control
+from ..auth.dependencies import require_admin
 from ..auth.models import User
 from ..services.websocket_manager import ws_manager
 from ..schemas.customer import ChatMessageResponse, SendMessageRequest, OperatorReplyRequest
 from ..time_utils import iso_z
 
+# LEGACY, LOCKED TO ADMIN — 2026-10-12, owner's decision (block 1, part B follow-up).
+# The operator side of the customer chat — the Customers page. The cabinet does not hold the customer — the ERP does — and these operator routes are
+# left over from the testing phase with the mobile app. Marina staff must not see customer data
+# (rule 13, docs/engineering_notes.md), and a page called Customers cannot be the exception. So
+# every operator route here is require_admin, reads and writes alike. Do not lower it for a
+# badge or a tile. tests/backend/test_identity_redaction.py TC-IDR-07 fails if a non-admin
+# operator reaches one of them. The customer-facing routes (require_customer) are untouched.
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 # Rate limit: max 10 send calls per 60s per customer_id — protected by a per-customer lock
@@ -68,7 +75,7 @@ async def operator_reply(
     customer_id: int,
     body: OperatorReplyRequest,
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_control),
+    _: User = Depends(require_admin),  # was require_control — see the note on the router
 ):
     customer = user_db.get(Customer, customer_id)
     if not customer:
@@ -102,7 +109,7 @@ def get_messages(
     limit: int = Query(200, ge=1, le=500),
     offset: int = Query(0, ge=0),
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_any_role),
+    _: User = Depends(require_admin),  # was require_any_role — see the note on the router
 ):
     return (
         user_db.query(ChatMessage)
@@ -118,7 +125,7 @@ def get_messages(
 def mark_read(
     customer_id: int,
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_control),
+    _: User = Depends(require_admin),  # was require_control — see the note on the router
 ):
     now = datetime.utcnow()
     msgs = (
@@ -139,7 +146,7 @@ def mark_read(
 @router.get("/unread-count")
 def unread_count(
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_any_role),
+    _: User = Depends(require_admin),  # was require_any_role — see the note on the router
 ):
     from sqlalchemy import func, distinct
     count = (

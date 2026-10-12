@@ -109,14 +109,16 @@ export default function SocketUsageHistoryModal({
           >
             {months.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
-          <button
+          {/* 2026-10-12: report FILES are admin only, temporarily (routers/usage_history.py,
+              _REPORTS_LOCKED) — they print the customer identifier. History stays for all. */}
+          {isAdmin && <button
             type="button"
             onClick={handleDownload}
             disabled={busy !== null}
             className="text-xs px-2 py-1 rounded border border-blue-700/50 bg-blue-900/40 text-blue-200 hover:bg-blue-800/50 disabled:opacity-50"
           >
             {busy === 'download' ? 'Downloading…' : '⬇ Download report (.txt)'}
-          </button>
+          </button>}
           {isAdmin && (
             <button
               type="button"

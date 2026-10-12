@@ -85,11 +85,11 @@ function AppInner() {
             </ProtectedRoute>
           }
         />
-        {/* v3.34 — Billing/Customers/Contracts/Berths are visible to all operators
-            (read-only for Monitor; control for Admin + Monitor & Control). Only the
-            three admin sections below keep adminOnly. */}
-        <Route path="billing" element={<Billing />} />
-        <Route path="users" element={<Users />} />
+        {/* 2026-10-12 — Billing, Customers and Contracts are admin only (owner's decision:
+            marina staff do not see customer data). The API enforces it; these guards keep
+            staff from landing on a page of 403s. Berths stays shared. */}
+        <Route path="billing" element={<ProtectedRoute adminOnly><Billing /></ProtectedRoute>} />
+        <Route path="users" element={<ProtectedRoute adminOnly><Users /></ProtectedRoute>} />
         <Route
           path="system-health"
           element={
@@ -98,7 +98,7 @@ function AppInner() {
             </ProtectedRoute>
           }
         />
-        <Route path="contracts" element={<Contracts />} />
+        <Route path="contracts" element={<ProtectedRoute adminOnly><Contracts /></ProtectedRoute>} />
         <Route path="berths" element={<BerthOccupancy />} />
         <Route
           path="api-gateway"

@@ -39,7 +39,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session as DBSession
 
 from ..database import get_db
-from ..auth.dependencies import require_any_role, require_control
+from ..auth.dependencies import require_admin, require_any_role
 from ..auth.models import User
 from ..auth.identity_redaction import redact, sees_identity
 from ..services import usage_report_service as svc
@@ -48,6 +48,14 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/pedestals", tags=["usage-history"])
 
+# _REPORTS_LOCKED — 2026-10-12, owner's decision: the monthly report FILES are admin only, and
+# TEMPORARILY so. They print "customer #<id>", and marina staff must not see customer data.
+# Staff do have a legitimate need for consumption per outlet, so the owner considered redacting
+# the identifier instead — and chose to lock: redacting generated text is easier to break than a
+# lock, and the reports are partial and cached anyway. Whether staff get a version WITHOUT the
+# customer identifier is decided when the five legacy .txt reports are labelled (plan item 4).
+# Do not invent redaction over the .txt files before that decision. The usage HISTORY above is
+# not affected: staff get it, without identity (part B).
 _MONTH_RE = re.compile(r"^(\d{4})-(\d{2})$")
 
 
@@ -94,9 +102,9 @@ def get_usage_history(
 @router.get("/{pedestal_id}/usage/reports")
 def list_usage_reports(
     pedestal_id: int,
-    _: User = Depends(require_any_role),
+    _: User = Depends(require_admin),  # was require_any_role — TEMPORARY, see _REPORTS_LOCKED
 ):
-    """List available monthly report files for this pedestal (newest first)."""
+    """List available monthly report files for this pedestal (newest first). Admin only."""
     return svc.list_reports(pedestal_id)
 
 
@@ -105,9 +113,9 @@ def download_usage_report(
     pedestal_id: int,
     month: str,
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_any_role),
+    _: User = Depends(require_admin),  # was require_any_role — TEMPORARY, see _REPORTS_LOCKED
 ):
-    """Download the plain-text monthly report. Lazily generated if missing."""
+    """Download the plain-text monthly report. Lazily generated if missing. Admin only."""
     year, mon = _parse_month(month)
     path = svc.get_or_generate(db, pedestal_id, year, mon)
     if path is None:
@@ -129,10 +137,14 @@ def download_usage_report(
 def delete_usage_report(
     pedestal_id: int,
     month: str,
-    user: User = Depends(require_control),
+    user: User = Depends(require_admin),  # was require_control — see below
 ):
     """Delete a monthly report file. ADMIN ONLY — the system never deletes
-    these; this is the sole removal path, so it is audited."""
+    these; this is the sole removal path, so it is audited.
+
+    2026-10-12: "ADMIN ONLY" was again a claim — the gate was require_control, so
+    monitor_control could delete. Now it is what the docstring says.
+    """
     year, mon = _parse_month(month)
     removed = svc.delete_report(pedestal_id, year, mon)
     if not removed:

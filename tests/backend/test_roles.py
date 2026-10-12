@@ -121,15 +121,12 @@ INSTALLATION_ACTS = [
 
 # Act within an existing installation. Admin + monitor_control.
 OPERATIONS = [
-    # 2026-10-12, part B: billing is legacy and LOCKED to admin (routers/billing.py); the
-    # refusal of every non-admin is test_identity_redaction.py TC-IDR-05.
-    # ("PUT", "/api/billing/config", {"kwh_price_eur": 0.5, "liter_price_eur": 0.01}),
+    # Billing is not here since 2026-10-12: legacy and admin only — test_identity_redaction.py.
     ("POST", "/api/pedestals/1/sockets/1/breaker/reset", {}),
 ]
 
 # Read. Every operator, including read-only monitor.
 OBSERVATIONS = [
-    # ("GET", "/api/billing/config", None),  # 2026-10-12, part B: admin only — TC-IDR-05
     ("GET", "/api/pedestals/1/sockets/1/breaker/status", None),
     # Reading the tag map is how staff answer "why did my tap not work?" — operations, not
     # configuration, so it stays open deliberately.

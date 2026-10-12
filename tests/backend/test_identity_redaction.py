@@ -196,3 +196,45 @@ def test_tc_idr_05c_the_billing_write_is_admin_only_too(client, role):
 def test_tc_idr_06_the_list_is_the_owners(client):
     from app.auth.identity_redaction import IDENTITY_KEYS
     assert set(IDENTITY_KEYS) == KEYS
+
+
+# ═══ TC-IDR-07 — Customers and Contracts pages: locked (owner, 2026-10-12) ═════
+# Same decision as billing, at a place that was outside the first scope: a page called
+# Customers cannot be the exception to "staff do not see customer data". Every operator route
+# those two pages call is admin only — reads and writes.
+
+CUSTOMER_PAGES = [
+    ("GET", "/api/chat/messages/1", None),
+    ("GET", "/api/chat/unread-count", None),
+    ("POST", "/api/chat/operator/reply/1", {"message": "x"}),
+    ("POST", "/api/chat/mark-read/1", None),
+    ("GET", "/api/contracts/templates", None),
+    ("POST", "/api/contracts/templates", {"title": "t", "body": "b", "validity_days": 1}),
+    ("PATCH", "/api/contracts/templates/1", {"title": "t"}),
+    ("GET", "/api/admin/contracts", None),
+    ("GET", "/api/admin/contracts/1/pdf", None),
+]
+
+# ═══ TC-IDR-08 — monthly report files: admin only, TEMPORARILY ═════════════════
+# The files print "customer #<id>". Locked rather than redacted (owner, 2026-10-12): redacting
+# generated text is easier to break than a lock. Whether staff get a version without the
+# customer identifier is decided when the reports are labelled (plan item 4).
+
+REPORT_ROUTES = [
+    ("GET", "/api/pedestals/1/usage/reports", None),
+    ("GET", "/api/pedestals/1/usage/reports/2026-05", None),
+    ("DELETE", "/api/pedestals/1/usage/reports/2026-05", None),
+]
+
+
+@pytest.mark.parametrize("method,url,body", CUSTOMER_PAGES + REPORT_ROUTES)
+@pytest.mark.parametrize("role", ["monitor", "monitor_control"])
+def test_tc_idr_07_08_customer_pages_and_reports_are_admin_only(client, role, method, url, body):
+    r = client.request(method, url, json=body, headers=_h(role))
+    assert r.status_code == 403, f"{role} reached {method} {url}: {r.status_code}"
+
+
+@pytest.mark.parametrize("method,url,body",
+                         [x for x in CUSTOMER_PAGES + REPORT_ROUTES if x[0] == "GET"])
+def test_tc_idr_07_08b_admin_still_reaches_the_reads(client, method, url, body):
+    assert client.request(method, url, headers=_h("admin")).status_code != 403

@@ -10,11 +10,18 @@ import io
 from ..auth.user_database import get_user_db
 from ..auth.contract_models import ContractTemplate, CustomerContract
 from ..auth.customer_models import Customer
-from ..auth.dependencies import require_any_role, require_control
+from ..auth.dependencies import require_admin
 from ..auth.customer_dependencies import require_customer
 from ..auth.models import User
 from ..services.pdf_service import make_contract_pdf
 
+# LEGACY, LOCKED TO ADMIN — 2026-10-12, owner's decision (block 1, part B follow-up).
+# Contract templates and signed customer contracts — the Contracts page. The cabinet does not hold the customer — the ERP does — and these operator routes are
+# left over from the testing phase with the mobile app. Marina staff must not see customer data
+# (rule 13, docs/engineering_notes.md), and a page called Customers cannot be the exception. So
+# every operator route here is require_admin, reads and writes alike. Do not lower it for a
+# badge or a tile. tests/backend/test_identity_redaction.py TC-IDR-07 fails if a non-admin
+# operator reaches one of them. The customer-facing routes (require_customer) are untouched.
 router = APIRouter(tags=["contracts"])
 
 
@@ -82,7 +89,7 @@ class AdminContractResponse(BaseModel):
 @router.get("/api/contracts/templates", response_model=list[TemplateResponse])
 def list_templates(
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_any_role),
+    _: User = Depends(require_admin),  # was require_any_role — see the note on the router
 ):
     return user_db.query(ContractTemplate).order_by(ContractTemplate.id).all()
 
@@ -91,7 +98,7 @@ def list_templates(
 def create_template(
     body: TemplateCreate,
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_control),
+    _: User = Depends(require_admin),  # was require_control — see the note on the router
 ):
     tpl = ContractTemplate(**body.model_dump())
     user_db.add(tpl)
@@ -105,7 +112,7 @@ def update_template(
     template_id: int,
     body: TemplateUpdate,
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_control),
+    _: User = Depends(require_admin),  # was require_control — see the note on the router
 ):
     tpl = user_db.get(ContractTemplate, template_id)
     if not tpl:
@@ -122,7 +129,7 @@ def update_template(
 @router.get("/api/admin/contracts", response_model=list[AdminContractResponse])
 def admin_list_contracts(
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_any_role),
+    _: User = Depends(require_admin),  # was require_any_role — see the note on the router
 ):
     contracts = user_db.query(CustomerContract).order_by(CustomerContract.signed_at.desc()).all()
     rows = []
@@ -147,7 +154,7 @@ def admin_list_contracts(
 def admin_download_contract_pdf(
     contract_id: int,
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_any_role),
+    _: User = Depends(require_admin),  # was require_any_role — see the note on the router
 ):
     contract = user_db.get(CustomerContract, contract_id)
     if not contract:

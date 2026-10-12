@@ -312,7 +312,6 @@ def test_daily_billing_refused_to_monitor(client):
         hdr = {"Authorization": f"Bearer {create_access_token(u.id, u.email, 'monitor')}"}
     finally:
         db.close()
-    # assert client.get("/api/billing/daily", headers=hdr).status_code == 200
     assert client.get("/api/billing/daily", headers=hdr).status_code == 403
 
 

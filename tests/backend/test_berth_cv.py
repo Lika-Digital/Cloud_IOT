@@ -275,9 +275,9 @@ class TestConfirmCrop:
 # ──────────────────────────────────────────────────────────────────────────────
 
 class TestStorageMonitor:
-    def test_storage_status_endpoint_returns_expected_fields(self, client):
+    def test_storage_status_endpoint_returns_expected_fields(self, client, auth_headers):
         """GET /api/system/training-storage → 200, response has the four expected fields."""
-        r = client.get("/api/system/training-storage")
+        r = client.get("/api/system/training-storage", headers=auth_headers)
         assert r.status_code == 200
         data = r.json()
         assert "size_gb" in data,      f"Missing 'size_gb' in {data}"
@@ -290,14 +290,15 @@ class TestStorageMonitor:
         assert isinstance(data["percent_used"], float)
         assert isinstance(data["alarm_active"], bool)
 
-    def test_storage_status_no_auth_required(self, client):
-        """GET /api/system/training-storage without any token → 200 (no auth needed)."""
+    def test_storage_status_requires_an_operator(self, client):
+        """2026-10-12 (rule 13): was `test_storage_status_no_auth_required`, asserting 200 with no
+        token. The owner's rule replaces that decision; anonymous is refused now."""
         r = client.get("/api/system/training-storage")
-        assert r.status_code == 200
+        assert r.status_code in (401, 403)
 
-    def test_storage_alarm_not_active_when_small(self, client):
+    def test_storage_alarm_not_active_when_small(self, client, auth_headers):
         """In a fresh test env the training_data dir is tiny → alarm_active == False."""
-        r = client.get("/api/system/training-storage")
+        r = client.get("/api/system/training-storage", headers=auth_headers)
         assert r.status_code == 200
         assert r.json()["alarm_active"] is False
 

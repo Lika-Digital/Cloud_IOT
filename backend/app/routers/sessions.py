@@ -2,11 +2,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session as DBSession
 from ..database import get_db
 from ..auth.user_database import get_user_db
+from ..auth.dependencies import require_any_role
 from ..auth.customer_models import Customer
 from ..models.session import Session
 from ..schemas.session import SessionResponse
 
-router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+# 2026-10-12, block 1 (rule 13): identity on the ROUTER, so a route added here later cannot be
+# left open. Every route below answered anyone — including this list, which carries customer
+# fields — and an anonymous GET reached the SQL query.
+router = APIRouter(prefix="/api/sessions", tags=["sessions"],
+                   dependencies=[Depends(require_any_role)])
 
 
 def _enrich(sessions: list[Session], user_db: DBSession) -> list[SessionResponse]:

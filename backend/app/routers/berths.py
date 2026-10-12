@@ -24,6 +24,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DBSession
 
 from ..auth.user_database import get_user_db
+from ..auth.dependencies import require_any_role
+from ..auth.models import User
 from ..auth.berth_models import Berth, BerthReservation
 from ..auth.customer_models import Customer
 from ..auth.dependencies import require_admin, require_any_role, require_control
@@ -193,6 +195,7 @@ def _get_pedestal_cfg_map(db: DBSession) -> dict:
 def list_berths(
     user_db: DBSession = Depends(get_user_db),
     db: DBSession = Depends(get_db),
+    _: User = Depends(require_any_role),  # 2026-10-12, block 1: identity before data (rule 13)
 ):
     """
     Return berths synced to the registered pedestal list.
@@ -240,6 +243,7 @@ def get_availability(
     check_out: str,
     user_db: DBSession = Depends(get_user_db),
     db: DBSession = Depends(get_db),
+    _: User = Depends(require_any_role),  # 2026-10-12, block 1: identity before data (rule 13)
 ):
     ci = _parse_date(check_in)
     co = _parse_date(check_out)

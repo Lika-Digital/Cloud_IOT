@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db, SessionLocal
 from ..auth.dependencies import require_admin, require_any_role, require_control
 from ..auth.user_database import UserSessionLocal
+from ..auth.models import User
 from ..models.pedestal_config import PedestalConfig, PedestalSensor
 from ..models.pedestal import Pedestal
 from ..time_utils import iso_z
@@ -484,7 +485,7 @@ class SocketConfigUpdate(BaseModel):
 
 
 @router.get("/api/pedestals/{pedestal_id}/sockets/config")
-def list_socket_configs(pedestal_id: int, db: Session = Depends(get_db)):
+def list_socket_configs(pedestal_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_role)):  # 2026-10-12, block 1: identity before data (rule 13)
     """Return the auto-activate setting for all 4 electricity sockets on a pedestal.
 
     Sockets that have never been configured yet are returned as
@@ -549,7 +550,7 @@ class ValveConfigUpdate(BaseModel):
 
 
 @router.get("/api/pedestals/{pedestal_id}/valves/config")
-def list_valve_configs(pedestal_id: int, db: Session = Depends(get_db)):
+def list_valve_configs(pedestal_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_role)):  # 2026-10-12, block 1: identity before data (rule 13)
     """Return the auto-activate setting for both water valves on a pedestal.
 
     Valves never yet configured are returned as
@@ -610,7 +611,7 @@ def update_valve_config(
 
 
 @router.get("/api/pedestals/{pedestal_id}/sockets/{socket_id}/auto-activate-log")
-def get_auto_activate_log(pedestal_id: int, socket_id: int, db: Session = Depends(get_db)):
+def get_auto_activate_log(pedestal_id: int, socket_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_role)):  # 2026-10-12, block 1: identity before data (rule 13)
     """Return the last 20 auto-activation attempts for this socket, newest first."""
     if socket_id not in (1, 2, 3, 4):
         raise HTTPException(status_code=400, detail="socket_id must be in 1..4")
@@ -697,9 +698,13 @@ def _serialize_schedule(s) -> dict:
 
 
 @router.get("/api/pedestals/{pedestal_id}/led-schedule")
-def get_led_schedule(pedestal_id: int, db: Session = Depends(get_db)):
+def get_led_schedule(pedestal_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_role)):
     """Return the LED schedule for the pedestal, or sensible defaults when
-    none has been configured yet. Admin and monitor."""
+    none has been configured yet. Admin and monitor.
+
+    2026-10-12: "Admin and monitor" was a claim with no control behind it — the route had no
+    dependency and answered anyone. A docstring is a claim, not a control.
+    """
     if not db.get(Pedestal, pedestal_id):
         raise HTTPException(status_code=404, detail="Pedestal not found")
 

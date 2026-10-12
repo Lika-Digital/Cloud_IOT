@@ -13,7 +13,7 @@ router = APIRouter(prefix="/api/pedestals", tags=["pedestals"])
 
 
 @router.get("", response_model=list[PedestalResponse])
-def list_pedestals(db: DBSession = Depends(get_db)):
+def list_pedestals(db: DBSession = Depends(get_db), _: User = Depends(require_any_role)):  # 2026-10-12, block 1: identity before data (rule 13)
     return db.query(Pedestal).order_by(Pedestal.id).all()
 
 
@@ -73,7 +73,7 @@ def configure_pedestals(
 
 
 @router.get("/{pedestal_id}", response_model=PedestalResponse)
-def get_pedestal(pedestal_id: int, db: DBSession = Depends(get_db)):
+def get_pedestal(pedestal_id: int, db: DBSession = Depends(get_db), _: User = Depends(require_any_role)):  # 2026-10-12, block 1: identity before data (rule 13)
     pedestal = db.get(Pedestal, pedestal_id)
     if not pedestal:
         raise HTTPException(status_code=404, detail="Pedestal not found")
@@ -153,7 +153,7 @@ def stop_simulator(
 
 
 @router.get("/{pedestal_id}/simulator/status")
-def simulator_status(pedestal_id: int, db: DBSession = Depends(get_db)):
+def simulator_status(pedestal_id: int, db: DBSession = Depends(get_db), _: User = Depends(require_any_role)):  # 2026-10-12, block 1: identity before data (rule 13)
     """Simulator state, including WHY it is not running when it is not.
 
     v3.43 — `available` and `reason` are reported because the simulator was deleted from the

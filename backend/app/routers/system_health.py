@@ -4,7 +4,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session as DBSession
-from ..auth.dependencies import require_admin
+from ..auth.dependencies import require_admin, require_any_role
 from ..auth.models import User
 from ..config import settings
 from ..database import get_db
@@ -222,10 +222,12 @@ def clear_cache(db: DBSession = Depends(get_db), _: User = Depends(require_admin
 # ─── Training storage endpoint ────────────────────────────────────────────────
 
 @router.get("/training-storage")
-def get_training_storage():
+def get_training_storage(_: User = Depends(require_any_role)):  # 2026-10-12, block 1: identity before data (rule 13)
     """
     Return training-data disk usage.
-    No authentication required — this is a monitoring/ops endpoint.
+
+    2026-10-12: this said "No authentication required — this is a monitoring/ops endpoint".
+    The owner's rule replaces that decision: every access requires the authenticated user.
     """
     from ..services.storage_monitor import get_training_storage_status
     return get_training_storage_status()

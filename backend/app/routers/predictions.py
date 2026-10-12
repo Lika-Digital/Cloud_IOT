@@ -3,12 +3,19 @@ from sqlalchemy.orm import Session as DBSession
 from ..database import get_db
 from ..models.session import Session
 from ..services.prediction_service import prediction_service
+from ..auth.dependencies import require_any_role, require_control
+from ..auth.models import User
 
-router = APIRouter(prefix="/api/predictions", tags=["predictions"])
+# 2026-10-12, block 1 (rule 13): identity on the ROUTER — every route here answered anyone.
+router = APIRouter(prefix="/api/predictions", tags=["predictions"],
+                   dependencies=[Depends(require_any_role)])
 
 
 @router.post("/train")
-def train_model(pedestal_id: int | None = None, db: DBSession = Depends(get_db)):
+def train_model(pedestal_id: int | None = None, db: DBSession = Depends(get_db),
+                _: User = Depends(require_control)):
+    # Training is an ACT, not a read: it was callable by anyone, and on an Atom without a GPU
+    # that is CPU spent on a stranger's request (not a leak — a different class from /ws).
     q = db.query(Session).filter(Session.status == "completed")
     if pedestal_id:
         q = q.filter(Session.pedestal_id == pedestal_id)

@@ -43,10 +43,12 @@ def test_create_pedestal_requires_auth(client):
     assert r.status_code in (401, 403)
 
 
-def test_pedestals_list_is_public(client):
-    """Pedestal list is intentionally public (no auth required)."""
-    r = client.get("/api/pedestals/")
-    assert r.status_code == 200
+def test_pedestals_list_requires_an_operator(client, auth_headers):
+    """2026-10-12 (rule 13): was `test_pedestals_list_is_public` — "intentionally public (no auth
+    required)". The owner's rule replaces that decision: every access requires the
+    authenticated user. Anonymous is refused; an operator is answered."""
+    assert client.get("/api/pedestals/").status_code in (401, 403)
+    assert client.get("/api/pedestals/", headers=auth_headers).status_code == 200
 
 
 def test_update_pedestal_mode(client, auth_headers):

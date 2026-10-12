@@ -972,6 +972,15 @@ Secrets are never typed on a command line: read them with `read -s` and pass the
 | 10 | Anonymous is refused | `curl -s -o /dev/null -w '%{http_code}\n' --http1.1 -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' https://marina2.lika.solutions/ws` | `403` (was `101`) | RECORD — the hole stays open; investigate before R1 | ☐ |
 | 11 | Logged-in UI still updates itself | Log in; the WebSocket dot is green; a socket state change appears without a reload | Live updates | RECORD — the data still arrives via REST | ☐ |
 
+## 13.6a REST — identity before data (block 1, 2026-10-12)
+
+| # | Check | Command / step | Expected | If it fails | Outcome |
+|---|---|---|---|---|---|
+| 11a | Anonymous REST is refused | `for u in /api/sessions /api/pedestals /api/berths /api/predictions/status /api/system/training-storage; do echo "$u $(curl -s -o /dev/null -w '%{http_code}' https://marina2.lika.solutions$u)"; done` | Every line `401` or `403` (was `200`) | RECORD — investigate before R1 | ☐ |
+| 11b | Training cannot be started anonymously | `curl -s -o /dev/null -w '%{http_code}
+' -X POST https://marina2.lika.solutions/api/predictions/train` | `401` or `403` | RECORD | ☐ |
+| 11c | The logged-in UI still loads its data | After login: the pedestal list, sockets and valves config, LED schedule and the Berth page all render | Pages load as before | ROLLBACK if the UI is unusable; otherwise RECORD | ☐ |
+
 ## 13.7 Water and D6.1
 
 | # | Check | Command / step | Expected | If it fails | Outcome |
@@ -1041,7 +1050,6 @@ or firewall configuration.
 These are not built yet, so they have no check yet. Each gets its own check in the commit that
 builds it:
 
-- REST authentication on the routes reachable without login;
 - part B — role filtering of the broadcast and of `GET /api/sessions`.
 
 ---
@@ -1056,7 +1064,7 @@ without one. Rule 13 of `docs/engineering_notes.md` states it as a rule for ever
 |---|---|
 | Identity | One function, `auth.dependencies.operator_from_token`, for HTTP routes AND `/ws` — never a copy. A pre-2FA (`totp_pending`) token is never an operator. |
 | `/ws` (part A, built, `e80a4c1`) | Operator only, proven BEFORE accept (handshake 403, no message); token in `Sec-WebSocket-Protocol`, never in a URL (URLs land in access logs); closed at token expiry. Customer and `ws_session` tokens refused. Proof: `test_ws_auth.py` TC-WSA-01..07, 6 of them failing on the code before. |
-| REST without login | **Open finding, block 1:** routes reachable with no login, among them `GET /api/sessions` (customer fields). Build: authentication on each, plus a route-table test that forbids a new unauthenticated `/api` route. |
+| REST without login | **Closed in block 1 (2026-10-12):** identity on every `/api` route; `/api/sessions` and `/api/predictions` on the router itself; `POST /predictions/train` needs a control role. `test_rest_auth.py` TC-RA-01 forbids a new unauthenticated `/api` route unless it is listed as public WITH a reason; TC-RA-03 refuses anonymous callers (19 failed on the code before). Still open by design: `/api/camera/{id}/stream` (R4 — an `<img>` cannot send a header). Cabinet check: §13.6a. |
 | Staff and customer data — **owner's decision, binding** | **MARINA STAFF MUST NOT SEE CUSTOMER DATA.** The customer's identity lives in the ERP; the cabinet shows the session and the consumption, not the customer's name or identifier. Only admin sees more. |
 | Part B (block 1, planned) | One list of identity keys — `customer_id`, `customer_name`, `nfc_user_id`, `erp_ref`. Removed for non-admin from every websocket broadcast, and from `GET /api/sessions`, usage history and reconciliation divergence. **Billing and export routes are locked to admin, not filtered:** the cabinet does not bill — the ERP does — and those routes are legacy; filtering them would mean maintaining them as if they had a purpose. |
 | Not in scope now | Cloudflare Access on the hostname — owner's decision, later: it would need a service token for the ERP webhook and every automated call. No firewall, no change to sshd / cloudflared / tailscaled, ever. |

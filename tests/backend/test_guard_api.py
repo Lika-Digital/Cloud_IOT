@@ -68,13 +68,28 @@ def _clean():
     yield
 
 
+class _GuardPublishes(list):
+    """Publishes on THIS camera's guard topics; anything else lands in `.others`."""
+    def __init__(self):
+        super().__init__()
+        self.others: list[tuple[str, str, int]] = []
+
+
 @pytest.fixture
 def published():
-    """Capture what the backend publishes, so the MQTT contract is asserted not assumed."""
-    sent: list[tuple[str, str, int]] = []
+    """Capture what the backend publishes on this camera's guard topics.
+
+    Scoped to the guard topics since 2026-10-12. It captured EVERY publish, and the tests read
+    `published[-1]` — so anything else published in the same window (a task left on the shared
+    event loop by an earlier test) became "the last command" and TC-GAPI-09 failed once with
+    KeyError: 'cmd', then passed on an identical rerun. Other topics are kept in `.others` so
+    a stray publish is visible instead of silently shifting the index.
+    """
+    sent = _GuardPublishes()
+    marker = f"/camera/{CAM}/guard/"
 
     def fake_publish(topic, payload, qos=1):
-        sent.append((topic, payload, qos))
+        (sent if marker in topic else sent.others).append((topic, payload, qos))
 
     with patch("app.services.mqtt_client.mqtt_service.publish", side_effect=fake_publish):
         yield sent

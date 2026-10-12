@@ -2002,27 +2002,32 @@ async def _handle_event_outlet_activated(db, pedestal_id: int, outlet_id: str, r
     # recent NFC scan (marked "activated" on UserPluggedIn for this socket).
     # The recency window bounds staleness so a later operator manual-activate
     # does not inherit an old scan's user.
+    #
+    # 2026-10-12 (D6.1) — WATER TOO. This block was under `if not is_water:`, so a water
+    # session never carried a user, erp_webhook withheld it as unattributed, and no water
+    # session ever reached the ERP. A valve's reservation is marked "activated" by the
+    # water activate command (controls.direct_water_cmd) instead of by a plug-in event, and
+    # is picked up here the same way. outlet_id is "V1"/"V2", the reservation's socket_id.
     nfc_user_id = None
-    if not is_water:
-        from datetime import timedelta
-        from ..models.pedestal_config import PedestalConfig as _PC
-        from ..models.nfc_pending_session import NfcPendingSession as _NPS
-        _pc = db.query(_PC).filter(_PC.pedestal_id == pedestal_id).first()
-        cabinet_id = getattr(_pc, "opta_client_id", None) if _pc else None
-        if cabinet_id:
-            cutoff = datetime.utcnow() - timedelta(minutes=10)
-            rec = (db.query(_NPS)
-                   .filter(_NPS.cabinet_id == cabinet_id,
-                           _NPS.socket_id == outlet_id,
-                           _NPS.status == "activated",
-                           _NPS.created_at >= cutoff)
-                   .order_by(_NPS.created_at.desc())
-                   .first())
-            if rec is not None:
-                session.nfc_user_id = rec.user_id
-                nfc_user_id = rec.user_id
-                db.commit()
-                logger.info("[NFC] attached user=%s to session %d", rec.user_id, session.id)
+    from datetime import timedelta
+    from ..models.pedestal_config import PedestalConfig as _PC
+    from ..models.nfc_pending_session import NfcPendingSession as _NPS
+    _pc = db.query(_PC).filter(_PC.pedestal_id == pedestal_id).first()
+    cabinet_id = getattr(_pc, "opta_client_id", None) if _pc else None
+    if cabinet_id:
+        cutoff = datetime.utcnow() - timedelta(minutes=10)
+        rec = (db.query(_NPS)
+               .filter(_NPS.cabinet_id == cabinet_id,
+                       _NPS.socket_id == outlet_id,
+                       _NPS.status == "activated",
+                       _NPS.created_at >= cutoff)
+               .order_by(_NPS.created_at.desc())
+               .first())
+        if rec is not None:
+            session.nfc_user_id = rec.user_id
+            nfc_user_id = rec.user_id
+            db.commit()
+            logger.info("[NFC] attached user=%s to session %d", rec.user_id, session.id)
 
     await ws_manager.broadcast({
         "event": "session_created",

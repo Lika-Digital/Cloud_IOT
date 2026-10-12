@@ -163,14 +163,20 @@ def test_direct_socket_invalid_action(client, auth_headers):
 
 @pytest.mark.parametrize("action", ["activate", "stop"])
 def test_direct_water_cmd_publishes_mqtt(client, auth_headers, action):
-    """TC-DC-05/06  POST water cmd → MQTT published to opta/cmd/water/V{n}."""
+    """TC-DC-05/06  POST water cmd → MQTT published to opta/cmd/water/V{n}.
+
+    Runs in MODE 2: this checks the publish mechanics. Since 2026-10-12 an activate in ERP
+    mode needs a live NFC reservation — that rule is tested in test_water_erp_flow.py.
+    """
+    from app.config import settings
     _seed_smart_mode(1, True)
     published: list[tuple] = []
 
     def mock_publish(topic, payload, qos=1):
         published.append((topic, json.loads(payload)))
 
-    with patch("app.routers.controls.mqtt_service.publish", side_effect=mock_publish):
+    with patch("app.routers.controls.mqtt_service.publish", side_effect=mock_publish), \
+         patch.object(settings, "nfc_direct_client_mode", True):
         r = client.post(
             f"/api/controls/pedestal/1/water/V1/cmd",
             json={"action": action},

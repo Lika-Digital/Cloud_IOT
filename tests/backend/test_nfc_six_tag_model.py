@@ -238,6 +238,11 @@ def test_tc_six_04_names_this_hardware_does_not_have_are_refused(
 def test_tc_six_05_scanning_a_valve_tag_opens_a_water_session(client, auth_headers, six_pid):
     """The defect this whole item exists to close.
 
+    SCOPE, corrected 2026-10-12: despite the name, this checks only /scan's REPLY — that a
+    valve scan answers as water. It never opened a session, and for a year nothing did: the
+    water session never carried the scanner's user. The real flow (scan -> activate ->
+    OutletActivated -> user -> ERP) is TC-WF-05 in test_water_erp_flow.py.
+
     `/scan` hardcoded `session_type="electricity"`. A valve tag would have produced an
     electricity session against socket N — wrong outlet, wrong units, wrong customer.
     """

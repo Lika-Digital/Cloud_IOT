@@ -769,6 +769,35 @@ async def direct_water_cmd(
     _require_smart_mode(db, pedestal_id)
 
     cabinet_id = _get_cabinet_id(db, pedestal_id)
+    valve_id = 1 if valve_name == "V1" else 2
+
+    # 2026-10-12 (D6.1) — WITH AN ERP, WATER OPENS ONLY FOR SOMEONE WHO SCANNED.
+    #
+    # The flow is POST /api/nfc/scan, then this command. A socket's reservation is picked up
+    # by the plug-in event; a valve has no plug-in, so THIS is the moment the reservation is
+    # consumed — marked "activated", exactly as UserPluggedIn marks it for a socket — and
+    # OutletActivated then attaches its user to the water session. Without a live reservation
+    # the valve would open a session that belongs to nobody, which the ERP is never sent
+    # (erp_webhook.is_erp_reportable) and so can never bill. Refused, for every caller: an
+    # operator opening water for no one is the same unattributed session.
+    # `maintenance` and `stop` are not openings and are not gated.
+    if body.action == "activate":
+        from ..config import settings
+        if not settings.nfc_direct_client_mode:
+            from ..services import nfc_service
+            live = nfc_service.get_live_pending(db, cabinet_id, valve_name) if cabinet_id else None
+            if live is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"No valid NFC reservation for {valve_name}. In ERP mode water "
+                           f"opens only after POST /api/nfc/scan for this valve, within its "
+                           f"{nfc_service.PENDING_TTL_MINUTES}-minute window.",
+                )
+            live.status = "activated"
+            db.commit()
+            logger.info("[NFC] water activate %s/%s consumes reservation user=%s",
+                        cabinet_id, valve_name, live.user_id)
+
     msg_id = str(int(datetime.utcnow().timestamp() * 1000))
     if cabinet_id:
         mqtt_service.publish(
@@ -783,7 +812,11 @@ async def direct_water_cmd(
 
     # Complete active DB session when stopping
     if body.action == "stop":
-        active_session = session_service.get_active_for_socket(db, pedestal_id, None)
+        # 2026-10-12 — was get_active_for_socket(db, pedestal_id, None): SQL reads that as
+        # `socket_id IS NULL`, which matches no water session (they carry the valve number),
+        # so stop never completed the DB session (TC-WF-01). This valve, water only.
+        active_session = session_service.get_active_for_socket(
+            db, pedestal_id, valve_id, session_type="water")
         if active_session:
             session_service.complete(db, active_session)
             await ws_manager.broadcast({
@@ -791,7 +824,7 @@ async def direct_water_cmd(
                 "data": {
                     "session_id": active_session.id,
                     "pedestal_id": pedestal_id,
-                    "socket_id": None,
+                    "socket_id": valve_id,
                     "water_liters": active_session.water_liters,
                     "customer_id": active_session.customer_id,
                 },
@@ -799,7 +832,6 @@ async def direct_water_cmd(
         # v3.9 — record operator-initiated manual stop per valve so post-diag
         # auto-open respects the 10-minute cooldown.
         from ..services.mqtt_handlers import last_valve_manual_stop_at
-        valve_id = 1 if valve_name == "V1" else 2
         last_valve_manual_stop_at[(pedestal_id, valve_id)] = datetime.utcnow()
 
     await ws_manager.broadcast({

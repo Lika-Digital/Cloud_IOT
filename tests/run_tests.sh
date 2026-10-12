@@ -583,8 +583,25 @@ elif command -v "$PIP_AUDIT_BIN" &>/dev/null || [ -f "$PIP_AUDIT_BIN" ]; then
     AUDIT_LOG="${LOG_DIR}/pip_audit_${RUN_ID}.json"
     AUDIT_ERR="${LOG_DIR}/pip_audit_${RUN_ID}.err"
     rm -f "$AUDIT_LOG" "$AUDIT_ERR"
+    # 2026-10-12 — audit FROZEN VERSIONS, never a re-resolution of requirements.txt.
+    #
+    # `--requirement requirements.txt` made pip-audit build a throwaway venv with THIS machine's
+    # interpreter and install the requirements into it. On the dev box (Python 3.13, 32-bit)
+    # scikit-learn/scipy have no wheels, the source build fails, and pip-audit exits 1 with no
+    # report — so on this machine the stage had never produced a real result. It also audited
+    # whatever the resolver picked that day, not what anyone runs.
+    #
+    # Now: freeze the venv the tests ran in, audit exactly those versions, install nothing
+    # (--no-deps --disable-pip). ~12 s. LIMITATION, said out loud: this is the DEV venv — the
+    # versions the suite was tested against, plus dev tools (semgrep, pytest...). It is not
+    # production until a lock file generated from the NUC freeze exists (proposed, not built).
+    AUDIT_FREEZE="${LOG_DIR}/pip_audit_${RUN_ID}.freeze.txt"
+    _VENV_PY="${VENV_BIN}/python"
+    [ -f "${_VENV_PY}.exe" ] && _VENV_PY="${_VENV_PY}.exe"
+    "$_VENV_PY" -m pip freeze --exclude-editable 2>/dev/null | grep '==' > "$AUDIT_FREEZE"
+    echo "  auditing $(wc -l < "$AUDIT_FREEZE" | tr -d ' ') frozen package versions from the DEV venv (what the suite ran on)"
     timeout "${PIP_AUDIT_TIMEOUT_S}" "$PIP_AUDIT_BIN" \
-        --requirement "${ROOT_DIR}/backend/requirements.txt" \
+        --requirement "$AUDIT_FREEZE" --no-deps --disable-pip \
         --format json \
         --output "$AUDIT_LOG" \
         2>"$AUDIT_ERR"
@@ -616,7 +633,15 @@ try:
     with open(path) as f:
         data = json.load(f)
     vulns = data.get("dependencies", [])
-    critical = [v for d in vulns for v in d.get("vulns", []) if v.get("fix_versions")]
+    # Unique per (package, advisory id): pip-audit lists each advisory more than once (aliases),
+    # which on the NUC turned 55 real advisories into "92 known vulnerabilities".
+    critical, _seen = [], set()
+    for d in vulns:
+        for v in d.get("vulns", []):
+            key = (d.get("name"), v.get("id"))
+            if v.get("fix_versions") and key not in _seen:
+                _seen.add(key)
+                critical.append(v)
     print(f"VULNS={len(critical)}")
     for v in critical[:5]:
         print(f"CVE={v.get('id','?')} {v.get('description','')[:80]}")

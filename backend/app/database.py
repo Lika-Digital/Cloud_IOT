@@ -78,6 +78,10 @@ def import_all_models():
     # list — so three places registered models and this one was missing it. Folded in
     # 2026-10-02 when the lists were unified.
     from .models import pilot_assignment  # noqa: F401
+    # Same story, second time: registered only by main.py:19's top-level import, so a fresh
+    # cabinet got the table by accident of import order. Found 2026-10-11 by
+    # tests/backend/test_schema_model_lists.py on its first run — which now fails on the next one.
+    from .models import snmp_config  # noqa: F401
     from .guard import models as guard_models  # noqa: F401 — v3.42 guard tables
     # The auth/users.db models live on UserBase, not Base, so `create_all(bind=engine)`
     # ignores them — but they must still be imported for UserBase.metadata to be

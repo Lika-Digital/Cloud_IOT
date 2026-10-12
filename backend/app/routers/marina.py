@@ -227,6 +227,21 @@ def _guard_block(pedestal_id: int) -> dict:
     return {"state": "unavailable", "sentence": "Guard unavailable", "scope": "pedestal"}
 
 
+def _vessel_matches(berth) -> Optional[bool]:
+    """What the last analysis SAID about the boat and the reference photo — or None.
+
+    match_ok_bit defaults to 0 and the analyzer leaves it 0 when it never ran, when it failed,
+    when the berth is empty, and when there is a boat but no reference to compare (state 1).
+    Only state_code 2 is a measured mismatch. Reading every 0 as "does not match" told the
+    marina something nobody had looked at (block 3, 2026-10-12; test_vessel_match_truth.py).
+    """
+    if getattr(berth, "match_ok_bit", 0):
+        return True
+    if getattr(berth, "state_code", 0) == 2:
+        return False
+    return None
+
+
 def _berth_payload(db: DBSession, berth, assignment, *, facts_base: BerthFacts,
                    controllable: bool) -> dict:
     socket_id = assignment.socket_id if assignment is not None else None
@@ -263,7 +278,8 @@ def _berth_payload(db: DBSession, berth, assignment, *, facts_base: BerthFacts,
         # Distinguished from `occupied` so the UI can render "we do not know" rather than
         # "empty". Zero and unknown are different values (engineering note 8).
         "occupied_known": getattr(berth, "last_analyzed", None) is not None,
-        "vessel_matches": bool(getattr(berth, "match_ok_bit", 0)) if match_configured else None,
+        # True / False only for a MEASURED result; None = not known (see _vessel_matches).
+        "vessel_matches": _vessel_matches(berth) if match_configured else None,
         "vessel_match_configured": match_configured,
         "alarm_count": facts_base.alarm_count if hasattr(facts_base, "alarm_count") else 0,
     }

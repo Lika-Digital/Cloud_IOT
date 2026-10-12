@@ -169,9 +169,12 @@ export default function BerthDetail() {
       <Section title="Vessel">
         {d.vessel_match_configured ? (
           <p className="text-sm text-gray-300">
-            {d.vessel_matches
+            {d.vessel_matches === true
               ? 'The boat here matches the reference photo.'
-              : 'The boat here does not match the reference photo.'}
+              : d.vessel_matches === false
+                ? 'The boat here does not match the reference photo.'
+                : 'Not known whether a boat here matches the reference photo — the berth has '
+                  + 'not been checked, the last check failed, or there was nothing to compare.'}
           </p>
         ) : (
           <p className="text-sm text-gray-400">

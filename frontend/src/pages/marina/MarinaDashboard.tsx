@@ -320,12 +320,16 @@ function BerthRow({ berth, standalone }: { berth: Berth; standalone: boolean }) 
       ? 'Occupied'
       : 'Empty'
 
+  // null = NOT KNOWN (never analysed, analysis failed, no boat, nothing to compare) — never
+  // "does not match": that is said only when the analysis measured a mismatch.
   const match =
     !berth.vessel_match_configured
       ? null
-      : berth.vessel_matches
+      : berth.vessel_matches === true
         ? 'photo matches'
-        : 'does not match the photo'
+        : berth.vessel_matches === false
+          ? 'does not match the photo'
+          : 'photo match not known'
 
   return (
     <li className="px-3 py-2.5">

@@ -58,7 +58,7 @@ Evidence is a test, a commit or a path, never a claim.
 | L3 history, `<PhaseBlock>`, nav of 4, Card 5 (water toggle) | NOT BUILT | no history route in `App.tsx`; `Layout.tsx:40-57` has 8 items |
 | Setup wizard | PARTIAL, UNPROVEN | `MarinaSetup.tsx` (`4eb381e`); step 3 missing; route not `adminOnly`; no UI test |
 | §9 size limits | FAILS | 377 / 302 lines; 1 890 total |
-| `match_ok_bit` "never analysed" | NOT BUILT | `berth_models.py:42 default=0` → `vessel_matches: false` for unknown |
+| `match_ok_bit` "never analysed" | BUILT+PROVEN | block 3, 2026-10-12: `vessel_matches` is `false` only for a measured mismatch (`state_code` 2), `true` only for `match_ok_bit` 1, otherwise `null` = not known — never analysed, analysis failed, berth empty, no reference to compare. UI says "not known" for null. `test_vessel_match_truth.py` TC-VMT-01 (the four not-known cases failed on the code before) |
 | D2 paired redaction test (HTTP) | BUILT+PROVEN | `test_identity_redaction.py` TC-IDR-03: monitor gets none of the identity keys, admin gets them (failed on the code before, 2026-10-12) |
 | Plan item 4 — label the five legacy `.txt` reports | NOT DONE | No commit. **Owner, 2026-10-12: when the reports are labelled, decide whether marina staff get a version WITHOUT the customer identifier.** Until then the monthly report files are admin only (`routers/usage_history.py`, `_REPORTS_LOCKED`) — locked, not redacted: redacting generated text is easier to break than a lock. No redaction over the `.txt` files before that decision |
 

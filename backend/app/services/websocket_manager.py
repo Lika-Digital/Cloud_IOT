@@ -3,6 +3,8 @@ import json
 import logging
 from fastapi import WebSocket
 
+from ..auth.identity_redaction import redact, sees_identity
+
 logger = logging.getLogger(__name__)
 
 # Max time to wait for a single client to accept a message before treating it as dead
@@ -14,6 +16,9 @@ class WebSocketManager:
         # List of (websocket, customer_id | None)
         self._connections: list[tuple[WebSocket, int | None]] = []
         self._broadcast_hooks: list = []
+        # 2026-10-12, part B: the operator role of each connection. A connection with no entry
+        # gets the redacted view (fail safe) — only an admin receives customer identity.
+        self._roles: dict[WebSocket, str] = {}
         # v3.6 — per-session subscriptions for mobile QR-claim clients.
         # Maps session_id → set of WebSockets that want live telemetry /
         # lifecycle events for that specific session only. A connection can
@@ -25,15 +30,18 @@ class WebSocketManager:
         self._broadcast_hooks.append(fn)
 
     async def connect(self, websocket: WebSocket, customer_id: int | None = None,
-                      subprotocol: str | None = None):
+                      subprotocol: str | None = None, role: str | None = None):
         # `subprotocol` echoes the one the client offered ("bearer" since 2026-10-12): a browser
         # that offered a subprotocol rejects a handshake that does not select one.
         await websocket.accept(subprotocol=subprotocol)
         self._connections.append((websocket, customer_id))
+        if role:
+            self._roles[websocket] = role
         logger.info(f"WebSocket connected (customer_id={customer_id}). Total: {len(self._connections)}")
 
     def disconnect(self, websocket: WebSocket):
         self._connections = [(ws, cid) for ws, cid in self._connections if ws is not websocket]
+        self._roles.pop(websocket, None)
         # Also remove from any session subscription set so a disconnected
         # mobile client stops receiving targeted pushes.
         for sid, subs in list(self._session_subs.items()):
@@ -57,11 +65,16 @@ class WebSocketManager:
                 del self._session_subs[session_id]
 
     async def broadcast(self, message: dict):
+        # 2026-10-12, part B: an admin gets the message as built; every other operator gets it
+        # without customer identity (auth/identity_redaction.py). The hooks — the ERP webhook
+        # dispatcher — still get the full message: the ERP owns the customer.
         data = json.dumps(message)
+        staff_data = json.dumps(redact(message))
         dead: list[WebSocket] = []
         for ws, _ in self._connections:
+            out = data if sees_identity(self._roles.get(ws)) else staff_data
             try:
-                await asyncio.wait_for(ws.send_text(data), timeout=_SEND_TIMEOUT)
+                await asyncio.wait_for(ws.send_text(out), timeout=_SEND_TIMEOUT)
             except asyncio.TimeoutError:
                 logger.warning("WebSocket send timed out — dropping stale connection")
                 dead.append(ws)

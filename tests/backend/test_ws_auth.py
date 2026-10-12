@@ -143,3 +143,27 @@ def test_tc_wsa_07_the_connection_closes_when_the_token_expires(client):
         with pytest.raises(WebSocketDisconnect):
             ws.send_text("ping")
             ws.receive_text()
+
+
+def test_tc_wsa_08_ws_checks_the_same_user_database_as_http(client):
+    """2026-10-12, part B: /ws looked users up in UserSessionLocal (the real users.db), not
+    through get_user_db like every HTTP route. An operator who exists ONLY in the test database
+    was refused. FAILS on that code (shown 2026-10-12)."""
+    from conftest import TestUserSession
+    from app.auth.models import User
+    from app.auth.password import hash_password
+    from app.auth.tokens import create_access_token
+    db = TestUserSession()
+    try:
+        u = User(email="wsa08-only-in-test-db@test.local", password_hash=hash_password("x-unused-x"),
+                 role="monitor", is_active=True)
+        db.add(u)
+        db.commit()
+        uid = u.id + 100000  # an id no developer database will hold
+        u.id = uid
+        db.commit()
+    finally:
+        db.close()
+    tok = create_access_token(uid, "wsa08-only-in-test-db@test.local", "monitor")
+    assert _first_reply(client, ["bearer", tok]) is not None, (
+        "an operator who exists in the database the HTTP routes use was refused on /ws")

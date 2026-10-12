@@ -296,7 +296,9 @@ def test_daily_billing_aggregates(client, auth_headers):
     assert abs(by_socket[3]["kwh"] - 2.0) < 1e-6 and by_socket[3]["origin"] == "customer"
 
 
-def test_daily_billing_readable_by_monitor(client):
+def test_daily_billing_refused_to_monitor(client):
+    """2026-10-12, part B: was test_daily_billing_readable_by_monitor (asserted 200). The owner's
+    rule replaced it: billing is legacy and admin only — marina staff do not see customer data."""
     from app.auth.tokens import create_access_token
     from app.auth.models import User
     from app.auth.password import hash_password
@@ -310,7 +312,8 @@ def test_daily_billing_readable_by_monitor(client):
         hdr = {"Authorization": f"Bearer {create_access_token(u.id, u.email, 'monitor')}"}
     finally:
         db.close()
-    assert client.get("/api/billing/daily", headers=hdr).status_code == 200
+    # assert client.get("/api/billing/daily", headers=hdr).status_code == 200
+    assert client.get("/api/billing/daily", headers=hdr).status_code == 403
 
 
 # ── TC-EIV-10 — the property that keeps the two from drifting ─────────────────

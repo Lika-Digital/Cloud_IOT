@@ -42,11 +42,14 @@ export default function Layout() {
     { to: '/dashboard', label: 'Dashboard', icon: '⚡', badge: 0 },
     { to: '/analytics', label: 'Analytics', icon: '📊', badge: 0 },
     { to: '/history', label: 'History', icon: '📋', badge: 0 },
-    { to: '/billing', label: 'Billing', icon: '💰', badge: 0 },
+    // 2026-10-12, part B: Billing is LEGACY and its API is admin-only (backend/app/routers/billing.py) —
+    // marina staff must not see customer data. A shared nav item would lead staff to a page of 403s.
+    // { to: '/billing', label: 'Billing', icon: '💰', badge: 0 },
     { to: '/users', label: 'Customers', icon: '👥', badge: unreadChatCount },
     { to: '/contracts', label: 'Contracts', icon: '📝', badge: 0 },
     { to: '/berths', label: 'Berth Occupancy', icon: '⚓', badge: 0 },
     ...(isAdmin ? [
+      { to: '/billing', label: 'Billing', icon: '💰', badge: 0 },
       { to: '/system-health', label: 'System Health', icon: '🔧', badge: newErrorCount, hwAlarm: hwAlarmLevel },
     ] : []),
     ...(canApi ? [

@@ -15,6 +15,11 @@ week" is operations, and that is the audience. What changed is the PAYLOAD —
 ``customer_name`` and ``nfc_user_id`` are returned only to an admin, because marina
 staff do not see customer names (decided 2026-10-01).
 
+2026-10-12, part B: ``customer_id`` too. The 2026-10-01 note kept it for staff as "an opaque
+join key"; the owner's rule is that staff see NO customer identity, and an id that is stable
+across sessions identifies the customer just as well as a name does. For a non-admin the
+response now carries none of auth/identity_redaction.IDENTITY_KEYS — removed, not nulled.
+
 The read-only GETs are also opt-in exposable to the ERP via the External API Gateway
 (see api_catalog) — the gateway proxies with an internal admin token and monitor-mode
 permits GET only, so report DELETION can never be reached from outside. NOTE: because
@@ -36,6 +41,7 @@ from sqlalchemy.orm import Session as DBSession
 from ..database import get_db
 from ..auth.dependencies import require_any_role, require_control
 from ..auth.models import User
+from ..auth.identity_redaction import redact, sees_identity
 from ..services import usage_report_service as svc
 
 logger = logging.getLogger(__name__)
@@ -69,20 +75,20 @@ def get_usage_history(
     Without ``month`` returns all-time history; ``socket_id``/``resource``
     narrow to one outlet.
 
-    ``customer_name`` and ``nfc_user_id`` appear ONLY for an admin caller. Marina staff
-    get the consumption and the opaque ``customer_id``, which is everything the
-    operational question needs; the name is an exposure with no operational payoff on a
-    wall-mounted screen. For an admin, the fields are present but still blank for
-    sessions the NUC never attributed (Smart Mode off — standalone Opta).
+    The identity fields appear ONLY for an admin caller. Marina staff get the consumption,
+    which is everything the operational question needs. For an admin, the fields are present
+    but still blank for sessions the NUC never attributed (Smart Mode off — standalone Opta).
+    (Until 2026-10-12 staff also got ``customer_id`` — see the module docstring.)
     """
     year = mon = None
     if month:
         year, mon = _parse_month(month)
-    return svc.usage_rows(
+    rows = svc.usage_rows(
         db, pedestal_id,
-        include_identity=(user.role == "admin"),
+        include_identity=sees_identity(user.role),
         socket_id=socket_id, resource=resource, year=year, month=mon,
     )
+    return rows if sees_identity(user.role) else redact(rows)
 
 
 @router.get("/{pedestal_id}/usage/reports")

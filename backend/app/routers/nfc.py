@@ -1040,11 +1040,16 @@ def erp_reconciliation_status(db: DBSession = Depends(get_db),
 @router.get("/reconciliation/divergence")
 def erp_divergence(limit: int = Query(default=200, ge=1, le=1000),
                    db: DBSession = Depends(get_db),
-                   _: User = Depends(require_any_role)):
+                   user: User = Depends(require_any_role)):
     """Finished ERP sessions never acknowledged, OLDEST FIRST.
 
     Oldest first because the oldest unreconciled charge is the one most likely to be disputed
     or written off, and a newest-first list buries exactly the row that needs attention.
+
+    2026-10-12, part B: staff see the session and the gap, not the customer — erp_ref and the
+    other identity keys go to an admin only (auth/identity_redaction.py).
     """
+    from ..auth.identity_redaction import redact, sees_identity
     rows = erp_reconciliation.divergent_sessions(db, limit=limit)
-    return {"count": len(rows), "sessions": rows}
+    body = {"count": len(rows), "sessions": rows}
+    return body if sees_identity(user.role) else redact(body)

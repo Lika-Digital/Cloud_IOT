@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session as DBSession
 from ..auth.user_database import get_user_db
 from ..database import get_db
 from ..auth.customer_models import BillingConfig, Invoice, Customer
-from ..auth.dependencies import require_any_role, require_control
+from ..auth.dependencies import require_admin
 from ..auth.models import User
 from ..models.session import Session
 from ..models.energy_interval import EnergyInterval
@@ -15,13 +15,23 @@ from ..schemas.customer import (
     CustomerSpendingRow, CustomerListRow, SessionDetailRow,
 )
 
+# LEGACY, LOCKED TO ADMIN — 2026-10-12, owner's decision (block 1, part B).
+# The cabinet does not bill: the ERP owns pricing, invoices and the customer. These routes are
+# left over from a testing phase when the cabinet invoiced a mobile-app customer. They are not
+# filtered field by field — they exist to list customers and what each one spent, so a
+# redacted version would be an empty page. They are LOCKED instead: every read is
+# require_admin, and so is the one write (PUT /config, was require_control): the owner's words
+# were "billing routes on require_admin", all of them.
+# Do not "free" them back to require_any_role for a dashboard tile: marina staff must not see
+# customer data (rule 13, docs/engineering_notes.md). tests/backend/test_identity_redaction.py
+# TC-IDR-05 fails if a non-admin operator reaches any of them.
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 
 
 @router.get("/config", response_model=BillingConfigResponse)
 def get_billing_config(
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_any_role),
+    _: User = Depends(require_admin),  # was require_any_role — see the note on the router
 ):
     config = user_db.get(BillingConfig, 1)
     if not config:
@@ -33,7 +43,7 @@ def get_billing_config(
 def update_billing_config(
     body: BillingConfigUpdate,
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_control),
+    _: User = Depends(require_admin),  # was require_control — see the note on the router
 ):
     config = user_db.get(BillingConfig, 1)
     if not config:
@@ -54,7 +64,7 @@ def get_daily_billing(
     end: str | None = Query(None, description="Inclusive 'YYYY-MM-DD'"),
     db: DBSession = Depends(get_db),
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_any_role),
+    _: User = Depends(require_admin),  # was require_any_role — see the note on the router
 ):
     """v3.35 — daily energy-billing rollup from the 15-min interval ledger.
 
@@ -115,7 +125,7 @@ def get_daily_billing(
 @router.get("/spending", response_model=list[CustomerSpendingRow])
 def get_spending_overview(
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_any_role),
+    _: User = Depends(require_admin),  # was require_any_role — see the note on the router
 ):
     invoices = user_db.query(Invoice).filter(Invoice.customer_id.isnot(None)).all()
     # Aggregate per customer
@@ -149,7 +159,7 @@ def get_spending_overview(
 def get_spending_detail(
     user_db: DBSession = Depends(get_user_db),
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_any_role),
+    _: User = Depends(require_admin),  # was require_any_role — see the note on the router
 ):
     invoices = user_db.query(Invoice).filter(Invoice.customer_id.isnot(None)).all()
     rows = []
@@ -176,7 +186,7 @@ def get_spending_detail(
 def get_customers(
     user_db: DBSession = Depends(get_user_db),
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_any_role),
+    _: User = Depends(require_admin),  # was require_any_role — see the note on the router
 ):
     customers = user_db.query(Customer).order_by(Customer.created_at.desc()).all()
     rows = []

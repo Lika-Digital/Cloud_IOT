@@ -713,7 +713,8 @@ refetch 12 times a minute per cabinet.
 AFTER part B (§14: the broadcast filtered by role). Today the broadcast carries `customer_id`
 (e.g. `water_reading`), so switching first would put customer identity on the marina page.
 Until part B is built and proven, `/marina` keeps polling CORE every 15 s
-(`MarinaDashboard.tsx:66`).
+(`MarinaDashboard.tsx:66`). Part B was built 2026-10-12 and proven on dev (§14); the switch to
+the websocket is block 4 work, and the cabinet proof is §13.6b.
 
 **DECIDED — one new backend endpoint for the reduction, two for the rest.**
 `GET /api/marina/berths`, `GET /api/marina/berths/{id}`, `GET /api/marina/alarms`, and
@@ -981,6 +982,20 @@ Secrets are never typed on a command line: read them with `read -s` and pass the
 ' -X POST https://marina2.lika.solutions/api/predictions/train` | `401` or `403` | RECORD | ☐ |
 | 11c | The logged-in UI still loads its data | After login: the pedestal list, sockets and valves config, LED schedule and the Berth page all render | Pages load as before | ROLLBACK if the UI is unusable; otherwise RECORD | ☐ |
 
+## 13.6b Staff do not see customer data (part B, block 1, 2026-10-12)
+
+Needs a **non-admin operator account** (role `monitor` or `monitor_control`). If the cabinet has
+none, create one in Users for this check — and say so in the outcome. Its token: log in as that
+user in a browser, then DevTools → Application → Local Storage → `auth-store` → `token`. Put it
+in the shell as `TOK=...` and nowhere else; it is never written into this list or a log.
+
+| # | Check | Command / step | Expected | If it fails | Outcome |
+|---|---|---|---|---|---|
+| 11d | Sessions without identity | `curl -s -H "Authorization: Bearer $TOK" 'https://marina2.lika.solutions/api/sessions?limit=50' \| grep -oE '"(customer_id\|customer_name\|nfc_user_id\|erp_ref)"' \| sort \| uniq -c` | No output at all (before: every row carried the keys) | RECORD — staff see customer identity; fix before R1 | ☐ |
+| 11e | Billing and export are admin only | `for u in /api/billing/customers /api/billing/spending /api/admin/export/usage; do echo "$u $(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOK" https://marina2.lika.solutions$u)"; done` | Every line `403` (was `200`) | RECORD | ☐ |
+| 11f | The broadcast without identity | Logged in as that user: DevTools → Network → WS → `/ws` → Messages. Wait for a `session_*` or `water_reading` frame (or plug in on an NFC socket), then search the frames for `customer_id`, `nfc_user_id`, `erp_ref` | Frames arrive; none of the three strings in them. **No session frame in the window = unproven, RECORD it as such — not a pass** | RECORD | ☐ |
+| 11g | Admin still sees them | The same `curl` as 11d with an admin's token | The keys are listed — redaction is by role, not a loss of data. **This is 11d's control:** if the admin also gets no keys, the last 50 sessions carried no identity and 11d proved nothing — RECORD 11d as unproven | RECORD | ☐ |
+
 ## 13.7 Water and D6.1
 
 | # | Check | Command / step | Expected | If it fails | Outcome |
@@ -1050,7 +1065,7 @@ or firewall configuration.
 These are not built yet, so they have no check yet. Each gets its own check in the commit that
 builds it:
 
-- part B — role filtering of the broadcast and of `GET /api/sessions`.
+- (part B — built 2026-10-12; its checks are §13.6b.)
 
 ---
 
@@ -1066,7 +1081,7 @@ without one. Rule 13 of `docs/engineering_notes.md` states it as a rule for ever
 | `/ws` (part A, built, `e80a4c1`) | Operator only, proven BEFORE accept (handshake 403, no message); token in `Sec-WebSocket-Protocol`, never in a URL (URLs land in access logs); closed at token expiry. Customer and `ws_session` tokens refused. Proof: `test_ws_auth.py` TC-WSA-01..07, 6 of them failing on the code before. |
 | REST without login | **Closed in block 1 (2026-10-12):** identity on every `/api` route; `/api/sessions` and `/api/predictions` on the router itself; `POST /predictions/train` needs a control role. `test_rest_auth.py` TC-RA-01 forbids a new unauthenticated `/api` route unless it is listed as public WITH a reason; TC-RA-03 refuses anonymous callers (19 failed on the code before). Still open by design: `/api/camera/{id}/stream` (R4 — an `<img>` cannot send a header). Cabinet check: §13.6a. |
 | Staff and customer data — **owner's decision, binding** | **MARINA STAFF MUST NOT SEE CUSTOMER DATA.** The customer's identity lives in the ERP; the cabinet shows the session and the consumption, not the customer's name or identifier. Only admin sees more. |
-| Part B (block 1, planned) | One list of identity keys — `customer_id`, `customer_name`, `nfc_user_id`, `erp_ref`. Removed for non-admin from every websocket broadcast, and from `GET /api/sessions`, usage history and reconciliation divergence. **Billing and export routes are locked to admin, not filtered:** the cabinet does not bill — the ERP does — and those routes are legacy; filtering them would mean maintaining them as if they had a purpose. |
+| Part B (block 1, **built 2026-10-12**) | One list of identity keys — `customer_id`, `customer_name`, `nfc_user_id`, `erp_ref`. Removed for non-admin from every websocket broadcast, and from `GET /api/sessions`, usage history and reconciliation divergence. **Billing and export routes are locked to admin, not filtered:** the cabinet does not bill — the ERP does — and those routes are legacy; filtering them would mean maintaining them as if they had a purpose. **Built:** the list is `auth/identity_redaction.py` (keys removed, not nulled; a missing role fails safe to redacted); the `/ws` connection carries the operator's role; the webhook hooks still get the full message (the ERP owns the customer). Every billing route — the reads and `PUT /api/billing/config` (was `require_control`) — and `/api/admin/export/usage` are `require_admin`, with a legacy note on the router; the Billing nav item is admin-only. Proof: `test_identity_redaction.py` TC-IDR-01..06 (and 05c, the write) — every websocket event in the backend's catalogue, paired monitor/admin REST, 16 failed on the code before. Also found and fixed: `/ws` looked users up in the real `users.db`, not through `get_user_db` (TC-WSA-08, failing before). Cabinet check: §13.6b. **Still open, not in this scope:** the monthly report FILES (`/usage/reports/{month}`, any operator) print `customer #<id>`. |
 | Not in scope now | Cloudflare Access on the hostname — owner's decision, later: it would need a service token for the ERP webhook and every automated call. No firewall, no change to sshd / cloudflared / tailscaled, ever. |
 
 # 15. Consequences of D6.1 for the UI

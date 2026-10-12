@@ -53,18 +53,29 @@ async def websocket_endpoint(websocket: WebSocket):
     factor. The connection is closed when the token expires.
     """
     from ..auth.dependencies import OperatorAuthError, operator_from_token
-    from ..auth.user_database import UserSessionLocal
+    from ..auth.user_database import get_user_db
+    # from ..auth.user_database import UserSessionLocal
 
     token = _token_from_subprotocol(websocket)
     payload = None
+    role = None
     if token:
-        db = UserSessionLocal()
+        # 2026-10-12, part B: the user is looked up through get_user_db — THE SAME provider, and
+        # the same override, as every HTTP route. It used UserSessionLocal directly, so under
+        # test /ws checked the developer's real users.db instead of the test database: an
+        # operator who exists only in the test DB was refused, and TC-WSA-06 passed only
+        # because the test admin's id happened to match an active user in the real file.
+        # The generator is closed at once — no session is held open for the connection's life.
+        provider = websocket.app.dependency_overrides.get(get_user_db, get_user_db)
+        gen = provider()
+        db = next(gen)
         try:
             _user, payload = operator_from_token(token, db)
+            role = _user.role  # part B: decides whether this connection sees customer identity
         except (OperatorAuthError, KeyError, ValueError, TypeError):
             payload = None
         finally:
-            db.close()
+            gen.close()
     if payload is None:
         # Never log the token. The reason is enough to count refusals.
         logger.info("WebSocket refused: %s", "no operator token" if not token
@@ -72,7 +83,7 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=1008)
         return
 
-    await ws_manager.connect(websocket, subprotocol=_BEARER)
+    await ws_manager.connect(websocket, subprotocol=_BEARER, role=role)
     expiry = asyncio.create_task(_close_at_expiry(websocket, payload.get("exp")))
     try:
         while True:

@@ -130,9 +130,14 @@ def export_usage(
     date_to: str | None = Query(None, description="YYYY-MM-DD, inclusive"),
     db: DBSession = Depends(get_db),
     udb: DBSession = Depends(get_user_db),
-    _: User = Depends(require_control),
+    _: User = Depends(require_admin),  # was require_control — 2026-10-12, part B
 ):
-    """Export usage/billing data for the ERP or offline pricing (control role)."""
+    """Export usage/billing data for the ERP or offline pricing. Admin only.
+
+    2026-10-12, part B: treated as billing — LEGACY and LOCKED to admin (see routers/billing.py).
+    The export carries customers and invoices; monitor_control is marina staff, and staff must
+    not see customer data. Do not lower it back.
+    """
     from ..auth.customer_models import Customer, Invoice
     from ..models.energy_interval import EnergyInterval
     from ..models.session import Session as Sess

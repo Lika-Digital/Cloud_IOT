@@ -237,9 +237,21 @@ def marina_pid(client, auth_headers):
 
 @pytest.fixture(autouse=True)
 def _alive(marina_pid):
+    """A live cabinet: a fresh heartbeat AND fresh per-socket meter telemetry. Since block 3
+    (2026-10-12) a socket nobody has heard from within 60 s is `outlet_silent` (rank 2.5), so a
+    cabinet that heartbeats but never reports its sockets is not the healthy cabinet these
+    tests mean. A real one sends meter telemetry every 5 s per socket."""
     from app.services.mqtt_handlers import last_heartbeat
+    from app.models.socket_config import SocketConfig
     pid, _ = marina_pid
     last_heartbeat[pid] = datetime.utcnow()
+    db = _S()
+    try:
+        for c in db.query(SocketConfig).filter(SocketConfig.pedestal_id == pid).all():
+            c.meter_load_updated_at = datetime.utcnow()
+        db.commit()
+    finally:
+        db.close()
     yield
     last_heartbeat.pop(pid, None)
 

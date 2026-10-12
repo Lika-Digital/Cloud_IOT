@@ -87,6 +87,26 @@ def _active_session(db: DBSession, pedestal_id: int, outlet_id: int, session_typ
     )
 
 
+def _socket_silent(db: DBSession, pedestal_id: int, socket_id: int) -> bool:
+    """Has this socket gone quiet while its cabinet may still be talking? (rank 2.5)
+
+    The cabinet sends two messages per socket: meter telemetry every 5 s
+    (socket_configs.meter_load_updated_at) and the socket status (socket_states.updated_at).
+    Either one proves the socket is heard. Silent = the FRESHER of the two is missing or older
+    than OUTLET_STALE_S — the window valves and the heartbeat use. Block 3, 2026-10-12; until
+    then `outlet_state_unknown` was hard-coded False. Cabinet fact behind it: §13 check 11i.
+    """
+    cfg = (db.query(SocketConfig)
+           .filter(SocketConfig.pedestal_id == pedestal_id, SocketConfig.socket_id == socket_id)
+           .first())
+    st = (db.query(SocketState)
+          .filter(SocketState.pedestal_id == pedestal_id, SocketState.socket_id == socket_id)
+          .first())
+    stamps = [t for t in (getattr(cfg, "meter_load_updated_at", None),
+                          getattr(st, "updated_at", None)) if t is not None]
+    return ms.outlet_state_is_stale(max(stamps) if stamps else None)
+
+
 def _power_block(db: DBSession, pedestal_id: int, socket_id: Optional[int],
                  *, controllable: bool) -> dict:
     """One berth's electricity facility.
@@ -117,6 +137,10 @@ def _power_block(db: DBSession, pedestal_id: int, socket_id: Optional[int],
 
     if active is not None:
         state = "active"
+    elif _socket_silent(db, pedestal_id, socket_id):
+        # Not "idle": nobody has heard from this socket within the window, so whether it is
+        # free is not known (rank 2.5, outlet_silent).
+        state = "unknown"
     elif state_row is not None and state_row.connected:
         state = "pending"
     else:
@@ -259,7 +283,8 @@ def _berth_payload(db: DBSession, berth, assignment, *, facts_base: BerthFacts,
     facts = BerthFacts(
         heartbeat_age_s=facts_base.heartbeat_age_s,
         smart_mode=facts_base.smart_mode,
-        outlet_state_unknown=False,
+        outlet_state_unknown=(socket_id is not None
+                              and _socket_silent(db, berth.pedestal_id, socket_id)),
         moisture_alarm=facts_base.moisture_alarm,
         temperature_alarm=facts_base.temperature_alarm,
         auto_stop_pending_ack=bool(cfg is not None and cfg.auto_stop_pending_ack),

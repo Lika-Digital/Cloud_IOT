@@ -221,19 +221,25 @@ def _water_outlets(db: DBSession, pedestal_id: int, *, controllable: bool) -> li
     return out
 
 
-def _guard_block(pedestal_id: int) -> dict:
+def _guard_block(db: DBSession, pedestal_id: int) -> dict:
     """Guard, mapped to the four words the marina sees.
 
     `UNAVAILABLE` must never render as "Guard off". Off is a decision someone made;
     unavailable is a fault. The whole liveness design exists to keep those apart, and
     collapsing them here would throw it away at the last step.
     """
+    # 2026-10-12, block 3: services/guard_state did not exist, the ImportError landed here, and
+    # every pedestal read "Guard unavailable" whatever the guard was doing. It exists now and
+    # reads guard.service.effective_state. A failure to read it is still "unavailable".
     try:
-        from ..services.guard_state import current_guard_state   # type: ignore
-        raw = current_guard_state(pedestal_id)
+        from ..services.guard_state import current_guard_state
+        raw = current_guard_state(db, pedestal_id)
     except Exception:
-        # No guard wiring for this pedestal yet. "unavailable", never "off".
+        logger.exception("guard state for pedestal %s could not be read", pedestal_id)
         return {"state": "unavailable", "sentence": "Guard unavailable", "scope": "pedestal"}
+    # raw is None when the pedestal has no guard configured at all. That still reads
+    # "unavailable", as before — whether it should say "no guard here" instead is the owner's
+    # decision (asked 2026-10-12), not changed silently.
 
     s = (raw or {}).get("state", "UNAVAILABLE")
     limited = bool((raw or {}).get("limited_visibility"))
@@ -415,7 +421,7 @@ def marina_berths(db: DBSession = Depends(get_db),
                 "available": controllable,
                 "unavailable_reason": None if controllable else "standalone",
             },
-            "guard": _guard_block(pid),
+            "guard": _guard_block(db, pid),
             "alarm_count": len(alarms),
         })
 
@@ -500,7 +506,7 @@ def marina_berth_detail(berth_id: int,
     payload["pedestal_id"] = pid
     # Per pedestal, not per berth: one camera per cabinet, so the event list is the
     # cabinet's. Saying so prevents attributing a stranger at berth 1 to berth 3.
-    payload["guard"] = _guard_block(pid)
+    payload["guard"] = _guard_block(db, pid)
     payload["guard_scope_note"] = (
         "Guard covers the whole pedestal, so these events may come from any berth it serves."
     )

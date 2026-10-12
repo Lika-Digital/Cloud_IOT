@@ -27,7 +27,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-TEST_DB = "sqlite:///./tests/test_pedestal.db"
+from _test_paths import TEST_DB  # per-run path, never a literal — see _test_paths.py
 _engine = create_engine(TEST_DB, connect_args={"check_same_thread": False})
 _S = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 
@@ -36,7 +36,7 @@ _S = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 # file, so rows written through it are invisible to the endpoint under test. The six-tag
 # suite hit the identical trap with `SessionLocal`, and it presents as "the handler ignored
 # my data" rather than as a wiring mistake.
-TEST_USER_DB = "sqlite:///./tests/test_users.db"
+from _test_paths import TEST_USER_DB  # per-run path, never a literal — see _test_paths.py
 _user_engine = create_engine(TEST_USER_DB, connect_args={"check_same_thread": False})
 _US = sessionmaker(autocommit=False, autoflush=False, bind=_user_engine)
 

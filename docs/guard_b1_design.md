@@ -136,7 +136,7 @@ silently failing to detect.
 ## 4. MQTT contract
 
 `{M}` = `MARINA_ID` from config (not derived). `{cam}` = `camera_id`.
-QoS 1 throughout. Client id `guard-worker-{cam}`, keepalive 30 s.
+QoS 1 throughout. Client id `guard-worker-{M}-{cam}-{hostname}` (marina included since 2026-10-11 — a shared id makes the broker disconnect one client whenever the other connects), keepalive 30 s.
 
 | Topic | Dir | Retained | Payload |
 |---|---|---|---|

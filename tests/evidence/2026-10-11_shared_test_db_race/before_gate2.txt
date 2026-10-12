@@ -1,0 +1,133 @@
+
+  Gate level: full   (fast = pytest + bandit + gap checks; full adds semgrep, pip-audit, mobile tsc)
+
+╔══════════════════════════════════════════════════════╗
+║          Cloud_IOT — Automated Test Suite           ║
+╚══════════════════════════════════════════════════════╝
+
+[1/4] Backend tests (pytest)
+
+============================= test session starts =============================
+collecting ... collected 1085 items / 1 error
+
+=================================== ERRORS ====================================
+______________ ERROR collecting tests/backend/test_temp_alarm.py ______________
+backend\.venv\Lib\site-packages\sqlalchemy\engine\base.py:1967: in _exec_single_context
+    self.dialect.do_execute(
+backend\.venv\Lib\site-packages\sqlalchemy\engine\default.py:941: in do_execute
+    cursor.execute(statement, parameters)
+E   sqlite3.OperationalError: table sensor_readings already exists
+
+The above exception was the direct cause of the following exception:
+tests\backend\test_temp_alarm.py:74: in <module>
+    Base.metadata.create_all(bind=_engine)
+backend\.venv\Lib\site-packages\sqlalchemy\sql\schema.py:5868: in create_all
+    bind._run_ddl_visitor(
+backend\.venv\Lib\site-packages\sqlalchemy\engine\base.py:3253: in _run_ddl_visitor
+    conn._run_ddl_visitor(visitorcallable, element, **kwargs)
+backend\.venv\Lib\site-packages\sqlalchemy\engine\base.py:2459: in _run_ddl_visitor
+    visitorcallable(self.dialect, self, **kwargs).traverse_single(element)
+backend\.venv\Lib\site-packages\sqlalchemy\sql\visitors.py:664: in traverse_single
+    return meth(obj, **kw)
+           ^^^^^^^^^^^^^^^
+backend\.venv\Lib\site-packages\sqlalchemy\sql\ddl.py:918: in visit_metadata
+    self.traverse_single(
+backend\.venv\Lib\site-packages\sqlalchemy\sql\visitors.py:664: in traverse_single
+    return meth(obj, **kw)
+           ^^^^^^^^^^^^^^^
+backend\.venv\Lib\site-packages\sqlalchemy\sql\ddl.py:956: in visit_table
+    )._invoke_with(self.connection)
+      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend\.venv\Lib\site-packages\sqlalchemy\sql\ddl.py:314: in _invoke_with
+    return bind.execute(self)
+           ^^^^^^^^^^^^^^^^^^
+backend\.venv\Lib\site-packages\sqlalchemy\engine\base.py:1418: in execute
+    return meth(
+backend\.venv\Lib\site-packages\sqlalchemy\sql\ddl.py:180: in _execute_on_connection
+    return connection._execute_ddl(
+backend\.venv\Lib\site-packages\sqlalchemy\engine\base.py:1529: in _execute_ddl
+    ret = self._execute_context(
+backend\.venv\Lib\site-packages\sqlalchemy\engine\base.py:1846: in _execute_context
+    return self._exec_single_context(
+backend\.venv\Lib\site-packages\sqlalchemy\engine\base.py:1986: in _exec_single_context
+    self._handle_dbapi_exception(
+backend\.venv\Lib\site-packages\sqlalchemy\engine\base.py:2355: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+backend\.venv\Lib\site-packages\sqlalchemy\engine\base.py:1967: in _exec_single_context
+    self.dialect.do_execute(
+backend\.venv\Lib\site-packages\sqlalchemy\engine\default.py:941: in do_execute
+    cursor.execute(statement, parameters)
+E   sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) table sensor_readings already exists
+E   [SQL: 
+E   CREATE TABLE sensor_readings (
+E   	id INTEGER NOT NULL, 
+E   	session_id INTEGER, 
+E   	pedestal_id INTEGER NOT NULL, 
+E   	socket_id INTEGER, 
+E   	type VARCHAR(30) NOT NULL, 
+E   	value FLOAT NOT NULL, 
+E   	unit VARCHAR(20) NOT NULL, 
+E   	timestamp DATETIME NOT NULL, 
+E   	PRIMARY KEY (id), 
+E   	FOREIGN KEY(session_id) REFERENCES sessions (id), 
+E   	FOREIGN KEY(pedestal_id) REFERENCES pedestals (id)
+E   )
+E   
+E   ]
+E   (Background on this error at: https://sqlalche.me/e/20/e3q8)
+!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+============================== 1 error in 6.66s ===============================
+rm: cannot remove 'tests/test_pedestal.db': Device or resource busy
+rm: cannot remove 'tests/test_users.db': Device or resource busy
+
+[✘] pytest FAILED — fix before committing
+tests/run_tests.sh: line 162: [: 0
+0: integer expression expected
+
+[2/4] Python security scan (bandit)
+
+Working... ---------------------------------------- 100% 0:00:05
+  High severity   : 0
+  Medium severity : 2
+[!] Bandit: 2 medium issue(s) — review recommended
+    Full report: /c/Users/dopse/Cloud_IOT/tests/logs/bandit_last.log
+
+[3/4] Bug & security patterns (semgrep)
+
+  Errors   : 0
+  Warnings : 0
+[✔] Semgrep passed
+
+[4/4] TypeScript (eslint + mobile tsc)
+
+[!] ESLint NOT CHECKED - and cannot be.
+    eslint is not a devDependency of frontend/ and there is no eslint config.
+    This stage has never run. See D13 in docs/ui_v2_spec.md.
+
+  Mobile TypeScript (tsc --noEmit)...
+[✔] mobile tsc passed
+
+[5/5] Cross-layer gap checks
+
+  [GAP-1] FE<->BE: SessionResponse schema vs frontend Session interface...
+  [✔] GAP-1 passed
+  [GAP-2] Security: detect-secrets credential scan...
+  [✔] GAP-2 passed — no secrets found
+  [GAP-3] Security: pip-audit dependency CVE scan...
+  [!] pip-audit TIMED OUT after 90s — dependency CVEs NOT CHECKED.
+      It fetches PyPI advisories; a slow or blocked network looks exactly like this.
+  [✔] GAP-3 passed — no fixable CVEs found
+  [GAP-4] BE<->DB: migration idempotency check...
+  [✔] GAP-4 passed — migration is idempotent
+
+Stages NOT RUN at gate level full:
+    - eslint (NOT A DEPENDENCY - this stage has never run, see D13)
+    - pip-audit (TIMED OUT - CVEs not checked)
+
+──────────────────────────────────────────────────────────
+✗ One or more checks FAILED — fix errors before committing.
+
+=============== WHY IT FAILED ===============
+pytest: 0 test(s) failed
+Full logs: /c/Users/dopse/Cloud_IOT/tests/logs
+=============================================

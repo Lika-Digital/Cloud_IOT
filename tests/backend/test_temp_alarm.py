@@ -64,23 +64,35 @@ def test_threshold_for():
 
 # ── alarm_service severity / escalate / resolve (DB) ─────────────────────────
 
+# 2026-10-11 — per-run path, and the DDL runs in the module fixture, not at import.
+#
+# This file used to create ./tests/test_alarm.db and run create_all at MODULE LEVEL, i.e.
+# during collection. Two gates collecting it at the same moment raced on that one shared
+# file and one of them died before running a single test:
+#     ERROR collecting tests/backend/test_temp_alarm.py
+#     sqlite3.OperationalError: table sensor_readings already exists
+# (tests/evidence/2026-10-11_shared_test_db_race/before_gate2.txt). Import-time DDL is also
+# built from whatever models happen to be registered when collection reaches this file.
+from _test_paths import TEST_DIR  # noqa: E402
+
+_ALARM_DB_PATH = os.path.join(TEST_DIR, "test_alarm.db")
 _engine = create_engine(
-    "sqlite:///./tests/test_alarm.db",
+    "sqlite:///" + _ALARM_DB_PATH.replace("\\", "/"),
     connect_args={"check_same_thread": False},
     poolclass=StaticPool,
 )
-from app.database import Base  # noqa: E402
-from app.models.active_alarm import ActiveAlarm as _AA  # noqa: E402,F401 — register table before create_all
-Base.metadata.create_all(bind=_engine)
 _TS = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 
 
 @pytest.fixture(scope="module", autouse=True)
 def _dispose_engine():
+    from app.database import Base
+    from app.models.active_alarm import ActiveAlarm as _AA  # noqa: F401 — register table before create_all
+    Base.metadata.create_all(bind=_engine)
     yield
     _engine.dispose()
     try:
-        os.remove("tests/test_alarm.db")
+        os.remove(_ALARM_DB_PATH)
     except OSError:
         pass
 

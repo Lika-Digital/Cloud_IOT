@@ -256,7 +256,12 @@ class GuardWorker:
         if self.client is None:
             import paho.mqtt.client as mqtt
 
-            cid = f"guard-worker-{self.cfg.camera_id}-{socket.gethostname()}"
+            # The marina is part of the id because it is part of every topic: two workers for
+            # camera N in different marinas on one broker are different clients, and with the
+            # same id the broker disconnects one whenever the other connects (MQTT-3.1.4-2) —
+            # each would then fire its last will and read as dead. Found 2026-10-11 by two
+            # concurrent test runs doing exactly that on one dev box.
+            cid = f"guard-worker-{self.cfg.marina_id}-{self.cfg.camera_id}-{socket.gethostname()}"
             self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=cid)
             self.client.reconnect_delay_set(min_delay=1, max_delay=30)
 

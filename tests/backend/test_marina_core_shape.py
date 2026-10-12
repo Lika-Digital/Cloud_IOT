@@ -32,10 +32,10 @@ from sqlalchemy.orm import sessionmaker
 REPO = Path(__file__).resolve().parents[2]
 TS_FILE = REPO / "frontend" / "src" / "api" / "marina.ts"
 
-TEST_DB = "sqlite:///./tests/test_pedestal.db"
+from _test_paths import TEST_DB  # per-run path, never a literal — see _test_paths.py
 _engine = create_engine(TEST_DB, connect_args={"check_same_thread": False})
 _S = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
-TEST_USER_DB = "sqlite:///./tests/test_users.db"
+from _test_paths import TEST_USER_DB  # per-run path, never a literal — see _test_paths.py
 _user_engine = create_engine(TEST_USER_DB, connect_args={"check_same_thread": False})
 _US = sessionmaker(autocommit=False, autoflush=False, bind=_user_engine)
 

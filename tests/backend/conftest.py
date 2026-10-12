@@ -22,11 +22,15 @@ os.environ.setdefault("MQTT_BROKER_HOST", "localhost")
 # v3.31 — keep usage-report files out of the real ./reports dir. Set via env
 # (read at Settings construction) so every imported module tree agrees, rather
 # than monkeypatching one settings object.
-os.environ.setdefault("REPORTS_DIR", "./tests/test_reports")
+#
+# 2026-10-11 — the reports dir, like the test DBs, lives in a PER-RUN directory. It used to be
+# ./tests/test_reports, shared by every pytest process on the machine, and test_usage_history
+# wipes it per test — so a second concurrent run deleted the first run's reports mid-test.
+from _test_paths import TEST_DIR, TEST_DB, TEST_USER_DB, REPORTS_DIR as _TEST_REPORTS_DIR  # noqa: E402
+os.environ.setdefault("REPORTS_DIR", _TEST_REPORTS_DIR)
 
 # ── Test DB URLs (file-based so cross-module fixtures share state) ────────────
-TEST_DB     = "sqlite:///./tests/test_pedestal.db"
-TEST_USER_DB = "sqlite:///./tests/test_users.db"
+# Per-run, from _test_paths — see its docstring for the concurrent-run race this closes.
 
 test_engine      = create_engine(TEST_DB,      connect_args={"check_same_thread": False})
 test_user_engine = create_engine(TEST_USER_DB, connect_args={"check_same_thread": False})
@@ -129,11 +133,14 @@ def setup_test_databases():
     # the next run anyway.
     test_engine.dispose()
     test_user_engine.dispose()
-    for path in ["tests/test_pedestal.db", "tests/test_users.db"]:
-        try:
-            os.remove(path)
-        except (FileNotFoundError, PermissionError):
-            pass
+    #
+    # The whole per-run directory goes, and ONLY this run's: the old fixed paths meant a run
+    # finishing first deleted the databases another run was still using. Best-effort: on
+    # Windows other modules' engines can still hold handles here, so tests/run_tests.sh also
+    # removes the directory after the pytest process exits. A standalone run may leave one
+    # small cloudiot-tests-* directory in the temp folder; that is the price of not sharing.
+    import shutil
+    shutil.rmtree(TEST_DIR, ignore_errors=True)
 
 
 @pytest.fixture(scope="session")

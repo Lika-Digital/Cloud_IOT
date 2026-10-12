@@ -33,8 +33,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 # ── shared test DBs (same files as conftest) ─────────────────────────────────
-TEST_DB      = "sqlite:///./tests/test_pedestal.db"
-TEST_USER_DB = "sqlite:///./tests/test_users.db"
+from _test_paths import TEST_DB  # per-run path, never a literal — see _test_paths.py
+from _test_paths import TEST_USER_DB  # per-run path, never a literal — see _test_paths.py
 
 _test_engine      = create_engine(TEST_DB,      connect_args={"check_same_thread": False}, poolclass=StaticPool)
 _test_user_engine = create_engine(TEST_USER_DB, connect_args={"check_same_thread": False}, poolclass=StaticPool)

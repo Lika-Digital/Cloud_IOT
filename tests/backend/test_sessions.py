@@ -3,7 +3,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-TEST_DB = "sqlite:///./tests/test_pedestal.db"
+from _test_paths import TEST_DB  # per-run path, never a literal — see _test_paths.py
 
 
 def _complete_session_direct(session_id: int) -> None:

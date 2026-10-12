@@ -26,8 +26,8 @@ from unittest.mock import patch, AsyncMock
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-TEST_DB      = "sqlite:///./tests/test_pedestal.db"
-TEST_USER_DB = "sqlite:///./tests/test_users.db"
+from _test_paths import TEST_DB  # per-run path, never a literal — see _test_paths.py
+from _test_paths import TEST_USER_DB  # per-run path, never a literal — see _test_paths.py
 
 from sqlalchemy.pool import StaticPool
 
@@ -569,7 +569,7 @@ class TestSessionStop:
         # stop is no longer a usable cleanup path).
         from sqlalchemy import create_engine as _ce
         from sqlalchemy.orm import sessionmaker as _sm
-        _eng = _ce("sqlite:///./tests/test_pedestal.db", connect_args={"check_same_thread": False})
+        _eng = _ce(TEST_DB, connect_args={"check_same_thread": False})
         _DB = _sm(bind=_eng)
         try:
             from app.models.session import Session as _SM

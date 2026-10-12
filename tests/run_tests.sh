@@ -120,11 +120,47 @@ if [ -z "${GUARD_FFMPEG:-}" ] && ! command -v ffmpeg &>/dev/null; then
     echo -e "      worker smoke tests that exercise capture -> alarm -> clip.${NC}"
 fi
 
-PYTEST_LOG="${LOG_DIR}/pytest_last.log"
+# 2026-10-11 — every path this stage writes is PER RUN.
+#
+# The test DBs, the reports dir and this log used to be fixed paths shared by every run on
+# the machine. Two gates at once (a background push gate + a commit gate, or a gate + a
+# standalone diagnostic run) raced on them: one died at collection with "table
+# sensor_readings already exists", and the summary said "0 test(s) failed" because it read
+# a log the other run was writing. Evidence: tests/evidence/2026-10-11_shared_test_db_race/.
+#
+# CLOUD_IOT_TEST_DIR is created here, not left to pytest, so this header can name it.
+# tests/backend/_test_paths.py reads it; conftest deletes it at session teardown.
+# Python makes the dir, not `mktemp`: under Git Bash `mktemp -d` returns /tmp/..., which
+# Windows Python resolves to C:\tmp\... — a different directory.
+RUN_ID="$(date +%Y%m%dT%H%M%S)-$$"
+export CLOUD_IOT_TEST_DIR
+CLOUD_IOT_TEST_DIR="$(python -c "import tempfile; print(tempfile.mkdtemp(prefix='cloudiot-tests-'))")"
+PYTEST_LOG="${LOG_DIR}/pytest_${RUN_ID}.log"
+_DIRTY=$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+{
+    echo "# run_id      : ${RUN_ID}"
+    echo "# pid         : $$"
+    echo "# test_dir    : ${CLOUD_IOT_TEST_DIR}"
+    echo "# started     : $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "# commit      : $(git rev-parse HEAD 2>/dev/null || echo unknown)"
+    echo "# working tree: ${_DIRTY} uncommitted path(s) — the commit alone does not identify the code if this is not 0"
+    echo "# gate level  : ${GATE_LEVEL}"
+} > "$PYTEST_LOG"
+cat "$PYTEST_LOG"
 python -m pytest tests/backend/ -v --tb=short --no-header -rs \
-    -W ignore::DeprecationWarning "$@" 2>&1 | tee "$PYTEST_LOG"
+    -W ignore::DeprecationWarning "$@" 2>&1 | tee -a "$PYTEST_LOG"
 PYTEST_EXIT=${PIPESTATUS[0]}
-rm -f tests/test_pedestal.db tests/test_users.db
+# conftest's teardown rmtree is best-effort: on Windows the module-level engines still hold
+# SQLite handles at session end, so it can fail. The pytest process has exited now, every
+# handle is released, and this directory is the one THIS run created — remove it here.
+rm -rf "$CLOUD_IOT_TEST_DIR"
+# pytest_last.log is a COPY for humans, and it names its run in the header above, so a
+# reader can tell whose result they are looking at when two gates finished close together.
+# Nothing in this script reads it back.
+cp "$PYTEST_LOG" "${LOG_DIR}/pytest_last.log" 2>/dev/null || true
+# Keep the 20 newest per-run logs; per-run names would otherwise accumulate forever.
+ls -1t "${LOG_DIR}"/pytest_2*.log 2>/dev/null | tail -n +21 | while IFS= read -r _old; do rm -f "$_old"; done
+ls -1t "${LOG_DIR}"/_failing_2*.txt 2>/dev/null | tail -n +21 | while IFS= read -r _old; do rm -f "$_old"; done
 
 echo ""
 if [ $PYTEST_EXIT -eq 0 ]; then
@@ -143,8 +179,22 @@ else
     # to the value instead of replacing it.
     _nfail=$(grep -cE "(FAILED|ERROR)[[:space:]]+\[" "$PYTEST_LOG" 2>/dev/null)
     [ -n "$_nfail" ] || _nfail=0
-    FAILED_STAGES+=("pytest: ${_nfail} test(s) failed")
-    _FAILING_LIST="${LOG_DIR}/_failing.txt"
+    # A collection error has no per-test verdict line, so the count above is 0 for a run
+    # that never executed a test — the gate once reported "pytest: 0 test(s) failed" for
+    # exactly that. Count them separately and say what happened.
+    _ncoll=$(grep -cE "ERROR collecting " "$PYTEST_LOG" 2>/dev/null)
+    [ -n "$_ncoll" ] || _ncoll=0
+    if [ "$_ncoll" -gt 0 ]; then
+        FAILED_STAGES+=("pytest: ${_ncoll} file(s) failed to COLLECT — the run was interrupted before tests ran")
+        while IFS= read -r _l; do
+            FAILED_STAGES+=("    ${_l}")
+        done < <(grep -oE "ERROR collecting [^ ]+" "$PYTEST_LOG" | head -5)
+    elif [ "$_nfail" -eq 0 ]; then
+        FAILED_STAGES+=("pytest: exited ${PYTEST_EXIT} with no failing-test line — read ${PYTEST_LOG}")
+    else
+        FAILED_STAGES+=("pytest: ${_nfail} test(s) failed")
+    fi
+    _FAILING_LIST="${LOG_DIR}/_failing_${RUN_ID}.txt"
     grep -E "(FAILED|ERROR)[[:space:]]+\[" "$PYTEST_LOG" 2>/dev/null > "$_FAILING_LIST" || true
     _shown=0
     while IFS= read -r _l; do
@@ -520,18 +570,41 @@ if [ "$GATE_LEVEL" != "full" ]; then
     echo -e "  ${YELLOW}[~] pip-audit: not run at gate level 'fast' — runs on push.${NC}"
     SKIPPED_STAGES+=("pip-audit (fast gate; runs on push)")
 elif command -v "$PIP_AUDIT_BIN" &>/dev/null || [ -f "$PIP_AUDIT_BIN" ]; then
-    AUDIT_LOG="${LOG_DIR}/pip_audit_last.log"
+    # 2026-10-11 — a verdict only from THIS run's output, and no tick unless it was checked.
+    #
+    # This used to write a fixed pip_audit_last.log and then parse it UNCONDITIONALLY. After a
+    # timeout pip-audit writes nothing, so the parser read either a past run's file — reporting
+    # an old answer as today's — or no file, which fell through to VULN_COUNT=0 and printed
+    # "[✔] GAP-3 passed" two lines below "[!] pip-audit TIMED OUT". Any other crash did the same.
+    # Now: per-run file, deleted before the run; exit 0 (clean) or 1 (vulns found) plus a JSON
+    # that parses are the ONLY paths to a verdict. Everything else is NOT CHECKED, listed in
+    # NOT RUN like eslint, and prints no tick.
+    rm -f "${LOG_DIR}/pip_audit_last.log"   # the old fixed path; a stale one would look current
+    AUDIT_LOG="${LOG_DIR}/pip_audit_${RUN_ID}.json"
+    AUDIT_ERR="${LOG_DIR}/pip_audit_${RUN_ID}.err"
+    rm -f "$AUDIT_LOG" "$AUDIT_ERR"
     timeout "${PIP_AUDIT_TIMEOUT_S}" "$PIP_AUDIT_BIN" \
         --requirement "${ROOT_DIR}/backend/requirements.txt" \
         --format json \
         --output "$AUDIT_LOG" \
-        2>/dev/null
+        2>"$AUDIT_ERR"
     AUDIT_EXIT=$?
+    ls -1t "${LOG_DIR}"/pip_audit_2*.* 2>/dev/null | tail -n +21 | while IFS= read -r _old; do rm -f "$_old"; done
+    _AUDIT_NOT_CHECKED=""
     if [ $AUDIT_EXIT -eq 124 ]; then
         echo -e "  ${YELLOW}[!] pip-audit TIMED OUT after ${PIP_AUDIT_TIMEOUT_S}s — dependency CVEs NOT CHECKED.${NC}"
         echo -e "      It fetches PyPI advisories; a slow or blocked network looks exactly like this."
-        SKIPPED_STAGES+=("pip-audit (TIMED OUT - CVEs not checked)")
+        _AUDIT_NOT_CHECKED="TIMED OUT after ${PIP_AUDIT_TIMEOUT_S}s - CVEs not checked"
+    elif [ $AUDIT_EXIT -ne 0 ] && [ $AUDIT_EXIT -ne 1 ]; then
+        echo -e "  ${YELLOW}[!] pip-audit EXITED ${AUDIT_EXIT} — dependency CVEs NOT CHECKED. See ${AUDIT_ERR}${NC}"
+        _AUDIT_NOT_CHECKED="exited ${AUDIT_EXIT} - CVEs not checked, see ${AUDIT_ERR}"
+    elif [ ! -s "$AUDIT_LOG" ]; then
+        echo -e "  ${YELLOW}[!] pip-audit exited ${AUDIT_EXIT} but wrote no report — CVEs NOT CHECKED.${NC}"
+        _AUDIT_NOT_CHECKED="no report written - CVEs not checked"
     fi
+    if [ -n "$_AUDIT_NOT_CHECKED" ]; then
+        SKIPPED_STAGES+=("pip-audit (${_AUDIT_NOT_CHECKED})")
+    else
 
     AUDIT_SUMMARY=$(python - "$AUDIT_LOG" << 'PYEOF'
 import sys, json, os
@@ -553,19 +626,25 @@ PYEOF
 )
 
     VULN_COUNT=$(echo "$AUDIT_SUMMARY" | grep "^VULNS=" | cut -d= -f2)
-    VULN_COUNT=${VULN_COUNT:-0}
+    _AUDIT_PARSE_ERR=$(echo "$AUDIT_SUMMARY" | grep "^PARSE_ERROR=" | cut -d= -f2-)
 
-    if [ "$VULN_COUNT" -gt 0 ]; then
+    if [ -n "$_AUDIT_PARSE_ERR" ] || [ -z "$VULN_COUNT" ]; then
+        # A report that does not parse is not "0 CVEs" — it used to default to 0 and tick.
+        echo -e "  ${YELLOW}[!] pip-audit report did not parse (${_AUDIT_PARSE_ERR:-no count}) — CVEs NOT CHECKED.${NC}"
+        SKIPPED_STAGES+=("pip-audit (report unparseable - CVEs not checked)")
+    elif [ "$VULN_COUNT" -gt 0 ]; then
         echo -e "  ${YELLOW}[!] GAP-3 WARNING — ${VULN_COUNT} fixable CVE(s) in dependencies${NC}"
         echo "$AUDIT_SUMMARY" | grep "^CVE=" | sed 's/^CVE=/    /'
         echo -e "      Full report: ${AUDIT_LOG}"
         # Warn but do not block (production-decision on patching schedule)
     else
-        echo -e "  ${GREEN}[✔] GAP-3 passed — no fixable CVEs found${NC}"
+        echo -e "  ${GREEN}[✔] GAP-3 passed — no fixable CVEs found (this run's report: ${AUDIT_LOG})${NC}"
+    fi
     fi
 else
-    echo -e "  ${YELLOW}[!] pip-audit not found — skipping.${NC}"
+    echo -e "  ${YELLOW}[!] pip-audit not found — CVEs NOT CHECKED.${NC}"
     echo -e "      Install: pip install pip-audit"
+    SKIPPED_STAGES+=("pip-audit (NOT INSTALLED - CVEs not checked)")
 fi
 
 # GAP: BE<->DB | LAYER: migration idempotency | TOOL: custom Python test

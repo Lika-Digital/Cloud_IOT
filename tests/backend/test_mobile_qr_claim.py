@@ -60,7 +60,7 @@ pytestmark = pytest.mark.skip(
     reason="QR is not a supported path, decision of 2026-09-30"
 )
 
-TEST_DB = "sqlite:///./tests/test_pedestal.db"
+from _test_paths import TEST_DB  # per-run path, never a literal — see _test_paths.py
 _test_engine = create_engine(TEST_DB, connect_args={"check_same_thread": False}, poolclass=StaticPool)
 _TestSession = sessionmaker(autocommit=False, autoflush=False, bind=_test_engine)
 

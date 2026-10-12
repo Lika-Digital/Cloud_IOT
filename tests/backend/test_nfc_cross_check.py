@@ -39,7 +39,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-TEST_DB = "sqlite:///./tests/test_pedestal.db"
+from _test_paths import TEST_DB  # per-run path, never a literal — see _test_paths.py
 _engine = create_engine(TEST_DB, connect_args={"check_same_thread": False})
 _S = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 

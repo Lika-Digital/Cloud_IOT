@@ -99,8 +99,9 @@ Expect `pedestal-mqtt-broker   Up ...`. If it is not running:
 cd ~/Cloud_IOT && sudo docker compose up -d mosquitto
 ```
 
-> The suite publishes only under `marina/$MARINA_ID/camera/11/guard/#` and uses camera id
-> **11**, which no cabinet uses. It does not touch pedestal or cabinet topics. Running it
+> The suite publishes only under `marina/$MARINA_ID-t<run>/camera/11/guard/#` — a per-run
+> marina namespace (since 2026-10-11; two concurrent runs on one broker used to answer each
+> other's commands) — and uses camera id **11**, which no cabinet uses. It does not touch pedestal or cabinet topics. Running it
 > against the live broker is safe, and is deliberate — a private broker would not prove the
 > real one works.
 

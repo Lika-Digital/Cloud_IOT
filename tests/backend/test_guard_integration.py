@@ -57,12 +57,16 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from conftest import TestSession as _S  # noqa: E402
+from _test_paths import TEST_DIR  # noqa: E402
 from guard_worker.capture import resolve_ffmpeg  # noqa: E402
 
 HARNESS = Path(__file__).parent / "_guard_worker_harness.py"
 
 # A camera id used by no other test module, so liveness and DB rows cannot collide.
 CAM = 11
+# Per-run suffix for the marina namespace and client ids on the shared broker — see the
+# `backend` fixture. Derived from the per-run test dir, so it is unique per pytest run.
+RUN_TAG = os.path.basename(TEST_DIR).replace("cloudiot-tests-", "t")
 
 # Set GUARD_INTEGRATION_REQUIRED=1 on the NUC. See _unanswered() below.
 INTEGRATION_REQUIRED = os.environ.get("GUARD_INTEGRATION_REQUIRED") == "1"
@@ -210,18 +214,32 @@ async def backend(broker):
       module attribute process-wide, so the patch holds across threads.
     """
     from app.config import settings
-    from app.guard.service import liveness
+    from app.guard.service import liveness, subscription_patterns
     from app.services.mqtt_client import MQTTService, mqtt_service
 
     async def _noop_broadcast(*_a, **_kw):
         return None
 
+    from app.services import mqtt_client as _mc
+
+    # 2026-10-11 — a PER-RUN marina namespace on the broker. The broker on :1883 is shared
+    # (deliberately: on the NUC this suite runs on the real one), and two concurrent pytest
+    # runs used the same marina, camera and worker client id. The broker disconnects a
+    # client when another connects with its id, so each run's worker kicked the other's —
+    # every "worker went down / ack never came / last will" test then failed for a reason
+    # that was not in the code under test. Evidence: tests/evidence/2026-10-11_shared_test_db_race/.
+    # TOPICS is built at import time from the real marina, so it is rebuilt under the patch.
+    run_marina = f"{settings.marina_id}-{RUN_TAG}"
+    non_guard = [t for t in _mc.TOPICS if "/guard/" not in t]
+
     _clean_db()
     liveness.forget(CAM)
     liveness._pending_acks.clear()
-    _clear_retained_state(broker, settings.marina_id)
+    _clear_retained_state(broker, run_marina)
 
-    with patch.object(settings, "mqtt_broker_host", broker["host"]), \
+    with patch.object(settings, "marina_id", run_marina), \
+         patch.object(_mc, "TOPICS", non_guard + subscription_patterns()), \
+         patch.object(settings, "mqtt_broker_host", broker["host"]), \
          patch.object(settings, "mqtt_broker_port", broker["port"]), \
          patch("app.database.SessionLocal", _S), \
          patch("app.guard.service.SessionLocal", _S, create=True), \
@@ -260,7 +278,7 @@ def _clear_retained_state(broker_info: dict, marina: str) -> None:
     import paho.mqtt.client as mqtt
 
     topic = f"marina/{marina}/camera/{CAM}/guard/state"
-    c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"int-clear-{CAM}")
+    c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"int-clear-{marina}-{CAM}")
     c.connect(broker_info["host"], broker_info["port"], 30)
     c.loop_start()
     try:

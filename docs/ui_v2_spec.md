@@ -53,7 +53,8 @@ Evidence is a test, a commit or a path, never a claim.
 | `outlet_silent` (rank 2.5) | PARTIAL | `routers/marina.py:247` hard-codes `False`; never emitted |
 | Guard on `/marina` | PARTIAL | `services/guard_state` does not exist (`marina.py:208`), so it always reads unavailable |
 | Row controls (power, water, light) | NOT BUILT | no page passes `onAction`; TC-UIR-03 therefore passes vacuously |
-| TC-UIR-01 (no raw colour classes) | NOT BUILT | claimed only in a comment, `Status.tsx:12`; 32 raw colour lines exist |
+| TC-UIR-01 (no raw colour classes) | BUILT+PROVEN, with exemptions | `test_ui_rule_colours.py` (block 3, 2026-10-12): no status hue (red/green/amber/yellow/orange/emerald/lime/rose on a colour utility) in `pages/marina/**`, `components/marina/**` outside `Status.tsx`, whose exported `TONE` is the only palette. Measured with that pattern: 29 lines, 2 of them in `Status.tsx` (the earlier "32" used a pattern that was not recorded). Fixed now: MarinaGuard, MarinaAlarms, MarinaWater. Exempt per file until block 4: MarinaDashboard, BerthDetail, MarinaSetup — the gate fails when block 4 is marked DONE below while any is still exempt |
+| Block 4 — UI v2 remainder | NOT DONE | Row controls, L3 history, nav of 4, `<PhaseBlock>`, wizard step 3, §9 splits, `/marina` on the websocket. **This row is the deadline of TC-UIR-01's exemptions** — `test_ui_rule_colours.py` reads it; setting it to DONE with exemptions left fails the gate |
 | L3 history, `<PhaseBlock>`, nav of 4, Card 5 (water toggle) | NOT BUILT | no history route in `App.tsx`; `Layout.tsx:40-57` has 8 items |
 | Setup wizard | PARTIAL, UNPROVEN | `MarinaSetup.tsx` (`4eb381e`); step 3 missing; route not `adminOnly`; no UI test |
 | §9 size limits | FAILS | 377 / 302 lines; 1 890 total |

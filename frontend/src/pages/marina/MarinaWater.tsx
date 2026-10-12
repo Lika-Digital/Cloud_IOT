@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { TONE } from '../../components/marina/Status'
 import { getMarinaCore, type MarinaCore } from '../../api/marina'
 
 /**
@@ -43,7 +44,7 @@ function stateWords(state: string, on: boolean): { word: string; cls: string; no
   if (on || state === 'active') {
     return { word: 'In use', cls: 'bg-blue-900/40 text-blue-200 border-blue-700/50' }
   }
-  return { word: 'Free', cls: 'bg-green-900/30 text-green-300 border-green-700/50' }
+  return { word: 'Free', cls: TONE.ok }
 }
 
 export default function MarinaWater() {
@@ -77,7 +78,7 @@ export default function MarinaWater() {
     return (
       <div className="p-4 max-w-md" data-testid="water-error">
         <Back />
-        <p className="text-sm text-amber-200 my-3">
+        <p className={`text-sm ${TONE.noticeText} my-3`}>
           {state.kind === 'error' ? state.message : 'Cannot reach the server.'}
         </p>
         <button
@@ -101,7 +102,7 @@ export default function MarinaWater() {
 
       {state.kind === 'error' && (
         <p
-          className="text-xs text-amber-200 border border-amber-700/50 bg-amber-900/20 rounded px-2 py-1.5 mb-3"
+          className={`text-xs border ${TONE.notice} rounded px-2 py-1.5 mb-3`}
           data-testid="water-stale-banner"
         >
           {state.message} Showing the last readings — they may be out of date.

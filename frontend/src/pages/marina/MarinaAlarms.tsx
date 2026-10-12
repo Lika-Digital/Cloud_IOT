@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { TONE } from '../../components/marina/Status'
 import { getMarinaAlarms, type MarinaAlarm } from '../../api/marina'
 
 /**
@@ -76,7 +77,7 @@ export default function MarinaAlarms() {
     return (
       <div className="p-4 max-w-md" data-testid="alarms-error">
         <Back />
-        <p className="text-sm text-amber-200 my-3">
+        <p className={`text-sm ${TONE.noticeText} my-3`}>
           {state.kind === 'error' ? state.message : 'Cannot reach the server.'}
         </p>
         <button
@@ -103,7 +104,7 @@ export default function MarinaAlarms() {
             aria-pressed={activeOnly}
             className={`text-xs px-2.5 py-1 rounded border ${
               activeOnly
-                ? 'border-amber-600/60 bg-amber-900/40 text-amber-100'
+                ? TONE.attentionSelected
                 : 'border-gray-600 text-gray-300 hover:bg-gray-700/60'
             }`}
           >
@@ -126,7 +127,7 @@ export default function MarinaAlarms() {
 
       {state.kind === 'error' && (
         <p
-          className="text-xs text-amber-200 border border-amber-700/50 bg-amber-900/20 rounded px-2 py-1.5 mb-3"
+          className={`text-xs border ${TONE.notice} rounded px-2 py-1.5 mb-3`}
           data-testid="alarms-stale-banner"
         >
           {state.message} Showing the last list — it may be out of date.
@@ -144,7 +145,7 @@ export default function MarinaAlarms() {
               key={a.alarm_id}
               className={`border rounded px-3 py-2 ${
                 a.active
-                  ? 'border-amber-700/50 bg-amber-900/15'
+                  ? TONE.attentionSoft
                   : 'border-gray-700 bg-gray-900/40'
               }`}
             >
@@ -155,7 +156,7 @@ export default function MarinaAlarms() {
                 <span
                   className={`text-[11px] px-1.5 py-0.5 rounded border ${
                     a.active
-                      ? 'bg-amber-900/40 text-amber-200 border-amber-600/60'
+                      ? TONE.attention
                       : 'bg-gray-800 text-gray-400 border-gray-600'
                   }`}
                 >

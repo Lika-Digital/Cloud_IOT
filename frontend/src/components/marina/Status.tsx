@@ -40,6 +40,28 @@ const STYLES: Record<BerthStatus, { cls: string; icon: string; word: string }> =
   },
 }
 
+/**
+ * The marina profile's ONLY status palette (TC-UIR-01, tests/backend/test_ui_rule_colours.py).
+ * Pages take a named tone from here instead of writing a status hue themselves, so the colour
+ * of "fine", "needs attention" and "not known" is decided in one place. A tone is a colour
+ * only — the page must still put an icon and a word next to it.
+ */
+export const TONE = {
+  ok: STYLES.ok.cls,
+  attention: STYLES.attention.cls,
+  unknown: STYLES.unknown.cls,
+  /** A fault (e.g. guard not answering): dashed like unknown, amber text — not a setting. */
+  fault: 'bg-gray-900 text-amber-200 border-amber-700/50 border-dashed',
+  /** A selected filter that narrows to things needing attention. */
+  attentionSelected: 'border-amber-600/60 bg-amber-900/40 text-amber-100',
+  /** A row that still needs attention, quieter than the badge on it. */
+  attentionSoft: 'border-amber-700/50 bg-amber-900/15',
+  /** A notice box: a load error, a stale-data warning. Needs `border` alongside. */
+  notice: 'text-amber-200 border-amber-700/50 bg-amber-900/20',
+  /** Notice text without a box. */
+  noticeText: 'text-amber-200',
+} as const
+
 export function Status({
   status,
   sentence,

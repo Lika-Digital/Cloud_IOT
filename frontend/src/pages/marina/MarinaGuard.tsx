@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { TONE } from '../../components/marina/Status'
 import { getMarinaCore, type GuardBlock, type MarinaCore } from '../../api/marina'
 
 /**
@@ -34,12 +35,12 @@ function describeError(e: unknown): string {
 
 const GUARD_STYLE: Record<GuardBlock['state'], { cls: string; icon: string; help: string }> = {
   on: {
-    cls: 'bg-green-900/30 text-green-300 border-green-700/50',
+    cls: TONE.ok,
     icon: '●',
     help: 'The camera is watching this pedestal.',
   },
   paused: {
-    cls: 'bg-amber-900/40 text-amber-200 border-amber-600/60',
+    cls: TONE.attention,
     icon: '‖',
     help: 'Watching has stopped for now. It will resume on its own when the reason clears.',
   },
@@ -50,7 +51,7 @@ const GUARD_STYLE: Record<GuardBlock['state'], { cls: string; icon: string; help
   },
   unavailable: {
     // Deliberately NOT the same grey as `off`. Dashed, amber text: this is a fault.
-    cls: 'bg-gray-900 text-amber-200 border-amber-700/50 border-dashed',
+    cls: TONE.fault,
     icon: '?',
     help: 'Guard is not answering, so nothing is being watched. This is a fault, not a '
         + 'setting — tell the office.',
@@ -88,7 +89,7 @@ export default function MarinaGuard() {
     return (
       <div className="p-4 max-w-md" data-testid="guard-error">
         <Back />
-        <p className="text-sm text-amber-200 my-3">
+        <p className={`text-sm ${TONE.noticeText} my-3`}>
           {state.kind === 'error' ? state.message : 'Cannot reach the server.'}
         </p>
         <button
@@ -112,7 +113,7 @@ export default function MarinaGuard() {
 
       {state.kind === 'error' && (
         <p
-          className="text-xs text-amber-200 border border-amber-700/50 bg-amber-900/20 rounded px-2 py-1.5 mb-3"
+          className={`text-xs border ${TONE.notice} rounded px-2 py-1.5 mb-3`}
           data-testid="guard-stale-banner"
         >
           {state.message} Showing the last readings — they may be out of date.

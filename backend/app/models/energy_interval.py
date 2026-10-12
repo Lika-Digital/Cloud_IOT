@@ -1,8 +1,19 @@
-"""v3.35 — energy interval ledger (the billing source of truth).
+"""v3.35 — energy interval ledger. FROZEN since 2026-10-10 16:12:59 UTC; nothing is billed from it.
+
+PROVENANCE — READ BEFORE USING ANY ROW
+--------------------------------------
+Every row in this table is INTEGRAL-DERIVED: backend power x time, never a meter register.
+The ledger froze at 2026-10-10 16:12:59 UTC, before the register path wrote a single row,
+so the boundary is the whole table. There is deliberately no ``consumption_source`` column
+here and no migration labelling these rows — this paragraph IS the label. A report covering a
+period before that timestamp must say its interval figures are integrated estimates.
+
+It was described as "the billing source of truth". It is not: the ERP owns invoicing, and
+on the pilot cabinet this data exists only for our own analysis.
 
 Each row is one 15-minute (configurable) checkpoint of an electricity session's
-consumption, written by the interval logger and on session completion. Because
-the Opta's cumulative ``energyKwh`` register reads 0, the energy here comes from
+consumption, written by the interval logger and on session completion. When this was
+built the Opta's cumulative ``energyKwh`` register read 0, so the energy here came from
 the backend's power x time integration accumulated on ``sessions.energy_kwh``;
 each interval row stores the DELTA since the previous checkpoint.
 

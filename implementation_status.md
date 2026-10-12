@@ -1,3 +1,34 @@
+# Implementation Status — D6.1 built (ERP owns the NFC mapping); D6.2 has a completion condition
+
+## 2026-10-12 — the 46 skipped tests are debt, not a neutral state
+
+D6.1 commented out — did not delete — the NFC tag registry, MODE 2 (customer tokens on
+/api/nfc/*), the cross-check, by-user, and valve auto-open (commits 8770cd9, bad32e4, dadb48c,
+beab47b). The tests of that code were SKIPPED with a "D6.1 (2026-10-12)" reason, not deleted:
+46 of them. Measured per test against the pre-series run: every one of the 46 carries a D6.1
+reason; none skips because of a version or a missing dependency; the security series 2c41958
+added zero (71 skipped before it, 71 after).
+
+| file | skipped | why |
+|---|---|---|
+| test_nfc_six_tag_model.py | 12 | tag provisioning (6) + MODE-2 water-tag gate (6) |
+| test_nfc_object_authz.py | 10 | MODE 2 per-customer authorisation (whole module) |
+| test_nfc_cross_check.py | 7 | tag cross-check (whole module) |
+| test_nfc.py | 5 | tag registry routes |
+| test_valve_auto_activate.py | 5 | valve auto-open existed only in MODE 2 |
+| test_nfc_audit_trail.py | 4 | local tag trail |
+| test_erp_reconciliation.py | 2 | by-user stamping; MODE-2 alarm |
+| test_water_erp_flow.py | 1 | MODE-2 water activate |
+
+**COMPLETION CONDITION FOR D6.2** (removing the commented-out code for good): each of the 46
+either RUNS again — because its subject came back — or is DELETED together with the code it
+tested. D6.2 is not done while ANY test is still skipped with a "D6.1" reason: a skip whose
+reason names code that no longer exists is a question nobody can answer, and it rots quietly
+inside a green gate. Check: `grep -rn "D6.1 (2026-10-12)" tests/backend/ | grep -i skip`
+must return nothing.
+
+---
+
 # Implementation Status - Guard INTEGRATION proven on a real broker (2 defects found)
 
 ## 2026-09-28 - the second assembly gap: the two halves had never spoken

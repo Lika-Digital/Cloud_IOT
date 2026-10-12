@@ -6,6 +6,9 @@ D6.1 (2026-10-12) — THE ERP IS THE ONLY OWNER OF THE NFC MAPPING AND THE CUSTO
   * POST /scan takes {cabinet_id, outlet, erp_ref}; sessions carry `erp_ref`.
   * GET /sessions/by-user is replaced by GET /sessions (by erp_ref and/or end-time range).
   * One caller remains: the ERP's machine key. The text below describes the pre-D6.1 design.
+  * D6.2 (removing the commented code for good) is DONE only when none of the 46 tests
+    skipped with a "D6.1" reason remains skipped: each runs again or is deleted with the
+    code it tested. See implementation_status.md, 2026-10-12.
 
 Two audiences:
   * **Admin (JWT, require_admin): provisioning.** Writing, re-assigning or deleting a tag, and

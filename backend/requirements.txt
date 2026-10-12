@@ -162,6 +162,12 @@ tzdata>=2024.1
 #     zeroconf             17 minor versions for ~5 s of admin-triggered exposure: own run.
 #     cryptography, requests  NOT AFFECTED per analysis (we use neither PKCS7 decrypt nor
 #                          .netrc). If they are raised, it is hygiene, and named so.
+#
+# TEMPORARY — these three lines LEAVE when the lock file lands (requirements.lock generated from
+# the NUC freeze). We import none of them; they are here only to make the resolver move a
+# transitive dependency, and the lock will hold their versions. Do not add more lines of this
+# kind in the meantime: a floor for every transitive advisory is how this file would turn into
+# a hand-written lock that nobody regenerates.
 urllib3>=2.8.0
 anyio>=4.14.2
 pyasn1>=0.6.4

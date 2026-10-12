@@ -73,7 +73,25 @@ cd "$ROOT_DIR"
 
 echo ""
 if [ $PW_EXIT -eq 0 ]; then
-    echo -e "${GREEN}[✔] Playwright E2E passed${NC}"
+    # 2026-10-12 — a pass says WHAT passed and what did not run. It printed only "passed"
+    # while 34 of 42 tests were skipped (D16), so "8/8" read as full coverage.
+    COUNTS=$(python - "${LOG_DIR}/playwright_last.json" << 'PYEOF'
+import io, json, os, sys
+p = sys.argv[1]
+if not os.path.exists(p):
+    print("counts unavailable (no JSON report)"); sys.exit(0)
+st = json.load(io.open(p, encoding="utf-8")).get("stats", {})
+print(f"{st.get('expected', 0)} passed | {st.get('skipped', 0)} skipped (unanswered, not passed)"
+      f" | {st.get('flaky', 0)} flaky")
+PYEOF
+)
+    echo -e "${GREEN}[✔] Playwright E2E passed — ${COUNTS}${NC}"
+    # SCOPE, stated so a green line is not read as more than it is:
+    echo "    Covers: marina.spec — /marina renders and survives null/500/timeout/stale/360px,"
+    echo "            on MOCKED API data (page.route). It does NOT verify what the page says."
+    echo "    Not covered: the four known /marina defects (\"once reconnected\" copy in manual mode,"
+    echo "            photo-mismatch with no model, merged alarms without the outlet, no amps)."
+    echo "    Skipped: auth, breaker, dashboard, sessions specs — deferred D16."
 else
     # Parse JSON for a summary
     SUMMARY=$(python - "${LOG_DIR}/playwright_last.json" << 'PYEOF'

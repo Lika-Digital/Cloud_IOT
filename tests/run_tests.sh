@@ -208,7 +208,14 @@ fi
 
 # Say the skip count out loud. A green run with skipped tests is not the same as a green
 # run, and the difference is invisible in the summary line unless it is named.
-SKIPPED=$(grep -cE "^SKIPPED " "$PYTEST_LOG" 2>/dev/null || echo 0)
+#
+# 2026-10-12 — counted from pytest's own result line. This counted `^SKIPPED ` LINES, and with
+# -rs pytest groups skips that share a reason ("SKIPPED [16] ...: QR is not a supported path"),
+# so a run with 71 skips reported "35 test(s) SKIPPED".
+_RESULT_LINE=$(sed 's/\x1b\[[0-9;]*m//g' "$PYTEST_LOG" | grep -aE "^=+ .*(passed|failed|error).* in [0-9.]+s" | tail -1)
+SKIPPED=$(echo "$_RESULT_LINE" | grep -oE "[0-9]+ skipped" | grep -oE "[0-9]+")
+PASSED_N=$(echo "$_RESULT_LINE" | grep -oE "[0-9]+ passed" | grep -oE "[0-9]+")
+SKIPPED=${SKIPPED:-0}; PASSED_N=${PASSED_N:-0}
 if [ "${SKIPPED:-0}" -gt 0 ]; then
     echo -e "${YELLOW}[!] ${SKIPPED} test(s) SKIPPED — unanswered, not passed:${NC}"
     grep -E "^SKIPPED " "$PYTEST_LOG" | sed 's/^/      /'
@@ -698,6 +705,9 @@ fi
 echo "──────────────────────────────────────────────────────────"
 if [ $OVERALL_EXIT -eq 0 ]; then
     echo -e "${GREEN}${BOLD}✓ All checks passed.${NC}"
+    # The skip count belongs on the line people read, not only in the stage output above:
+    # a skip is a question the run did not answer.
+    echo -e "  pytest: ${PASSED_N} passed · ${YELLOW}${SKIPPED} skipped — unanswered, not passed${NC}"
 else
     echo -e "${RED}${BOLD}✗ One or more checks FAILED — fix errors before committing.${NC}"
 fi

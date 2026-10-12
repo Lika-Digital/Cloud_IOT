@@ -1,6 +1,6 @@
 fastapi==0.115.0
 starlette>=0.37.2,<0.42.0
-PyJWT==2.9.0
+PyJWT==2.15.0   # 2026-10-12 security series — was 2.9.0 (16 advisories on the NUC; see the block at the end)
 uvicorn==0.30.6
 paho-mqtt==2.1.0
 sqlalchemy==2.0.35
@@ -54,7 +54,7 @@ aiosqlite==0.20.0
 # that the failed install had touched nothing. Same check, opposite sign, and which one
 # applies depends on what is being proved. See docs/engineering_notes.md.
 pydantic>=2.9,<3
-pydantic-settings>=2.5,<3
+pydantic-settings>=2.14.2,<3   # 2026-10-12 security series — floor raised for CVE-2026-58203
 email-validator==2.2.0
 # ── scikit-learn: RANGE, UNVERIFIED LOCALLY — DO NOT READ THIS LIKE THE TWO ABOVE ──
 #
@@ -112,7 +112,7 @@ scikit-learn>=1.5,<2
 # satisfies it and does nothing, instead of failing on every upgrade. Verified
 # against the full backend suite on 2.1.2, 2.4.6 and 2.5.3 — 675 passed on each.
 numpy>=2.1,<3
-python-dotenv==1.0.1
+python-dotenv==1.2.2   # 2026-10-12 security series — was 1.0.1 (PYSEC-2026-2270)
 websockets==13.1
 httpx==0.27.2
 requests==2.32.3
@@ -135,7 +135,7 @@ requests==2.32.3
 reportlab==4.2.5
 zeroconf==0.132.2
 pysnmp==6.2.6
-Pillow>=10.0.0
+Pillow>=12.3.0   # 2026-10-12 security series — floor raised; the NUC had 12.2.0 (13 advisories)
 python-multipart>=0.0.9
 slowapi==0.1.9
 qrcode[pil]==8.0
@@ -147,3 +147,21 @@ tzdata>=2024.1
 # Optional — required for YOLO ship detection (needs 64-bit Python + CUDA recommended)
 # ultralytics==8.3.0
 # opencv-python-headless==4.10.0.84
+
+# ── 2026-10-12 SECURITY SERIES — measured on the NUC, not on dev ─────────────────────────
+#
+# pip-audit run against the NUC's own `pip freeze` (--no-deps --disable-pip): 55 distinct
+# advisories in 12 packages. This series takes the ones a fix exists for within the same
+# major version AND the owner approved as security work. The three below are TRANSITIVE —
+# nothing here pinned them, so they are listed as floors to make the resolver move them.
+#
+#   NOT in this series, deliberately — do not read them as closed vulnerabilities:
+#     starlette / fastapi  the only reachable exposure (multipart DoS, 1943/1941). Needs a
+#                          newer FastAPI than 0.115.0: its own branch, full gate + Playwright.
+#                          Interim mitigation: a request-body size limit at nginx.
+#     zeroconf             17 minor versions for ~5 s of admin-triggered exposure: own run.
+#     cryptography, requests  NOT AFFECTED per analysis (we use neither PKCS7 decrypt nor
+#                          .netrc). If they are raised, it is hygiene, and named so.
+urllib3>=2.8.0
+anyio>=4.14.2
+pyasn1>=0.6.4

@@ -1760,6 +1760,24 @@ async def _maybe_auto_open_valve(pedestal_id: int, valve_id: int, cabinet_id: st
                         pedestal_id, valve_id)
             return
 
+        # 0a. 2026-10-12 (D6.1) — WITH AN ERP, A VALVE NEVER OPENS ITSELF.
+        #
+        # In MODE 1 water is opened by the ERP: POST /api/nfc/scan, then water/{V}/cmd
+        # activate, and the session belongs to whoever scanned. This path opened the valve
+        # after every diagnostic response with no scan and no customer, so turning smart mode
+        # on for an NFC test would have started water flowing to nobody. ValveConfig.auto_activate
+        # is 1 on both valves of cabinet 1 (checked 2026-10-12) and is IGNORED in this mode — the
+        # flag describes MODE 2, where the pedestal has no ERP to ask.
+        #
+        # Gated on the mode, not on erp_api_key being set: a missing key must not silently turn
+        # auto-open back on. MODE 1 is the default, so this fails safe.
+        from ..config import settings
+        if not settings.nfc_direct_client_mode:
+            logger.info("[ValveAutoOpen] pedestal=%d valve=%d SKIPPED: ERP mode (MODE 1) — a "
+                        "valve opens only on an ERP command after an NFC scan",
+                        pedestal_id, valve_id)
+            return
+
         cfg = db.query(ValveConfig).filter(
             ValveConfig.pedestal_id == pedestal_id,
             ValveConfig.valve_id == valve_id,

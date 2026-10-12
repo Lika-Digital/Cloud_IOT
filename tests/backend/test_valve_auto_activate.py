@@ -16,6 +16,8 @@ Test IDs:
             (cooldown guard)
   TC-VA-06  default ValveConfig.auto_activate is TRUE on first discovery
   TC-VA-07  config endpoints: GET returns default true, PATCH persists override
+  TC-VA-08  ERP mode (MODE 1): NO valve auto-opens, even with smart mode ON,
+            auto_activate=1 on both valves and both sensors ok (D6.1, 2026-10-12)
 """
 from __future__ import annotations
 
@@ -96,8 +98,15 @@ def _ensure_cabinet_registered() -> int:
     return pid
 
 
-def _publish(topic: str, payload: dict) -> tuple[list[dict], list[tuple[str, str]]]:
-    """Run handle_message for a topic+payload; return (ws_broadcasts, mqtt_publishes)."""
+def _publish(topic: str, payload: dict, *, direct_client_mode: bool = True,
+             ) -> tuple[list[dict], list[tuple[str, str]]]:
+    """Run handle_message for a topic+payload; return (ws_broadcasts, mqtt_publishes).
+
+    `direct_client_mode` defaults to True (MODE 2) because since 2026-10-12 valve auto-open
+    exists ONLY there — with an ERP a valve never opens itself (TC-VA-08). TC-VA-01..05 test
+    the auto-open guards, so they run in the only mode where auto-open is reachable.
+    """
+    from app.config import settings
     broadcasts: list[dict] = []
     publishes: list[tuple[str, str]] = []
 
@@ -112,6 +121,7 @@ def _publish(topic: str, payload: dict) -> tuple[list[dict], list[tuple[str, str
         patch("app.services.mqtt_handlers.SessionLocal", _TestSession),
         patch("app.services.mqtt_handlers.ws_manager.broadcast", side_effect=capture_broadcast),
         patch("app.services.mqtt_client.mqtt_service.publish", side_effect=capture_publish),
+        patch.object(settings, "nfc_direct_client_mode", direct_client_mode),
     ):
         asyncio.run(handle_message(topic, json.dumps(payload)))
 
@@ -277,6 +287,30 @@ def test_post_diag_skips_valve_within_manual_stop_cooldown():
     _broadcasts2, publishes2 = _publish("opta/diagnostic", _build_diag_payload(CABINET, v1_ok=True, v2_ok=True))
     v1_publishes_post = [p for p in publishes2 if p[0] == "opta/cmd/water/V1"]
     assert len(v1_publishes_post) == 1, "V1 past 10-min cooldown — must publish activate"
+
+
+# ── TC-VA-08 ──────────────────────────────────────────────────────────────────
+
+def test_erp_mode_never_auto_opens_a_valve():
+    """D6.1 — with an ERP, water opens only on the ERP's command after an NFC scan.
+
+    The exact configuration of cabinet 1 on 2026-10-12: auto_activate=1 on both valves,
+    dormant only because smart mode was off. Smart mode has to be ON for the NFC test, which
+    is the moment this path would have started water flowing to nobody.
+    """
+    pid = _ensure_cabinet_registered()
+    _seed_valve_config(pid, 1, auto_activate=True)
+    _seed_valve_config(pid, 2, auto_activate=True)
+
+    _broadcasts, publishes = _publish(
+        "opta/diagnostic", _build_diag_payload(CABINET, v1_ok=True, v2_ok=True),
+        direct_client_mode=False,
+    )
+
+    valve_publishes = [p for p in publishes if p[0].startswith("opta/cmd/water/")]
+    assert valve_publishes == [], (
+        f"a valve was opened with no NFC scan and no ERP command in ERP mode: {valve_publishes}"
+    )
 
 
 # ── TC-VA-06 ──────────────────────────────────────────────────────────────────

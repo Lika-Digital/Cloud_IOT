@@ -2,6 +2,7 @@
 Separate SQLAlchemy engine and session for users.db.
 Stored in backend/data/ to keep user data isolated from pedestal.db.
 """
+import os
 from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
@@ -9,7 +10,11 @@ from sqlalchemy.orm import sessionmaker, DeclarativeBase
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-USER_DB_URL = f"sqlite:///{DATA_DIR / 'users.db'}"
+# USER_DATABASE_URL exists for the test suite ONLY and is unset in production. Without it the
+# app's own engine always opened backend/data/users.db, so code that opens UserSessionLocal() by
+# hand read the developer's real file under pytest (found 2026-10-12, tests/backend/
+# test_test_isolation.py). pedestal.db has had the same knob all along: settings.database_url.
+USER_DB_URL = os.environ.get("USER_DATABASE_URL") or f"sqlite:///{DATA_DIR / 'users.db'}"
 
 user_engine = create_engine(
     USER_DB_URL,

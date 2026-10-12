@@ -28,6 +28,13 @@ os.environ.setdefault("MQTT_BROKER_HOST", "localhost")
 # wipes it per test — so a second concurrent run deleted the first run's reports mid-test.
 from _test_paths import TEST_DIR, TEST_DB, TEST_USER_DB, REPORTS_DIR as _TEST_REPORTS_DIR  # noqa: E402
 os.environ.setdefault("REPORTS_DIR", _TEST_REPORTS_DIR)
+# 2026-10-12 — the app's OWN engines point at the per-run test databases. The dependency
+# overrides below reach only routes that take get_db / get_user_db; app code that opens
+# SessionLocal() / UserSessionLocal() by hand used the real engines: 5 tests reached the real
+# backend/data/users.db, 223 reached ./pedestal.db (a stray file in the repo root). Set here,
+# before anything imports the app. Proof: test_test_isolation.py.
+os.environ.setdefault("DATABASE_URL", TEST_DB)
+os.environ.setdefault("USER_DATABASE_URL", TEST_USER_DB)
 
 # ── Test DB URLs (file-based so cross-module fixtures share state) ────────────
 # Per-run, from _test_paths — see its docstring for the concurrent-run race this closes.

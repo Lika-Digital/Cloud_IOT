@@ -135,44 +135,55 @@ def _clear(pid: int) -> None:
         db.close()
 
 
+# D6.1 (2026-10-12): the cabinet keeps no tag registry; the ERP resolves a tag and calls /scan
+# with {cabinet_id, outlet, erp_ref}. These two helpers keep every test below reading as
+# before: `_provision` now only records which outlet a test's "tag" stands for (it is the
+# ERP's mapping, held by the test), and `_scan` sends the new body. The /scan rules under test
+# — in use vs held, smart mode, liveness, actionable messages — are unchanged.
+_ERP_MAP: dict[str, tuple[str, str]] = {}
+
+
 def _provision(client, auth_headers, tag: str, socket: str = "Q1",
                cabinet: str = CAB) -> None:
-    r = client.post("/api/nfc/tags", headers=auth_headers,
-                    json={"cabinet_id": cabinet, "socket_id": socket, "nfc_tag_id": tag})
-    assert r.status_code == 200, r.text
+    _ERP_MAP[tag] = (cabinet, socket)
 
 
 def _scan(client, tag: str) -> "object":
+    cabinet, outlet = _ERP_MAP[tag]
     return client.post("/api/nfc/scan", headers=_erp(),
-                       json={"nfc_tag_id": tag, "user_id": "erp-scan-errors"})
+                       json={"cabinet_id": cabinet, "outlet": outlet,
+                             "erp_ref": "erp-scan-errors"})
 
 
 # ═══ TC-NFCE-01 ══════════════════════════════════════════════════════════════
 
-def test_tc_nfce_01_unknown_tag_vs_unresolvable_pedestal(client, auth_headers, scan_pid):
-    """A tag nobody registered, and a tag registered to a cabinet we do not know.
+def test_tc_nfce_01_unknown_cabinet_and_invalid_outlet(client, auth_headers, scan_pid):
+    """D6.1 (2026-10-12) — the caller names the cabinet and the outlet now.
 
-    These shared a status AND a message, so a provisioning fault on our side was
-    indistinguishable from a customer presenting a random card.
+    Was "unknown tag (404) vs tag registered to an unknown cabinet (500)". With no registry
+    there is no tag to be unknown and no provisioning of ours to be wrong: an unknown cabinet
+    is the CALLER'S error (404), and an outlet that is not exactly Q1..Q4 / V1..V2 is 400 —
+    including a bare number, which cannot say whether it means socket 1 or valve 1.
     """
     _clear(scan_pid)
 
-    unknown = _scan(client, "NEVER-PROVISIONED")
-    assert unknown.status_code == 404, unknown.text
+    def scan(body):
+        return client.post("/api/nfc/scan", headers=_erp(),
+                           json={"erp_ref": "erp-scan-errors", **body})
 
-    # A tag pointing at a cabinet with no pedestal row — our provisioning error.
-    _provision(client, auth_headers, "GHOST-TAG", "Q1", cabinet="GHOST_CAB")
-    ghost = _scan(client, "GHOST-TAG")
+    ghost = scan({"cabinet_id": "GHOST_CAB", "outlet": "Q1"})
+    assert ghost.status_code == 404, ghost.text
+    assert "GHOST_CAB" in ghost.json()["detail"]
 
-    assert ghost.status_code == 500, (
-        f"a tag registered to an unknown cabinet returned {ghost.status_code}; it is a "
-        f"server-side inconsistency, not an unknown tag"
-    )
-    assert ghost.json()["detail"] != unknown.json()["detail"], (
-        "the two faults still share a message, so they remain indistinguishable:\n"
-        f"  unknown tag: {unknown.json()['detail']}\n"
-        f"  bad mapping: {ghost.json()['detail']}"
-    )
+    for bad in ("1", "Q5", "V3", "q1", "W1"):
+        r = scan({"cabinet_id": CAB, "outlet": bad})
+        # 422 for "1": the body's 2-character minimum refuses it before the vocabulary does.
+        assert r.status_code in (400, 422), f"outlet {bad!r} was accepted: {r.status_code} {r.text}"
+
+    old_body = client.post("/api/nfc/scan", headers=_erp(),
+                           json={"nfc_tag_id": "OLD-TAG", "user_id": "erp-scan-errors"})
+    assert old_body.status_code == 422, (
+        "the pre-D6.1 body {nfc_tag_id, user_id} must be refused, not half-understood")
 
 
 # ═══ TC-NFCE-02 ══════════════════════════════════════════════════════════════
@@ -341,11 +352,14 @@ def test_tc_nfce_08_every_refusal_is_actionable(client, auth_headers, scan_pid):
 
     collected = []
 
-    _clear(scan_pid)
-    collected.append(_scan(client, "STILL-UNKNOWN"))            # 404
-
-    _provision(client, auth_headers, "ACT-GHOST", "Q1", cabinet="GHOST_CAB")
-    collected.append(_scan(client, "ACT-GHOST"))                # 500
+    # D6.1 (2026-10-12): an unknown cabinet or a malformed outlet is now the ERP's own
+    # integration error (404/400), which the ERP translates for its customer — the cabinet no
+    # longer resolves tags, so it has nothing to say to a customer about one. The refusals a
+    # customer can still meet through the ERP are below. (Were: unknown tag 404, ghost 500.)
+    # _clear(scan_pid)
+    # collected.append(_scan(client, "STILL-UNKNOWN"))            # 404
+    # _provision(client, auth_headers, "ACT-GHOST", "Q1", cabinet="GHOST_CAB")
+    # collected.append(_scan(client, "ACT-GHOST"))                # 500
 
     _clear(scan_pid)
     _provision(client, auth_headers, "ACT-SMART", "Q1")

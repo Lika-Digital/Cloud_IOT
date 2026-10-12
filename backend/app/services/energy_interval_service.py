@@ -60,7 +60,8 @@ def derive_origin(session: SessionModel) -> str:
     """Billing attribution label for an interval row."""
     if session.customer_id:
         return "customer"
-    if session.nfc_user_id:
+    # D6.1: erp_ref is the NFC attribution now; nfc_user_id still labels older sessions.
+    if session.erp_ref or session.nfc_user_id:
         return "nfc"
     if (session.origin or "") == "standalone":
         return "berth-marina"
@@ -184,7 +185,8 @@ def flush_session_interval(
         session_id=session.id,
         origin=derive_origin(session),
         customer_id=session.customer_id,
-        nfc_user_id=session.nfc_user_id,
+        # D6.1: the ledger column is still named nfc_user_id; it now carries the erp_ref.
+        nfc_user_id=session.erp_ref or session.nfc_user_id,
         berth_ref=_berth_ref(db, session.pedestal_id),
         interval_start=start,
         interval_end=now,

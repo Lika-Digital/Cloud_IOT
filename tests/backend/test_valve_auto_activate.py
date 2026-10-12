@@ -16,6 +16,8 @@ Test IDs:
             (cooldown guard)
   TC-VA-06  default ValveConfig.auto_activate is TRUE on first discovery
   TC-VA-07  config endpoints: GET returns default true, PATCH persists override
+  D6.1 (2026-10-12): TC-VA-01..05 are SKIPPED — auto-open existed only in MODE 2, which is
+            commented out. TC-VA-08 and the smart-mode-off test still run.
   TC-VA-08  ERP mode (MODE 1): NO valve auto-opens, even with smart mode ON,
             auto_activate=1 on both valves and both sensors ok (D6.1, 2026-10-12)
 """
@@ -98,15 +100,8 @@ def _ensure_cabinet_registered() -> int:
     return pid
 
 
-def _publish(topic: str, payload: dict, *, direct_client_mode: bool = True,
-             ) -> tuple[list[dict], list[tuple[str, str]]]:
-    """Run handle_message for a topic+payload; return (ws_broadcasts, mqtt_publishes).
-
-    `direct_client_mode` defaults to True (MODE 2) because since 2026-10-12 valve auto-open
-    exists ONLY there — with an ERP a valve never opens itself (TC-VA-08). TC-VA-01..05 test
-    the auto-open guards, so they run in the only mode where auto-open is reachable.
-    """
-    from app.config import settings
+def _publish(topic: str, payload: dict) -> tuple[list[dict], list[tuple[str, str]]]:
+    """Run handle_message for a topic+payload; return (ws_broadcasts, mqtt_publishes)."""
     broadcasts: list[dict] = []
     publishes: list[tuple[str, str]] = []
 
@@ -121,7 +116,6 @@ def _publish(topic: str, payload: dict, *, direct_client_mode: bool = True,
         patch("app.services.mqtt_handlers.SessionLocal", _TestSession),
         patch("app.services.mqtt_handlers.ws_manager.broadcast", side_effect=capture_broadcast),
         patch("app.services.mqtt_client.mqtt_service.publish", side_effect=capture_publish),
-        patch.object(settings, "nfc_direct_client_mode", direct_client_mode),
     ):
         asyncio.run(handle_message(topic, json.dumps(payload)))
 
@@ -179,6 +173,7 @@ def _build_diag_payload(cabinet_id: str, v1_ok: bool, v2_ok: bool) -> dict:
 
 # ── TC-VA-01 ──────────────────────────────────────────────────────────────────
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): valve auto-open existed only in MODE 2, which is commented out — in ERP mode a valve never opens itself (TC-VA-08)")
 def test_post_diag_fires_activate_when_config_true_and_sensor_ok():
     pid = _ensure_cabinet_registered()
     _seed_valve_config(pid, 1, auto_activate=True)
@@ -198,6 +193,7 @@ def test_post_diag_fires_activate_when_config_true_and_sensor_ok():
 
 # ── TC-VA-02 ──────────────────────────────────────────────────────────────────
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): valve auto-open existed only in MODE 2, which is commented out — in ERP mode a valve never opens itself (TC-VA-08)")
 def test_post_diag_skips_valve_with_auto_activate_false():
     pid = _ensure_cabinet_registered()
     _seed_valve_config(pid, 1, auto_activate=False)
@@ -234,6 +230,7 @@ def test_post_diag_skips_all_valves_when_smart_mode_off():
 
 # ── TC-VA-03 ──────────────────────────────────────────────────────────────────
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): valve auto-open existed only in MODE 2, which is commented out — in ERP mode a valve never opens itself (TC-VA-08)")
 def test_post_diag_skips_valve_with_active_session():
     pid = _ensure_cabinet_registered()
     _seed_valve_config(pid, 1, auto_activate=True)
@@ -250,6 +247,7 @@ def test_post_diag_skips_valve_with_active_session():
 
 # ── TC-VA-04 ──────────────────────────────────────────────────────────────────
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): valve auto-open existed only in MODE 2, which is commented out — in ERP mode a valve never opens itself (TC-VA-08)")
 def test_post_diag_only_fires_valves_whose_sensor_is_ok():
     pid = _ensure_cabinet_registered()
     _seed_valve_config(pid, 1, auto_activate=True)
@@ -265,6 +263,7 @@ def test_post_diag_only_fires_valves_whose_sensor_is_ok():
 
 # ── TC-VA-05 ──────────────────────────────────────────────────────────────────
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): valve auto-open existed only in MODE 2, which is commented out — in ERP mode a valve never opens itself (TC-VA-08)")
 def test_post_diag_skips_valve_within_manual_stop_cooldown():
     pid = _ensure_cabinet_registered()
     _seed_valve_config(pid, 1, auto_activate=True)
@@ -304,7 +303,6 @@ def test_erp_mode_never_auto_opens_a_valve():
 
     _broadcasts, publishes = _publish(
         "opta/diagnostic", _build_diag_payload(CABINET, v1_ok=True, v2_ok=True),
-        direct_client_mode=False,
     )
 
     valve_publishes = [p for p in publishes if p[0].startswith("opta/cmd/water/")]

@@ -570,11 +570,13 @@ def test_tc_pwr_09_q4s_real_current_opens_no_session():
 # whatever creates them: a figure we cannot attribute to a customer does not go to the ERP.
 
 class _Sess:
-    def __init__(self, sid=1, customer_id=None, nfc_user_id=None, origin="standalone"):
+    def __init__(self, sid=1, customer_id=None, nfc_user_id=None, origin="standalone",
+                 erp_ref=None):
         self.id = sid
         self.pedestal_id = 3
         self.customer_id = customer_id
         self.nfc_user_id = nfc_user_id
+        self.erp_ref = erp_ref
         self.origin = origin
         self.socket_id = 2
         self.type = "electricity"
@@ -586,10 +588,15 @@ class _Sess:
      "a standalone session belongs to nobody — this is the live case"),
     (_Sess(customer_id=None, nfc_user_id=None, origin="operator"), False,
      "an operator-started session has no one for the ERP to bill either"),
-    (_Sess(customer_id=7, nfc_user_id=None, origin="customer"), True,
-     "a customer session is attributable"),
-    (_Sess(customer_id=None, nfc_user_id="erp-abc", origin="nfc"), True,
-     "an NFC session is attributable by the id the ERP reconciles on"),
+    # D6.1 (2026-10-12): the ERP's own reference is the attribution. A session carrying only
+    # a legacy customer_id or nfc_user_id would reach the ERP with erp_ref null — a figure
+    # with nobody it can bill — so it is now withheld too.
+    (_Sess(customer_id=7, nfc_user_id=None, origin="customer"), False,
+     "a legacy customer-app session has no erp_ref, so nothing the ERP can bill"),
+    (_Sess(customer_id=None, nfc_user_id="erp-abc", origin="nfc"), False,
+     "a pre-D6.1 NFC session has no erp_ref either"),
+    (_Sess(erp_ref="erp-abc", origin="nfc"), True,
+     "a session carrying the ERP's reference is attributable"),
 ])
 def test_tc_pwr_10_only_attributable_sessions_reach_the_erp(sess, reportable, why):
     from app.services.erp_webhook import is_erp_reportable

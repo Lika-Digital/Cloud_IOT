@@ -168,7 +168,8 @@ def test_outlet_activated_attaches_nfc_user(client, mqtt_pid):
     try:
         s = db.query(Session).filter(Session.pedestal_id == mqtt_pid,
                                      Session.socket_id == 1, Session.status == "active").first()
-        assert s is not None and s.nfc_user_id == "erp-attach"
+        # D6.1: the reservation's reference lands in erp_ref, not nfc_user_id.
+        assert s is not None and s.erp_ref == "erp-attach"
     finally:
         db.close()
     _clear(mqtt_pid)
@@ -189,7 +190,7 @@ def _activate_and_watch(mqtt_pid, outlet, nfc_user_id=None):
 
     def _attributed_activate(db, session, *a, **kw):
         if nfc_user_id is not None:
-            session.nfc_user_id = nfc_user_id
+            session.erp_ref = nfc_user_id  # D6.1: erp_ref is the attribution
         return real_activate(db, session, *a, **kw)
 
     with (

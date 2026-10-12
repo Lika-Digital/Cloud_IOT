@@ -10,7 +10,7 @@ Three things close that, and the third is the one that matters:
 
 1. **`sessions.last_reconciled_at`** — stamped when the ERP reads a session as a machine caller.
    Turns "ERP has never looked at this" from an assumption into a fact.
-2. **A divergence view** — sessions with an `nfc_user_id` that ERP has never acknowledged, oldest
+2. **A divergence view** — sessions with an `erp_ref` (D6.1) that ERP has never acknowledged, oldest
    first. Divergence you can see is a problem.
 3. **A silence alarm** — because silence is a problem you *cannot* see.
 
@@ -131,14 +131,15 @@ def _window_start() -> datetime:
 def status_by_pedestal(db: DBSession) -> list[PedestalReconciliation]:
     """Reconciliation state per pedestal that has ERP-attributed sessions.
 
-    Only sessions carrying an `nfc_user_id` count: those are the ones ERP is responsible for
+    Only sessions carrying an `erp_ref` (D6.1; was `nfc_user_id`) count: those are the ones ERP is responsible for
     billing. Operator-started and standalone sessions are ours alone and are not ERP's to
     acknowledge, so including them would invent a backlog that nobody owes.
     """
     cutoff = _window_start()
     rows = (
         db.query(Session)
-        .filter(Session.nfc_user_id.isnot(None))
+        # D6.1: .filter(Session.nfc_user_id.isnot(None))
+        .filter(Session.erp_ref.isnot(None))
         .all()
     )
 
@@ -185,7 +186,8 @@ def divergent_sessions(db: DBSession, limit: int = 200) -> list[dict]:
     rows = (
         db.query(Session)
         .filter(
-            Session.nfc_user_id.isnot(None),
+            # D6.1: Session.nfc_user_id.isnot(None),
+            Session.erp_ref.isnot(None),
             Session.last_reconciled_at.is_(None),
             Session.status != "active",
         )
@@ -198,7 +200,8 @@ def divergent_sessions(db: DBSession, limit: int = 200) -> list[dict]:
             "session_id": s.id,
             "pedestal_id": s.pedestal_id,
             "socket_id": s.socket_id,
-            "nfc_user_id": s.nfc_user_id,
+            # D6.1: "nfc_user_id": s.nfc_user_id,
+            "erp_ref": s.erp_ref,
             "started_at": iso_z(s.started_at),
             "ended_at": iso_z(s.ended_at) if s.ended_at else None,
             "status": s.status,
@@ -214,10 +217,11 @@ async def check_reconciliation_silence() -> None:
     Only that state alarms. IDLE does not, because a quiet marina is not a fault and an alarm
     that fires on quiet gets muted — after which the real one goes unnoticed too.
     """
-    if settings.nfc_direct_client_mode:
-        # MODE 2: there is no ERP to reconcile with. An alarm about ERP silence here would be
-        # noise about a system that does not exist.
-        return
+    # D6.1 (2026-10-12): MODE 2 is commented out; there is always an ERP, so this always runs.
+    # if settings.nfc_direct_client_mode:
+    #     # MODE 2: there is no ERP to reconcile with. An alarm about ERP silence here would be
+    #     # noise about a system that does not exist.
+    #     return
 
     from ..database import SessionLocal
     from .alarm_service import trigger_alarm

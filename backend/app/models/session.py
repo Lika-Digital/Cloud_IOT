@@ -38,6 +38,13 @@ class Session(Base):
     # Integer FK to our local Customer table). NULL for non-NFC sessions.
     nfc_user_id: Mapped[str] = mapped_column(String(128), nullable=True)
 
+    # D6.1 (2026-10-12) — THE ERP'S REFERENCE for whoever this session belongs to. The ERP
+    # owns the customer and the NFC mapping; it sends `erp_ref` on POST /api/nfc/scan and we
+    # store it verbatim — an opaque string, never parsed, never looked up here. It replaces
+    # customer_id / nfc_user_id as the attribution the ERP sees; those columns stay (history
+    # is not rewritten) and are no longer written by the NFC flow. NULL = nobody scanned.
+    erp_ref: Mapped[str] = mapped_column(String(128), nullable=True)
+
     # v3.32 — provenance. NULL for normal control sessions; "standalone" for
     # meter-driven usage records the NUC opens while Smart Mode is OFF (the Opta
     # runs standalone with no control session, but consumption is still logged

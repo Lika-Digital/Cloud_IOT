@@ -128,19 +128,26 @@ def _clear(pid: int) -> None:
         db.close()
 
 
+# D6.1 (2026-10-12): the cabinet keeps no tag registry — the ERP resolves a tag and calls /scan
+# with {cabinet_id, outlet, erp_ref}. `_provision` now only records which outlet a test's tag
+# stands for (the ERP's mapping, held by the test); `_scan` sends the new body. The rules
+# these tests pin — water opens a WATER session, V1 and Q1 never block each other — are
+# properties of the outlet, so they hold unchanged.
+_ERP_MAP: dict[str, str] = {}
+
+
 def _provision(client, auth_headers, tag: str, outlet: str, kind: str = "socket"):
-    return client.post("/api/nfc/tags", headers=auth_headers, json={
-        "cabinet_id": CAB, "socket_id": outlet, "nfc_tag_id": tag, "outlet_type": kind,
-    })
+    _ERP_MAP[tag] = outlet
 
 
 def _scan(client, tag: str, user: str = "erp-six-tag"):
     return client.post("/api/nfc/scan", headers=_erp(),
-                       json={"nfc_tag_id": tag, "user_id": user})
+                       json={"cabinet_id": CAB, "outlet": _ERP_MAP[tag], "erp_ref": user})
 
 
 # ═══ TC-SIX-01 ════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): NFC tag provisioning is commented out — the ERP owns the tag mapping")
 def test_tc_six_01_valve_tag_provisions_with_its_type(client, auth_headers, six_pid):
     """A water outlet gets a tag, and the tag remembers that it is a water outlet.
 
@@ -172,6 +179,7 @@ def test_tc_six_01_valve_tag_provisions_with_its_type(client, auth_headers, six_
 
 # ═══ TC-SIX-02 / TC-SIX-03 ════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): NFC tag provisioning is commented out — the ERP owns the tag mapping")
 def test_tc_six_02_valve_name_declared_as_socket_is_refused(client, auth_headers, six_pid):
     """`V1` with `outlet_type="socket"` must fail, not be quietly corrected to a valve.
 
@@ -201,6 +209,7 @@ def test_tc_six_02_valve_name_declared_as_socket_is_refused(client, auth_headers
         db.close()
 
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): NFC tag provisioning is commented out — the ERP owns the tag mapping")
 def test_tc_six_03_socket_name_declared_as_valve_is_refused(client, auth_headers, six_pid):
     """The reverse: `Q3` with `outlet_type="valve"`. Symmetry is the point."""
     _clear(six_pid)
@@ -225,12 +234,12 @@ def test_tc_six_04_names_this_hardware_does_not_have_are_refused(
     would let two spellings of one outlet hold two different tags.
     """
     _clear(six_pid)
-
-    for kind in ("socket", "valve"):
-        r = _provision(client, auth_headers, f"SIX-BAD-{outlet}-{kind}", outlet, kind)
-        assert r.status_code in (400, 422), (
-            f"outlet {outlet!r} declared as {kind} returned {r.status_code}, not a refusal"
-        )
+    # D6.1 (2026-10-12): the outlet name enters at /scan now, so that is where it is refused.
+    r = client.post("/api/nfc/scan", headers=_erp(),
+                    json={"cabinet_id": CAB, "outlet": outlet, "erp_ref": "erp-six-bad"})
+    assert r.status_code in (400, 422), (
+        f"outlet {outlet!r} returned {r.status_code}, not a refusal: {r.text}"
+    )
 
 
 # ═══ TC-SIX-05 ════════════════════════════════════════════════════════════════
@@ -331,6 +340,7 @@ def test_tc_six_07_same_outlet_in_use_still_blocks(client, auth_headers, six_pid
 
 # ═══ TC-SIX-08 ════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): NFC tag provisioning is commented out — the ERP owns the tag mapping")
 def test_tc_six_08_all_six_outlets_provision_in_one_call(client, auth_headers, six_pid):
     """Save All, with the real cabinet's outlet list.
 
@@ -356,6 +366,7 @@ def test_tc_six_08_all_six_outlets_provision_in_one_call(client, auth_headers, s
     assert by_name["Q1"]["outlet_type"] == "socket"
 
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): NFC tag provisioning is commented out — the ERP owns the tag mapping")
 def test_tc_six_08b_bulk_mismatch_aborts_before_writing_anything(
         client, auth_headers, six_pid):
     """One bad item must not leave the good ones half-applied.
@@ -387,6 +398,7 @@ def test_tc_six_08b_bulk_mismatch_aborts_before_writing_anything(
 
 # ═══ TC-SIX-09 ════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): NFC tag provisioning is commented out — the ERP owns the tag mapping")
 def test_tc_six_09_a_valve_tag_can_be_removed(client, auth_headers, six_pid):
     """The delete path had the same four-socket check, so a water tag could not be un-pointed.
 
@@ -857,7 +869,7 @@ def test_tc_six_13g_the_payload_key_set_is_exactly_the_documented_contract(
     db = _S()
     try:
         ses = Session(pedestal_id=six_pid, socket_id=1, type="electricity", status="active",
-                      started_at=datetime.utcnow(), nfc_user_id="erp-six-keys")
+                      started_at=datetime.utcnow(), erp_ref="erp-six-keys")
         db.add(ses)
         db.commit()
         sid = ses.id
@@ -867,7 +879,8 @@ def test_tc_six_13g_the_payload_key_set_is_exactly_the_documented_contract(
     body = client.get(f"/api/nfc/session/{sid}", headers=_erp()).json()
 
     expected = {
-        "session_id", "cabinet_id", "socket_id", "session_type", "customer_id", "status",
+        # D6.1 (2026-10-12): "customer_id" -> "erp_ref". Still 16 keys.
+        "session_id", "cabinet_id", "socket_id", "session_type", "erp_ref", "status",
         "activated_at", "duration_minutes",
         "energy_kwh", "water_liters",
         "meter_energy_start_kwh", "meter_energy_end_kwh",
@@ -909,6 +922,7 @@ def _site_mode(direct_client: bool, app_ready: bool):
         settings.nfc_direct_client_mode, settings.mobile_app_supports_water_nfc = prev
 
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): the water-tag app-version gate existed only in MODE 2, which is commented out with the tag registry")
 def test_tc_six_14_water_tag_refused_in_mode_2_before_the_app_ships(
         client, auth_headers, six_pid):
     """MODE 2, app not updated: a valve tag is refused, and the reason is actionable."""
@@ -935,6 +949,7 @@ def test_tc_six_14_water_tag_refused_in_mode_2_before_the_app_ships(
         db.close()
 
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): the water-tag app-version gate existed only in MODE 2, which is commented out with the tag registry")
 def test_tc_six_14b_electricity_is_never_gated(client, auth_headers, six_pid):
     """The gate is about water only. Blocking Q1-Q4 would make it a site-wide outage.
 
@@ -950,6 +965,7 @@ def test_tc_six_14b_electricity_is_never_gated(client, auth_headers, six_pid):
     assert r.status_code == 200, r.text
 
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): the water-tag app-version gate existed only in MODE 2, which is commented out with the tag registry")
 def test_tc_six_14c_mode_1_is_exempt_without_setting_the_flag(client, auth_headers, six_pid):
     """MODE 1 needs no flag: the ERP resolves the tag and calls /scan itself.
 
@@ -967,6 +983,7 @@ def test_tc_six_14c_mode_1_is_exempt_without_setting_the_flag(client, auth_heade
     )
 
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): the water-tag app-version gate existed only in MODE 2, which is commented out with the tag registry")
 def test_tc_six_14d_flag_lifts_the_gate(client, auth_headers, six_pid):
     """Once the app is deployed, water provisioning proceeds."""
     _clear(six_pid)
@@ -978,6 +995,7 @@ def test_tc_six_14d_flag_lifts_the_gate(client, auth_headers, six_pid):
     assert r.json()["outlet_type"] == "valve"
 
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): the water-tag app-version gate existed only in MODE 2, which is commented out with the tag registry")
 def test_tc_six_14e_bulk_is_gated_in_the_prepass_not_mid_loop(
         client, auth_headers, six_pid):
     """A batch with a water tag must fail before any of its electricity tags commit.
@@ -1009,6 +1027,7 @@ def test_tc_six_14e_bulk_is_gated_in_the_prepass_not_mid_loop(
         db.close()
 
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): the water-tag app-version gate existed only in MODE 2, which is commented out with the tag registry")
 def test_tc_six_14f_the_gate_lives_at_the_write_site(six_pid):
     """Calling the service directly must be gated too, not just the HTTP routes.
 
@@ -1247,7 +1266,7 @@ def test_tc_six_16_water_sessions_reach_the_erp(six_pid):
         vc.meter_total_l = 300.0
         ses = Session(pedestal_id=six_pid, socket_id=1, type="water", status="completed",
                       started_at=datetime.utcnow(), ended_at=datetime.utcnow(),
-                      water_liters=300.0, nfc_user_id="erp-water-billing")
+                      water_liters=300.0, erp_ref="erp-water-billing")
         db.add(ses)
         db.commit()
 
@@ -1268,7 +1287,7 @@ def test_tc_six_16_water_sessions_reach_the_erp(six_pid):
     assert payload["water_liters"] == 300.0, (
         f"the billable quantity must be in the payload; got {payload.get('water_liters')!r}"
     )
-    assert payload["customer_id"] == "erp-water-billing", (
+    assert payload["erp_ref"] == "erp-water-billing", (
         "the charge must carry whoever scanned the tag"
     )
     assert payload["energy_kwh"] is None, (

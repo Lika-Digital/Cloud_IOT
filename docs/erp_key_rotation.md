@@ -1,5 +1,19 @@
 # ERP API key — blast radius, and the rotation procedure
 
+> **Superseded by D6.1 (2026-10-12).** The ERP is the only owner of the NFC mapping and the
+> customer: `POST /api/nfc/scan` now takes `{cabinet_id, outlet, erp_ref}`, sessions carry
+> `erp_ref`, the tag registry (`/api/nfc/tags*`) and MODE 2 are commented out, and
+> `GET /api/nfc/sessions/by-user` is replaced by `GET /api/nfc/sessions`. Current contract:
+> `docs/erp_session_payload_contract.md`.
+>
+> **The rotation procedure below still applies, and is now more urgent.** With customer tokens
+> gone, the ERP key is the only credential on `/api/nfc/*`: whoever holds it can reserve an
+> outlet for any `erp_ref` and read or stop any session. And since D6.1 a shipped app that
+> still calls `/scan` with the old `{nfc_tag_id, user_id}` body gets 422 — so step 1 (the ERP
+> takes over `/scan`) must be live before this release reaches a cabinet with app users.
+> Route tables and per-customer checks further down describe the pre-D6.1 design.
+
+
 **Date:** 2026-09-29 · **Status:** procedure ready; **execution blocked on a precondition
 with a date** (§3).
 

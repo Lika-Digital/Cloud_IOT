@@ -77,6 +77,12 @@ def _frontend_calls() -> list[tuple[str, str, Path, int]]:
         text = io.open(f, encoding="utf-8").read()
         base = _base_url_for(text)
         for m in _CALL_RE.finditer(text):
+            # A call on a `//` line is commented out and calls nothing. D6.1 (2026-10-12)
+            # comments out the NFC tag API rather than deleting it, and this parser read the
+            # commented lines as live calls to routes that are (correctly) gone.
+            line_start = text.rfind(chr(10), 0, m.start()) + 1
+            if text[line_start:m.start()].lstrip().startswith("//"):
+                continue
             url = m.group("url")
             line = text[:m.start()].count(chr(10)) + 1
             if not url.startswith("/"):

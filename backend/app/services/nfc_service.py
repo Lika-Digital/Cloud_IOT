@@ -15,7 +15,7 @@ Design points (confirmed):
 import logging
 from datetime import datetime, timedelta
 
-from ..models.nfc_tag import NfcTag
+# from ..models.nfc_tag import NfcTag  # D6.1 — registry commented out
 from ..models.nfc_pending_session import NfcPendingSession
 from ..time_utils import iso_z
 
@@ -24,47 +24,49 @@ logger = logging.getLogger(__name__)
 PENDING_TTL_MINUTES = 5
 
 
-class DuplicateNfcTagError(Exception):
-    """Raised when an nfc_tag_id is already active on a different socket."""
+# ── D6.1 (2026-10-12): NFC tag registry COMMENTED OUT, not deleted. The ERP owns the
+# tag→outlet mapping; /api/nfc/scan names the outlet directly. ──────────────────
+# class DuplicateNfcTagError(Exception):
+#     """Raised when an nfc_tag_id is already active on a different socket."""
 
-    def __init__(self, cabinet_id: str, socket_id: str):
-        self.cabinet_id = cabinet_id
-        self.socket_id = socket_id
-        super().__init__(
-            f"NFC tag already provisioned to {cabinet_id} / {socket_id}"
-        )
-
-
-# ── Provisioning (admin) ──────────────────────────────────────────────────────
-
-def get_active_tag_for_socket(db, cabinet_id: str, socket_id: str) -> NfcTag | None:
-    return (
-        db.query(NfcTag)
-        .filter(
-            NfcTag.cabinet_id == cabinet_id,
-            NfcTag.socket_id == socket_id,
-            NfcTag.is_active.is_(True),
-        )
-        .first()
-    )
+#     def __init__(self, cabinet_id: str, socket_id: str):
+#         self.cabinet_id = cabinet_id
+#         self.socket_id = socket_id
+#         super().__init__(
+#             f"NFC tag already provisioned to {cabinet_id} / {socket_id}"
+#         )
 
 
-def get_active_tag_by_id(db, nfc_tag_id: str) -> NfcTag | None:
-    return (
-        db.query(NfcTag)
-        .filter(NfcTag.nfc_tag_id == nfc_tag_id, NfcTag.is_active.is_(True))
-        .first()
-    )
+# # ── Provisioning (admin) ──────────────────────────────────────────────────────
+
+# def get_active_tag_for_socket(db, cabinet_id: str, socket_id: str) -> NfcTag | None:
+#     return (
+#         db.query(NfcTag)
+#         .filter(
+#             NfcTag.cabinet_id == cabinet_id,
+#             NfcTag.socket_id == socket_id,
+#             NfcTag.is_active.is_(True),
+#         )
+#         .first()
+#     )
 
 
-def list_tags(db, cabinet_id: str) -> list[NfcTag]:
-    """Active tags for a cabinet, ordered by socket id."""
-    return (
-        db.query(NfcTag)
-        .filter(NfcTag.cabinet_id == cabinet_id, NfcTag.is_active.is_(True))
-        .order_by(NfcTag.socket_id)
-        .all()
-    )
+# def get_active_tag_by_id(db, nfc_tag_id: str) -> NfcTag | None:
+#     return (
+#         db.query(NfcTag)
+#         .filter(NfcTag.nfc_tag_id == nfc_tag_id, NfcTag.is_active.is_(True))
+#         .first()
+#     )
+
+
+# def list_tags(db, cabinet_id: str) -> list[NfcTag]:
+#     """Active tags for a cabinet, ordered by socket id."""
+#     return (
+#         db.query(NfcTag)
+#         .filter(NfcTag.cabinet_id == cabinet_id, NfcTag.is_active.is_(True))
+#         .order_by(NfcTag.socket_id)
+#         .all()
+#     )
 
 
 OUTLET_SOCKET = "socket"
@@ -94,43 +96,45 @@ def outlet_type_for(outlet_name: str) -> str | None:
     return None
 
 
-class WaterTagBlockedByAppVersion(RuntimeError):
-    """A valve tag was refused because this site's mobile app cannot handle one yet.
+# ── D6.1 (2026-10-12): NFC tag registry COMMENTED OUT, not deleted. The ERP owns the
+# tag→outlet mapping; /api/nfc/scan names the outlet directly. ──────────────────
+# class WaterTagBlockedByAppVersion(RuntimeError):
+#     """A valve tag was refused because this site's mobile app cannot handle one yet.
 
-    Raised at the write site rather than checked in the router, so every path that provisions
-    a tag is covered — the single endpoint, the bulk endpoint, and anything added later. A
-    route-level check protects the routes that existed when it was written.
-    """
+#     Raised at the write site rather than checked in the router, so every path that provisions
+#     a tag is covered — the single endpoint, the bulk endpoint, and anything added later. A
+#     route-level check protects the routes that existed when it was written.
+#     """
 
 
-def assert_valve_provisioning_allowed() -> None:
-    """Refuse a water tag on a MODE 2 site whose app has not been updated.
+# def assert_valve_provisioning_allowed() -> None:
+#     """Refuse a water tag on a MODE 2 site whose app has not been updated.
 
-    The failure this prevents is not a degraded experience. An app build from before v3.43
-    cannot resolve a `V1` outlet label, and its session-adoption check treats an unresolved
-    outlet as "matches anything" — so a customer who scans a water tag adopts the next
-    electricity session broadcast under their user id. In MODE 2 the pedestal IS the billing
-    system, so that is someone else's consumption on their invoice.
+#     The failure this prevents is not a degraded experience. An app build from before v3.43
+#     cannot resolve a `V1` outlet label, and its session-adoption check treats an unresolved
+#     outlet as "matches anything" — so a customer who scans a water tag adopts the next
+#     electricity session broadcast under their user id. In MODE 2 the pedestal IS the billing
+#     system, so that is someone else's consumption on their invoice.
 
-    MODE 1 is checked first and exempted outright: the ERP resolves the tag and calls /scan
-    itself, so no app version is in the path. Asking a mode-1 site to set a flag about a
-    dependency it does not have is how a gate gets switched on to make an error go away.
-    """
-    from ..config import settings
+#     MODE 1 is checked first and exempted outright: the ERP resolves the tag and calls /scan
+#     itself, so no app version is in the path. Asking a mode-1 site to set a flag about a
+#     dependency it does not have is how a gate gets switched on to make an error go away.
+#     """
+#     from ..config import settings
 
-    if not getattr(settings, "nfc_direct_client_mode", False):
-        return
-    if getattr(settings, "mobile_app_supports_water_nfc", False):
-        return
-    raise WaterTagBlockedByAppVersion(
-        "Water NFC tags cannot be provisioned at this site yet. This marina runs in direct-"
-        "client mode (no ERP), where the pedestal is the billing system, and a mobile app "
-        "build from before v3.43 cannot tell a water outlet from an electricity socket — a "
-        "customer scanning a water tag would be shown, and charged for, another customer's "
-        "electricity session. Deploy the updated app to customers, then set "
-        "MOBILE_APP_SUPPORTS_WATER_NFC=true in the backend .env and restart. Electricity "
-        "tags (Q1-Q4) are unaffected and can be provisioned now."
-    )
+#     if not getattr(settings, "nfc_direct_client_mode", False):
+#         return
+#     if getattr(settings, "mobile_app_supports_water_nfc", False):
+#         return
+#     raise WaterTagBlockedByAppVersion(
+#         "Water NFC tags cannot be provisioned at this site yet. This marina runs in direct-"
+#         "client mode (no ERP), where the pedestal is the billing system, and a mobile app "
+#         "build from before v3.43 cannot tell a water outlet from an electricity socket — a "
+#         "customer scanning a water tag would be shown, and charged for, another customer's "
+#         "electricity session. Deploy the updated app to customers, then set "
+#         "MOBILE_APP_SUPPORTS_WATER_NFC=true in the backend .env and restart. Electricity "
+#         "tags (Q1-Q4) are unaffected and can be provisioned now."
+#     )
 
 
 def session_type_for(outlet_type: str) -> str:
@@ -142,108 +146,110 @@ def session_type_for(outlet_type: str) -> str:
     return "water" if outlet_type == OUTLET_VALVE else "electricity"
 
 
-def provision_tag(db, nfc_tag_id: str, cabinet_id: str, socket_id: str,
-                  provisioned_by: str | None = None,
-                  outlet_type: str = OUTLET_SOCKET) -> NfcTag:
-    """Map an NFC tag to a socket, replacing any previous active tag on that
-    socket. Raises DuplicateNfcTagError if the tag is already active elsewhere.
+# ── D6.1 (2026-10-12): NFC tag registry COMMENTED OUT, not deleted. The ERP owns the
+# tag→outlet mapping; /api/nfc/scan names the outlet directly. ──────────────────
+# def provision_tag(db, nfc_tag_id: str, cabinet_id: str, socket_id: str,
+#                   provisioned_by: str | None = None,
+#                   outlet_type: str = OUTLET_SOCKET) -> NfcTag:
+#     """Map an NFC tag to a socket, replacing any previous active tag on that
+#     socket. Raises DuplicateNfcTagError if the tag is already active elsewhere.
 
-    `provisioned_by` is REQUIRED from v3.43. The column stays nullable for rows written before
-    then, but a new unattributed mapping is refused: this decides which socket a customer's tap
-    energises, and every path that creates one must be able to answer who did it. It is a
-    ValueError rather than a silent default because a caller that has no actor has a bug, and
-    writing "(unknown)" would hide it.
-    """
-    nfc_tag_id = (nfc_tag_id or "").strip()
-    if not nfc_tag_id:
-        raise ValueError("nfc_tag_id is required")
-    if outlet_type not in VALID_OUTLETS:
-        raise ValueError(
-            f"outlet_type must be one of {sorted(VALID_OUTLETS)}, got {outlet_type!r}"
-        )
-    implied = outlet_type_for(socket_id)
-    if implied is None:
-        raise ValueError(
-            f"{socket_id!r} is not an outlet this hardware has. Expected one of "
-            f"{list(VALID_OUTLETS[outlet_type])} for a {outlet_type}."
-        )
-    if implied != outlet_type:
-        # Refused rather than silently corrected: a caller that says "valve" while naming Q3
-        # has a bug, and choosing one of the two for them would hide which one.
-        raise ValueError(
-            f"{socket_id!r} is a {implied}, but outlet_type says {outlet_type!r}. A water tag "
-            f"must never be provisioned against an electricity socket, or the reverse."
-        )
-    if outlet_type == OUTLET_VALVE:
-        # Checked AFTER the name/type agreement, so a caller who mislabelled a socket is told
-        # that rather than being handed an app-version message about a valve they did not name.
-        assert_valve_provisioning_allowed()
-    if not (provisioned_by or "").strip():
-        raise ValueError(
-            "provisioned_by is required — an NFC mapping must be attributable to the admin "
-            "who created it"
-        )
+#     `provisioned_by` is REQUIRED from v3.43. The column stays nullable for rows written before
+#     then, but a new unattributed mapping is refused: this decides which socket a customer's tap
+#     energises, and every path that creates one must be able to answer who did it. It is a
+#     ValueError rather than a silent default because a caller that has no actor has a bug, and
+#     writing "(unknown)" would hide it.
+#     """
+#     nfc_tag_id = (nfc_tag_id or "").strip()
+#     if not nfc_tag_id:
+#         raise ValueError("nfc_tag_id is required")
+#     if outlet_type not in VALID_OUTLETS:
+#         raise ValueError(
+#             f"outlet_type must be one of {sorted(VALID_OUTLETS)}, got {outlet_type!r}"
+#         )
+#     implied = outlet_type_for(socket_id)
+#     if implied is None:
+#         raise ValueError(
+#             f"{socket_id!r} is not an outlet this hardware has. Expected one of "
+#             f"{list(VALID_OUTLETS[outlet_type])} for a {outlet_type}."
+#         )
+#     if implied != outlet_type:
+#         # Refused rather than silently corrected: a caller that says "valve" while naming Q3
+#         # has a bug, and choosing one of the two for them would hide which one.
+#         raise ValueError(
+#             f"{socket_id!r} is a {implied}, but outlet_type says {outlet_type!r}. A water tag "
+#             f"must never be provisioned against an electricity socket, or the reverse."
+#         )
+#     if outlet_type == OUTLET_VALVE:
+#         # Checked AFTER the name/type agreement, so a caller who mislabelled a socket is told
+#         # that rather than being handed an app-version message about a valve they did not name.
+#         assert_valve_provisioning_allowed()
+#     if not (provisioned_by or "").strip():
+#         raise ValueError(
+#             "provisioned_by is required — an NFC mapping must be attributable to the admin "
+#             "who created it"
+#         )
 
-    # Reject the same physical tag mapped to a DIFFERENT socket.
-    existing = get_active_tag_by_id(db, nfc_tag_id)
-    if existing is not None and not (
-        existing.cabinet_id == cabinet_id and existing.socket_id == socket_id
-    ):
-        raise DuplicateNfcTagError(existing.cabinet_id, existing.socket_id)
+#     # Reject the same physical tag mapped to a DIFFERENT socket.
+#     existing = get_active_tag_by_id(db, nfc_tag_id)
+#     if existing is not None and not (
+#         existing.cabinet_id == cabinet_id and existing.socket_id == socket_id
+#     ):
+#         raise DuplicateNfcTagError(existing.cabinet_id, existing.socket_id)
 
-    # Deactivate whatever tag currently owns this socket (different tag id).
-    for old in (
-        db.query(NfcTag).filter(
-            NfcTag.cabinet_id == cabinet_id,
-            NfcTag.socket_id == socket_id,
-            NfcTag.is_active.is_(True),
-        ).all()
-    ):
-        if old.nfc_tag_id != nfc_tag_id:
-            old.is_active = False
+#     # Deactivate whatever tag currently owns this socket (different tag id).
+#     for old in (
+#         db.query(NfcTag).filter(
+#             NfcTag.cabinet_id == cabinet_id,
+#             NfcTag.socket_id == socket_id,
+#             NfcTag.is_active.is_(True),
+#         ).all()
+#     ):
+#         if old.nfc_tag_id != nfc_tag_id:
+#             old.is_active = False
 
-    now = datetime.utcnow()
-    if existing is not None:
-        # Same tag re-provisioned to the same socket — refresh metadata.
-        existing.is_active = True
-        existing.provisioned_at = now
-        existing.provisioned_by = provisioned_by
-        existing.outlet_type = outlet_type
-        tag = existing
-    else:
-        tag = NfcTag(
-            nfc_tag_id=nfc_tag_id,
-            cabinet_id=cabinet_id,
-            socket_id=socket_id,
-            provisioned_at=now,
-            provisioned_by=provisioned_by,
-            outlet_type=outlet_type,
-            is_active=True,
-        )
-        db.add(tag)
-    db.commit()
-    db.refresh(tag)
-    return tag
+#     now = datetime.utcnow()
+#     if existing is not None:
+#         # Same tag re-provisioned to the same socket — refresh metadata.
+#         existing.is_active = True
+#         existing.provisioned_at = now
+#         existing.provisioned_by = provisioned_by
+#         existing.outlet_type = outlet_type
+#         tag = existing
+#     else:
+#         tag = NfcTag(
+#             nfc_tag_id=nfc_tag_id,
+#             cabinet_id=cabinet_id,
+#             socket_id=socket_id,
+#             provisioned_at=now,
+#             provisioned_by=provisioned_by,
+#             outlet_type=outlet_type,
+#             is_active=True,
+#         )
+#         db.add(tag)
+#     db.commit()
+#     db.refresh(tag)
+#     return tag
 
 
-def remove_tag(db, cabinet_id: str, socket_id: str,
-               removed_by: str | None = None) -> bool:
-    """Deactivate the active tag for a socket. Returns True if one was cleared.
+# def remove_tag(db, cabinet_id: str, socket_id: str,
+#                removed_by: str | None = None) -> bool:
+#     """Deactivate the active tag for a socket. Returns True if one was cleared.
 
-    `removed_by` is recorded alongside the time (v3.43). The row already survived removal, so
-    the history was there — but nothing said who un-pointed the tag or when, which made the
-    one destructive act in a tag's life the only untraceable one.
-    """
-    tag = get_active_tag_for_socket(db, cabinet_id, socket_id)
-    if tag is None:
-        return False
-    tag.is_active = False
-    tag.removed_at = datetime.utcnow()
-    tag.removed_by = removed_by
-    db.commit()
-    logger.info("[NFC] tag %s removed from cabinet=%s socket=%s by %s",
-                tag.nfc_tag_id, cabinet_id, socket_id, removed_by or "(unattributed)")
-    return True
+#     `removed_by` is recorded alongside the time (v3.43). The row already survived removal, so
+#     the history was there — but nothing said who un-pointed the tag or when, which made the
+#     one destructive act in a tag's life the only untraceable one.
+#     """
+#     tag = get_active_tag_for_socket(db, cabinet_id, socket_id)
+#     if tag is None:
+#         return False
+#     tag.is_active = False
+#     tag.removed_at = datetime.utcnow()
+#     tag.removed_by = removed_by
+#     db.commit()
+#     logger.info("[NFC] tag %s removed from cabinet=%s socket=%s by %s",
+#                 tag.nfc_tag_id, cabinet_id, socket_id, removed_by or "(unattributed)")
+#     return True
 
 
 # ── Pending sessions (lazy expiry) ────────────────────────────────────────────
@@ -282,13 +288,18 @@ def get_live_pending(db, cabinet_id: str, socket_id: str) -> NfcPendingSession |
     return live
 
 
-def create_pending(db, nfc_tag_id: str, user_id: str, cabinet_id: str,
-                   socket_id: str) -> NfcPendingSession:
-    """Create a 5-minute pending NFC session record."""
+def create_pending(db, erp_ref: str, cabinet_id: str, socket_id: str) -> NfcPendingSession:
+    """Create a 5-minute pending NFC reservation for one outlet.
+
+    D6.1 (2026-10-12): the ERP names the outlet and its own reference; there is no tag here.
+    `user_id` holds the ERP's `erp_ref` (the column predates the rename and is internal).
+    `nfc_tag_id` is NOT NULL in every existing database and SQLite cannot relax that without
+    rebuilding the table, so it is written as "" — "no tag", never a value to match on.
+    """
     now = datetime.utcnow()
     rec = NfcPendingSession(
-        nfc_tag_id=nfc_tag_id,
-        user_id=user_id,
+        nfc_tag_id="",
+        user_id=erp_ref,
         cabinet_id=cabinet_id,
         socket_id=socket_id,
         created_at=now,
@@ -432,7 +443,10 @@ def build_session_payload(db, user_db, session) -> dict:
                       if session.socket_id is not None else None),
         # v3.43, additive: which kind of outlet, so ERP does not have to parse the name.
         "session_type": "water" if is_water else "electricity",
-        "customer_id": session.nfc_user_id,
+        # D6.1 (2026-10-12): the ERP's own reference, exactly as it sent it to /scan. Was
+        # "customer_id": session.nfc_user_id.
+        # "customer_id": session.nfc_user_id,
+        "erp_ref": session.erp_ref,
         "status": "active" if is_active else "ended",
         "activated_at": iso_z(session.started_at),
         "duration_minutes": duration_minutes,

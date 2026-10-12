@@ -29,20 +29,22 @@ export type ProvisioningMode = 'qr' | 'nfc'
 // tag on the outlet they are about to use, and the session belongs to whoever scanned.
 export type OutletType = 'socket' | 'valve'
 
-export interface NfcTag {
-  nfc_tag_id: string
-  cabinet_id: string
-  socket_id: string          // "Q1".."Q4" for a socket, "V1"/"V2" for a valve
-  // Never inferred from socket_id: both backend name vocabularies accept bare digits, so
-  // "1" is genuinely ambiguous between socket 1 and valve 1. The server stores it.
-  outlet_type: OutletType
-  session_type: 'electricity' | 'water'
-  provisioned_at: string | null
-  provisioned_by: string | null
-  is_active: boolean
-  removed_at?: string | null
-  removed_by?: string | null
-}
+// D6.1 (2026-10-12): the NFC tag registry is commented out — the ERP owns the
+// tag→outlet mapping. Kept, not deleted.
+// export interface NfcTag {
+//   nfc_tag_id: string
+//   cabinet_id: string
+//   socket_id: string          // "Q1".."Q4" for a socket, "V1"/"V2" for a valve
+//   // Never inferred from socket_id: both backend name vocabularies accept bare digits, so
+//   // "1" is genuinely ambiguous between socket 1 and valve 1. The server stores it.
+//   outlet_type: OutletType
+//   session_type: 'electricity' | 'water'
+//   provisioned_at: string | null
+//   provisioned_by: string | null
+//   is_active: boolean
+//   removed_at?: string | null
+//   removed_by?: string | null
+// }
 
 // One row of the cabinet's own account of itself, from `opta/config/hardware`.
 export interface CabinetOutlet {
@@ -68,7 +70,8 @@ export interface CabinetOutlet {
   // cabinet has never described this valve, or last did so more than 60 s ago — a stored
   // state is only as good as its age.
   state: 'idle' | 'active' | 'unknown' | null
-  nfc_tag_id: string | null
+  // D6.1: the backend no longer returns a per-outlet tag.
+  // nfc_tag_id: string | null
 }
 
 export interface CabinetOutlets {
@@ -83,25 +86,26 @@ export interface CabinetOutlets {
 export const listCabinetOutlets = (cabinetId: string) =>
   api.get<CabinetOutlets>(`/nfc/outlets/${cabinetId}`).then((r) => r.data)
 
-export const listNfcTags = (cabinetId: string) =>
-  api.get<NfcTag[]>(`/nfc/tags/${cabinetId}`).then((r) => r.data)
+// D6.1 (2026-10-12): tag registry API commented out with the backend routes.
+// export const listNfcTags = (cabinetId: string) =>
+//   api.get<NfcTag[]>(`/nfc/tags/${cabinetId}`).then((r) => r.data)
 
-export const provisionNfcTag = (
-  cabinet_id: string,
-  socket_id: string,
-  nfc_tag_id: string,
-  outlet_type: OutletType = 'socket',
-) => api.post<NfcTag>('/nfc/tags', { cabinet_id, socket_id, nfc_tag_id, outlet_type })
-  .then((r) => r.data)
+// export const provisionNfcTag = (
+//   cabinet_id: string,
+//   socket_id: string,
+//   nfc_tag_id: string,
+//   outlet_type: OutletType = 'socket',
+// ) => api.post<NfcTag>('/nfc/tags', { cabinet_id, socket_id, nfc_tag_id, outlet_type })
+//   .then((r) => r.data)
 
-export const provisionNfcTagsBulk = (
-  cabinet_id: string,
-  items: { socket_id: string; nfc_tag_id: string; outlet_type?: OutletType }[],
-) => api.post<{ cabinet_id: string; tags: NfcTag[] }>('/nfc/tags/bulk', { cabinet_id, items })
-  .then((r) => r.data)
+// export const provisionNfcTagsBulk = (
+//   cabinet_id: string,
+//   items: { socket_id: string; nfc_tag_id: string; outlet_type?: OutletType }[],
+// ) => api.post<{ cabinet_id: string; tags: NfcTag[] }>('/nfc/tags/bulk', { cabinet_id, items })
+//   .then((r) => r.data)
 
-export const removeNfcTag = (cabinet_id: string, socket_id: string) =>
-  api.delete(`/nfc/tags/${cabinet_id}/${socket_id}`).then((r) => r.data)
+// export const removeNfcTag = (cabinet_id: string, socket_id: string) =>
+//   api.delete(`/nfc/tags/${cabinet_id}/${socket_id}`).then((r) => r.data)
 
 export const getProvisioningMode = (cabinetId: string) =>
   api.get<{ cabinet_id: string; provisioning_mode: ProvisioningMode }>(`/nfc/mode/${cabinetId}`)

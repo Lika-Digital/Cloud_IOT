@@ -64,15 +64,26 @@ GUARD_TOKENS = (
 # ─────────────────────────────────────────────────────────────────────────────
 RECORD_SCOPED = {
     # ── the machine-key path: this is where the defect was (v3.43) ──
+    #
+    # D6.1 (2026-10-12): the ERP is the only owner of the customer and the NFC mapping, and MODE
+    # 2 (customer tokens on /api/nfc/*) is commented out. One principal is left — the ERP's
+    # machine key — and every NFC session on a single-tenant cabinet is that principal's record,
+    # so there is no "this caller, that record" to decide. The exemption holds ONLY while the
+    # key is held by the ERP's server alone: it must not ship in any app. If it ever did,
+    # rotate it (docs/erp_key_rotation.md) — then a key holder could reserve for any erp_ref
+    # and read or stop any session. Was guarded by _require_session_access /
+    # _customer_identities, which are commented out with MODE 2.
     ("POST", "/api/nfc/scan"):
-        "guarded: identity comes from the principal, not body user_id. Not an id in the "
-        "PATH, but user_id in the BODY decides who is billed, so it belongs to this class",
+        "exempt: D6.1 — sole principal is the ERP machine key, which owns erp_ref by design; "
+        "the body's erp_ref IS the ERP's assertion. Valid only while the key is never in an app",
     ("GET", "/api/nfc/session/{session_id}"):
-        "guarded: _require_session_access — 404 on a mismatch, so ids cannot be walked",
+        "exempt: D6.1 — sole principal is the ERP machine key, and every NFC session on this "
+        "single-tenant cabinet is its record. Valid only while the key is never in an app",
     ("POST", "/api/nfc/session/{session_id}/stop"):
-        "guarded: _require_session_access, checked BEFORE the already-ended check",
-    ("GET", "/api/nfc/sessions/by-user/{user_id}"):
-        "guarded: _customer_identities — 403, since the caller supplied the id itself",
+        "exempt: D6.1 — sole principal is the ERP machine key, and every NFC session on this "
+        "single-tenant cabinet is its record. Valid only while the key is never in an app",
+    # ("GET", "/api/nfc/sessions/by-user/{user_id}"):  # D6.1 — route commented out
+    #     "guarded: _customer_identities — 403, since the caller supplied the id itself",
 
     # ── customer-token routes: already correct before v3.43 ──
     ("DELETE", "/api/customer/berths/reservations/{reservation_id}"):
@@ -223,7 +234,7 @@ def test_tc_oaz_03_registry_has_no_stale_entries(routes):
 
 
 def test_tc_oaz_04_no_exemptions_without_a_reason():
-    """An 'exempt' entry must say why. There are none today; the check exists for the first."""
+    """An 'exempt' entry must say why. The first three are the D6.1 NFC routes (2026-10-12)."""
     bad = [k for k, note in RECORD_SCOPED.items()
            if not (note.startswith("guarded") or note.startswith("exempt:"))]
     assert not bad, (

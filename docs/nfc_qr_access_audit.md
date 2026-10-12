@@ -1,5 +1,12 @@
 # NFC / QR access-control audit
 
+> **Superseded by D6.1 (2026-10-12).** The ERP is the only owner of the NFC mapping and the
+> customer: `POST /api/nfc/scan` now takes `{cabinet_id, outlet, erp_ref}`, sessions carry
+> `erp_ref`, the tag registry (`/api/nfc/tags*`) and MODE 2 are commented out, and
+> `GET /api/nfc/sessions/by-user` is replaced by `GET /api/nfc/sessions`. Current contract:
+> `docs/erp_session_payload_contract.md`. The text below is kept as history.
+
+
 > ### ⚠ QR IS DORMANT — decision of 2026-09-30
 >
 > **NFC is the supported provisioning and customer-entry path.** The QR code, the

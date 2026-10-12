@@ -88,6 +88,7 @@ def _tags(active_only: bool = False) -> list:
 
 # ═══ TC-NFCT-01 ══════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): the NFC tag registry is commented out — the ERP owns the tag mapping, so there is no local tag trail to audit")
 def test_tc_nfct_01_removal_records_who_and_when(client, auth_headers, audit_pid):
     """Removal is now as attributable as creation."""
     client.post("/api/nfc/tags", headers=auth_headers,
@@ -110,6 +111,7 @@ def test_tc_nfct_01_removal_records_who_and_when(client, auth_headers, audit_pid
 
 # ═══ TC-NFCT-02 ══════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): the NFC tag registry is commented out — the ERP owns the tag mapping, so there is no local tag trail to audit")
 def test_tc_nfct_02_provisioning_without_an_actor_is_refused(audit_pid):
     """A ValueError, not a silent "(unknown)".
 
@@ -133,6 +135,7 @@ def test_tc_nfct_02_provisioning_without_an_actor_is_refused(audit_pid):
 
 # ═══ TC-NFCT-03 ══════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): the NFC tag registry is commented out — the ERP owns the tag mapping, so there is no local tag trail to audit")
 def test_tc_nfct_03_trail_is_visible_through_the_api(client, auth_headers, audit_pid):
     """A trail only readable with sqlite3 is a trail nobody consults during an incident."""
     client.post("/api/nfc/tags", headers=auth_headers,
@@ -148,6 +151,7 @@ def test_tc_nfct_03_trail_is_visible_through_the_api(client, auth_headers, audit
 
 # ═══ TC-NFCT-04 ══════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): the NFC tag registry is commented out — the ERP owns the tag mapping, so there is no local tag trail to audit")
 def test_tc_nfct_04_replacing_a_tag_leaves_the_old_row_attributable(
         client, auth_headers, audit_pid):
     """Re-pointing a socket to a different tag is the case the trail exists for.
@@ -172,57 +176,31 @@ def test_tc_nfct_04_replacing_a_tag_leaves_the_old_row_attributable(
 # ═══ TC-NFCT-05 / 06 — billing authority ═════════════════════════════════════
 
 def test_tc_nfct_05_health_reports_the_billing_authority(client, auth_headers):
-    """Whoever looks at a disputed charge can see which system owns the number."""
-    from app.config import settings
+    """Whoever looks at a disputed charge can see which system owns the number.
 
-    prev = settings.nfc_direct_client_mode
-    try:
-        settings.nfc_direct_client_mode = False
-        erp = client.get("/api/system/health", headers=auth_headers).json()
-        assert erp["billing_authority"]["mode"] == "erp"
-        assert erp["billing_authority"]["bills"] == "ERP"
-        assert "reconciliation" in erp["billing_authority"]["description"].lower()
-
-        settings.nfc_direct_client_mode = True
-        direct = client.get("/api/system/health", headers=auth_headers).json()
-        auth = direct["billing_authority"]
-        assert auth["mode"] == "direct"
-        assert auth["bills"] == "this pedestal"
-        assert "only record" in auth["description"].lower(), (
-            "the direct-mode description must say our rows are the only record — that is the "
-            f"whole consequence of the mode: {auth['description']}"
-        )
-        # Decision 9: point at the ledger, so nobody builds billing off sessions later.
-        assert "energy_intervals" in auth["record_of_truth"]
-    finally:
-        settings.nfc_direct_client_mode = prev
+    D6.1 (2026-10-12): MODE 2 is commented out, so the ERP is always the billing authority.
+    The direct-mode half of this test went with it.
+    """
+    erp = client.get("/api/system/health", headers=auth_headers).json()
+    assert erp["billing_authority"]["mode"] == "erp"
+    assert erp["billing_authority"]["bills"] == "ERP"
+    assert "reconciliation" in erp["billing_authority"]["description"].lower()
 
 
 def test_tc_nfct_06_authority_is_configuration_not_inferred(client, auth_headers):
     """It must not be derived from whether an ERP key happens to be set.
 
-    That signal is present in BOTH topologies today — the mobile app uses the key in mode 2 —
-    so inferring from it would report the wrong billing authority, and a system that guesses
-    whether it is the billing authority guesses wrong exactly once.
+    D6.1 (2026-10-12): there is one mode now, and the answer must not move with the key —
+    a cabinet whose key is not configured yet is still an ERP marina.
     """
     from app.config import settings
 
-    prev_mode = settings.nfc_direct_client_mode
     prev_key = settings.erp_api_key
     try:
-        # An ERP key set while the marina is in direct mode must NOT flip the answer.
-        settings.nfc_direct_client_mode = True
-        settings.erp_api_key = "a-key-is-present-anyway"
-        body = client.get("/api/system/health", headers=auth_headers).json()
-        assert body["billing_authority"]["mode"] == "direct", (
-            "the billing authority followed erp_api_key rather than the configured mode"
-        )
-
-        # And no key in ERP mode must not flip it either.
-        settings.nfc_direct_client_mode = False
-        settings.erp_api_key = None
-        body2 = client.get("/api/system/health", headers=auth_headers).json()
-        assert body2["billing_authority"]["mode"] == "erp"
+        for key in ("a-key-is-present", None):
+            settings.erp_api_key = key
+            body = client.get("/api/system/health", headers=auth_headers).json()
+            assert body["billing_authority"]["mode"] == "erp", (
+                f"the billing authority moved with erp_api_key={key!r}")
     finally:
-        settings.nfc_direct_client_mode = prev_mode
         settings.erp_api_key = prev_key

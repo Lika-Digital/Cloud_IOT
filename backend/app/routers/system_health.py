@@ -119,7 +119,9 @@ def health_summary(_: User = Depends(require_admin)):
         unauthorized_access_7d=sum(1 for e in sec_logs_7d if "403" in e.message or "unauthoris" in e.message.lower()),
     )
 
-    direct = settings.nfc_direct_client_mode
+    # D6.1 (2026-10-12): MODE 2 is commented out — the ERP is always the billing authority.
+    # direct = settings.nfc_direct_client_mode
+    direct = False
     billing = BillingAuthority(
         mode="direct" if direct else "erp",
         bills="this pedestal" if direct else "ERP",

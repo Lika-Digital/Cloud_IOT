@@ -18,6 +18,8 @@ class SessionResponse(BaseModel):
     # internal customer_id FK. Exposed so an ERP can correlate an active session
     # to the user id it sent us via POST /api/nfc/scan.
     nfc_user_id: Optional[str] = None
+    # D6.1 (2026-10-12): the ERP's reference from POST /api/nfc/scan — the attribution now.
+    erp_ref: Optional[str] = None
     deny_reason: Optional[str] = None
     # customer_name is not a DB column — populated by endpoints that join customer data
     # GAP-FE-BE: field required by frontend Session interface (store/index.ts)

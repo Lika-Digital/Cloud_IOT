@@ -36,6 +36,9 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
+
+# D6.1 (2026-10-12): SKIPPED, not deleted — the NFC tag cross-check is commented out with the tag registry — the ERP is the only owner of the tag mapping, so there is no second record to check it against.
+pytestmark = pytest.mark.skip(reason="D6.1 (2026-10-12): the NFC tag cross-check is commented out with the tag registry")
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 

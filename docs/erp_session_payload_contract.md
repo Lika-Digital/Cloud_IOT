@@ -1,6 +1,6 @@
 # ERP session payload — contract
 
-**Version:** v3.47 · **Date:** 2026-10-11 · **Cabinet:** MAR_KRK_ORM_01 and every cabinet on `main`
+**Version:** v3.48 (D6.1) · **Date:** 2026-10-12 · **Cabinet:** MAR_KRK_ORM_01 and every cabinet on `main`
 
 This is the contract for the per-session payload the pedestal sends to the ERP. Hand it to
 whoever is building the ERP side.
@@ -10,8 +10,9 @@ whoever is building the ERP side.
 | | |
 |---|---|
 | `GET /api/nfc/session/{id}` | one session |
-| `GET /api/nfc/sessions/by-user/{user_id}` | that user's sessions, newest first |
-| ERP webhook (`session_created` / `session_updated` / `session_completed`) | pushed, when `webhook_url` is configured |
+| `GET /api/nfc/sessions?erp_ref=…` and/or `?ended_from=…&ended_to=…` | paged list — see *Reading sessions* |
+| ERP webhook (`session_created` / `session_updated` / `session_completed`) | pushed, when `webhook_url` is configured; **only for a session carrying an `erp_ref`** |
+| `POST /api/nfc/session/{id}/stop` | the stopped session |
 
 All three are built by one function, `nfc_service.build_session_payload`, so they cannot
 disagree.
@@ -28,6 +29,60 @@ Everything below follows from that.
 
 ---
 
+## Who owns what (D6.1)
+
+**The ERP is the only owner of the NFC mapping and of the customer.** The cabinet keeps no
+tag registry and no customer accounts. It measures outlets, and it attaches to each session
+the reference the ERP gave it — `erp_ref`, an opaque string stored and returned verbatim,
+never parsed or looked up.
+
+### The flow
+
+**Electricity**
+
+1. The customer scans a tag in the app; the ERP resolves it to a cabinet and an outlet.
+2. ERP → `POST /api/nfc/scan` with `{"cabinet_id": "MAR_KRK_ORM_01", "outlet": "Q2", "erp_ref": "<yours>"}`.
+   The outlet is **reserved for 5 minutes**. Nothing is switched on.
+3. The customer plugs in within the window; the cabinet activates the socket.
+4. The session carries your `erp_ref`. It closes on stop (`POST /api/nfc/session/{id}/stop`,
+   or the operator) or when the plug is pulled.
+
+**Water** — the same, except a valve has no plug-in event, so step 3 is yours:
+
+3. ERP → `POST /api/controls/pedestal/{pedestal_id}/water/V1/cmd` `{"action": "activate"}`
+   (through the API Gateway). **Refused with 409 unless a live reservation for that valve
+   exists** — water never opens for nobody. The reservation is consumed by that command.
+
+A valve never opens itself in ERP mode, and the cabinet never energises an outlet for a
+session it cannot attribute to an `erp_ref` you sent.
+
+### `POST /api/nfc/scan`
+
+| field | type | notes |
+|---|---|---|
+| `cabinet_id` | string | e.g. `MAR_KRK_ORM_01`. Unknown → **404** |
+| `outlet` | string | exactly `Q1`–`Q4` or `V1`–`V2`. A bare number is **400**: `"1"` cannot say socket or valve |
+| `erp_ref` | string, 1–128 | your reference; comes back on every session payload |
+
+Answers **200** with `status: "pending"` and `expires_at`; **409** if the outlet is in use or
+already reserved; **503** if the cabinet is not responding or the socket is faulted; **409** if
+the cabinet is in standalone (smart mode off).
+
+### Reading sessions
+
+`GET /api/nfc/sessions` — give `erp_ref`, or both `ended_from` and `ended_to`, or all three.
+
+* `erp_ref` alone: every session with that reference, active and ended, newest first.
+* `ended_from` / `ended_to` (ISO 8601): sessions that **ended** in `[ended_from, ended_to)` —
+  from inclusive, to exclusive, so consecutive windows never count a session twice. Active
+  sessions are never in a range. Oldest end first.
+* Pages: `limit` (≤ 500, default 100) and `offset`. The reply carries `total` and
+  `next_offset` (null on the last page).
+
+**Reading has no side effects.** It does not mark anything as reconciled.
+
+---
+
 ## The 16 keys
 
 | key | type | notes |
@@ -36,7 +91,7 @@ Everything below follows from that.
 | `cabinet_id` | string \| null | e.g. `MAR_KRK_ORM_01` — the `opta_client_id` |
 | `socket_id` | string \| null | **`Q1`–`Q4`** for electricity, **`V1`–`V2`** for water. Reconcile on this string, never on the bare number — `V1` and `Q1` are both `socket_id = 1` internally and the prefix is the only thing that distinguishes them |
 | `session_type` | `"electricity"` \| `"water"` | so you need not parse the outlet name |
-| `customer_id` | string \| null | **your** `user_id`, as supplied to `POST /api/nfc/scan`. Stored as `nfc_user_id` |
+| `erp_ref` | string \| null | **your** reference, exactly as sent to `POST /api/nfc/scan`. `null` = nobody scanned; such a session is never pushed to you |
 | `status` | `"active"` \| `"ended"` | |
 | `activated_at` | ISO 8601 Z | |
 | `duration_minutes` | float | |
@@ -140,6 +195,19 @@ yourselves.
 
 ---
 
+## What changed in v3.48 (D6.1), for an existing consumer
+
+| | before | after |
+|---|---|---|
+| attribution key | `customer_id` (your `user_id`) | **`erp_ref`** (your reference) — still 16 keys |
+| `POST /api/nfc/scan` body | `{nfc_tag_id, user_id}` — the cabinet resolved the tag | **`{cabinet_id, outlet, erp_ref}`** — you resolve it |
+| `GET /api/nfc/sessions/by-user/{user_id}` | existed; reading it marked rows reconciled | **removed** → `GET /api/nfc/sessions` (no side effects) |
+| water | a water session never carried the user, so it was never pushed | carries `erp_ref` and is pushed like electricity |
+| valve opening | could open after diagnostics with no scan | **only** on your activate command, after a reservation |
+| `/api/nfc/tags*`, customer tokens on `/api/nfc/*` | existed | **removed** — one caller: your `X-API-Key` |
+
+Sessions recorded before v3.48 keep their old attribution internally and carry `erp_ref: null`.
+
 ## What changed in v3.47, for an existing consumer
 
 | field | before | after |
@@ -163,6 +231,9 @@ If that test fails, this document is updated in the same commit.
 
 ## Authentication
 
-`X-API-Key` on the `/api/nfc/*` endpoints. This is a separate channel from the API Gateway's
+`X-API-Key` on the `/api/nfc/*` endpoints, and nothing else: since D6.1 the ERP's server is the
+only caller. **The key must not be shipped in any app** — whoever holds it can reserve an outlet
+for any `erp_ref` and read or stop any session. If a build ever carried it, rotate it
+(`docs/erp_key_rotation.md`). This is a separate channel from the API Gateway's
 Bearer token — do not mix them. The Gateway (`/api/ext/*`) is for the catalogued read and
 control endpoints; NFC session data has its own path.

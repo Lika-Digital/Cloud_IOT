@@ -1,5 +1,12 @@
 # Access-control plan — NFC, QR and smart mode, as one change
 
+> **Superseded by D6.1 (2026-10-12).** The ERP is the only owner of the NFC mapping and the
+> customer: `POST /api/nfc/scan` now takes `{cabinet_id, outlet, erp_ref}`, sessions carry
+> `erp_ref`, the tag registry (`/api/nfc/tags*`) and MODE 2 are commented out, and
+> `GET /api/nfc/sessions/by-user` is replaced by `GET /api/nfc/sessions`. Current contract:
+> `docs/erp_session_payload_contract.md`. The text below is kept as history.
+
+
 **Date:** 2026-09-29 (rev 2) · **Status:** for approval. §1 is **implemented and committed**;
 everything else awaits decisions.
 **Reads with:** `docs/nfc_qr_access_audit.md` (findings + addendum),

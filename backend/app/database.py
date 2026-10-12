@@ -271,6 +271,8 @@ def _migrate_schema():
         # v3.43 — provenance of the reported figure. NULL for rows that predate this, which
         # is honest: we do not know how those were derived without reading the git history.
         ("sessions",       "consumption_source",     "TEXT"),
+        # D6.1 (2026-10-12) — the ERP's reference, from POST /api/nfc/scan.
+        ("sessions",       "erp_ref",                "TEXT"),
         # v3.43 — cumulative water register per valve, mirroring socket_configs.meter_energy_kwh
         # for electricity. Forwarded to ERP as-is; also the source of the session delta.
         ("valve_configs",  "meter_total_l",          "REAL"),

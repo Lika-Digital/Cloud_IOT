@@ -103,12 +103,14 @@ INSTALLATION_ACTS = [
     # after it, a customer's tap switches a different berth's power.
     # Tag ids are unique per row on purpose: a duplicate would take the handler down a
     # different path and the test would be measuring that instead of the gate.
-    ("POST", "/api/nfc/tags",
-     {"cabinet_id": "ROLE_CAB", "socket_id": "Q1", "nfc_tag_id": "ROLE-TAG-SINGLE"}),
-    ("POST", "/api/nfc/tags/bulk",
-     {"cabinet_id": "ROLE_CAB",
-      "items": [{"socket_id": "Q2", "nfc_tag_id": "ROLE-TAG-BULK"}]}),
-    ("DELETE", "/api/nfc/tags/ROLE_CAB/Q3", None),
+    # D6.1 (2026-10-12): the tag registry routes are commented out — the ERP owns the mapping.
+    # The ^/api/nfc/tags pattern below stays, so a tag route that comes back is still caught.
+    # ("POST", "/api/nfc/tags",
+    #  {"cabinet_id": "ROLE_CAB", "socket_id": "Q1", "nfc_tag_id": "ROLE-TAG-SINGLE"}),
+    # ("POST", "/api/nfc/tags/bulk",
+    #  {"cabinet_id": "ROLE_CAB",
+    #   "items": [{"socket_id": "Q2", "nfc_tag_id": "ROLE-TAG-BULK"}]}),
+    # ("DELETE", "/api/nfc/tags/ROLE_CAB/Q3", None),
     # Whether a cabinet provisions by QR or NFC — it changes which physical token works.
     ("PATCH", "/api/nfc/mode/ROLE_CAB", {"mode": "nfc"}),
     # Invalidates every QR code already stuck to a cabinet, so customers' codes stop working.
@@ -129,7 +131,7 @@ OBSERVATIONS = [
     ("GET", "/api/pedestals/1/sockets/1/breaker/status", None),
     # Reading the tag map is how staff answer "why did my tap not work?" — operations, not
     # configuration, so it stays open deliberately.
-    ("GET", "/api/nfc/tags/ROLE_CAB", None),
+    # ("GET", "/api/nfc/tags/ROLE_CAB", None),  # D6.1 — route commented out
     ("GET", "/api/nfc/mode/ROLE_CAB", None),
     ("GET", "/api/pedestals/ROLE_CAB/qr/all", None),
 ]

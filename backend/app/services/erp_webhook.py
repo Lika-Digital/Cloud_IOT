@@ -52,8 +52,12 @@ def is_erp_reportable(session) -> bool:
     for the same reason — the ERP has no one to bill. They remain fully recorded locally and
     visible to the marina; only the outbound report is withheld.
     """
-    return bool(getattr(session, "customer_id", None)
-                or getattr(session, "nfc_user_id", None))
+    # D6.1 (2026-10-12): the ERP's own reference is the attribution. A session carrying only
+    # the legacy customer_id / nfc_user_id would reach the ERP with erp_ref null — a figure with
+    # nobody the ERP can bill — so it is withheld like any other unattributed session.
+    # return bool(getattr(session, "customer_id", None)
+    #             or getattr(session, "nfc_user_id", None))
+    return bool(getattr(session, "erp_ref", None))
 
 
 def build(db, session, event: str) -> dict | None:
@@ -66,9 +70,8 @@ def build(db, session, event: str) -> dict | None:
         # Logged at INFO, not suppressed silently: "the ERP never heard about that session"
         # has to be answerable from the journal without reading this file.
         logger.info(
-            "[ERP] withholding %s for session %s on pedestal %s — no customer_id and no "
-            "nfc_user_id, so there is nobody to attribute it to (origin=%s). The session is "
-            "still recorded locally.",
+            "[ERP] withholding %s for session %s on pedestal %s — no erp_ref, so there is "
+            "nobody to attribute it to (origin=%s). The session is still recorded locally.",
             event, getattr(session, "id", "?"), getattr(session, "pedestal_id", "?"),
             getattr(session, "origin", "?"),
         )

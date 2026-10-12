@@ -136,62 +136,68 @@ class Settings(BaseSettings):
     erp_api_key: Optional[str] = None
     erp_webhook_url: Optional[str] = None
 
-    # v3.43 — which of the two supported NFC topologies this marina runs.
+    # ── D6.1 (2026-10-12): COMMENTED OUT, NOT DELETED ─────────────────────────────────
+    # The ERP is the only owner of the NFC mapping and of the customer. So there is one
+    # topology (MODE 1, with ERP), no tag registry here, and no cross-check against one.
+    # The three settings below no longer exist. An old .env line setting them is ignored
+    # (extra="ignore"), so removing them cannot stop a cabinet from starting.
     #
-    #   False (default) = MODE 1, WITH ERP. Mobile app -> ERP -> pedestal. ERP does the
-    #     billing; our session rows are measurement and reconciliation data. The NFC session
-    #     endpoints accept the ERP machine key, because the real caller IS a server.
-    #
-    #   True = MODE 2, WITHOUT ERP. Mobile app -> pedestal directly. **The pedestal is the
-    #     billing system** — our session rows are the only record of what anyone owes. So the
-    #     NFC session endpoints REQUIRE a per-customer token: a shared machine key cannot
-    #     express "this customer, this session", and in this mode that distinction is the
-    #     difference between a financial record and a suggestion.
-    #
-    # Marina-wide rather than per-pedestal on purpose: it describes whether an ERP exists at
-    # this site, which is a property of the deployment, not of a cabinet. A single marina
-    # running both topologies at once would mean two billing authorities for neighbouring
-    # berths, which is not a configuration anyone should be able to reach by accident.
-    nfc_direct_client_mode: bool = False
+    ## v3.43 — which of the two supported NFC topologies this marina runs.
+    ##
+    ##   False (default) = MODE 1, WITH ERP. Mobile app -> ERP -> pedestal. ERP does the
+    ##     billing; our session rows are measurement and reconciliation data. The NFC session
+    ##     endpoints accept the ERP machine key, because the real caller IS a server.
+    ##
+    ##   True = MODE 2, WITHOUT ERP. Mobile app -> pedestal directly. **The pedestal is the
+    ##     billing system** — our session rows are the only record of what anyone owes. So the
+    ##     NFC session endpoints REQUIRE a per-customer token: a shared machine key cannot
+    ##     express "this customer, this session", and in this mode that distinction is the
+    ##     difference between a financial record and a suggestion.
+    ##
+    ## Marina-wide rather than per-pedestal on purpose: it describes whether an ERP exists at
+    ## this site, which is a property of the deployment, not of a cabinet. A single marina
+    ## running both topologies at once would mean two billing authorities for neighbouring
+    ## berths, which is not a configuration anyone should be able to reach by accident.
+    # nfc_direct_client_mode: bool = False
 
-    # v3.43 — DOES THE MOBILE APP AT THIS SITE UNDERSTAND WATER NFC TAGS?
-    #
-    # A cabinet carries six tags, two of them on water outlets. The app builds shipped before
-    # v3.43 cannot resolve a `V1` label: `outletLabelToNumber` returned null for it, and the
-    # websocket adoption check treats null as "matches anything". So an old app, on a customer
-    # who scans a water tag, adopts whatever ELECTRICITY session arrives next under their user
-    # id — someone else's charge, displayed as theirs, and billed to them in MODE 2.
-    #
-    # That is a wrong charge, not an inconvenience, which is why it is enforced rather than
-    # documented. `provision_tag` REFUSES a valve tag while this is False and the site is in
-    # MODE 2. Set it to true once the updated app is actually deployed to customers, not when
-    # the build exists.
-    #
-    # MODE 1 is unaffected and needs no flag: there the ERP resolves the outlet and calls
-    # /api/nfc/scan itself, so the app is not in the resolution path at all. The gate below
-    # checks the mode first for exactly that reason — a mode-1 site must not be asked to set a
-    # flag about a dependency it does not have.
-    #
-    # A procedure that depends on remembering will eventually be forgotten: whoever provisions
-    # tags at a new site will not have read the commit that introduced them.
-    mobile_app_supports_water_nfc: bool = False
+    ## v3.43 — DOES THE MOBILE APP AT THIS SITE UNDERSTAND WATER NFC TAGS?
+    ##
+    ## A cabinet carries six tags, two of them on water outlets. The app builds shipped before
+    ## v3.43 cannot resolve a `V1` label: `outletLabelToNumber` returned null for it, and the
+    ## websocket adoption check treats null as "matches anything". So an old app, on a customer
+    ## who scans a water tag, adopts whatever ELECTRICITY session arrives next under their user
+    ## id — someone else's charge, displayed as theirs, and billed to them in MODE 2.
+    ##
+    ## That is a wrong charge, not an inconvenience, which is why it is enforced rather than
+    ## documented. `provision_tag` REFUSES a valve tag while this is False and the site is in
+    ## MODE 2. Set it to true once the updated app is actually deployed to customers, not when
+    ## the build exists.
+    ##
+    ## MODE 1 is unaffected and needs no flag: there the ERP resolves the outlet and calls
+    ## /api/nfc/scan itself, so the app is not in the resolution path at all. The gate below
+    ## checks the mode first for exactly that reason — a mode-1 site must not be asked to set a
+    ## flag about a dependency it does not have.
+    ##
+    ## A procedure that depends on remembering will eventually be forgotten: whoever provisions
+    ## tags at a new site will not have read the commit that introduced them.
+    # mobile_app_supports_water_nfc: bool = False
 
-    # v3.43 — NFC tag/socket cross-check (double-bookkeeping). ERP resolves the tag to a socket
-    # and sends BOTH; we hold the same mapping and check they agree before switching power. Two
-    # independent records mean a disagreement exposes a tag stuck on the wrong socket, labels
-    # swapped at installation, or a wrong socket typed into ERP — otherwise we switch the socket
-    # ERP names and the customer pays for a neighbour's power, with nothing reporting it.
-    #
-    # False = ERP MAY send nfc_tag_id; it is cross-checked when present and a mismatch is
-    #   refused and alarmed either way. An activation without it is logged as "not-supplied".
-    # True  = ERP MUST send it; an activation from the ERP without it is refused (400). Requests
-    #   from a human at the dashboard are never required to carry one — an operator has no tag
-    #   in hand — so this is enforced only against the gateway-proxied path.
-    #
-    # REQUIRED FROM: 2026-11-30. Flip this to True on that date. The optional phase exists to
-    # let ERP start sending the field without a flag-day; it is not an indefinite state, and a
-    # date is recorded because "optional for now" with no date stays optional for ever.
-    nfc_cross_check_required: bool = False
+    ## v3.43 — NFC tag/socket cross-check (double-bookkeeping). ERP resolves the tag to a socket
+    ## and sends BOTH; we hold the same mapping and check they agree before switching power. Two
+    ## independent records mean a disagreement exposes a tag stuck on the wrong socket, labels
+    ## swapped at installation, or a wrong socket typed into ERP — otherwise we switch the socket
+    ## ERP names and the customer pays for a neighbour's power, with nothing reporting it.
+    ##
+    ## False = ERP MAY send nfc_tag_id; it is cross-checked when present and a mismatch is
+    ##   refused and alarmed either way. An activation without it is logged as "not-supplied".
+    ## True  = ERP MUST send it; an activation from the ERP without it is refused (400). Requests
+    ##   from a human at the dashboard are never required to carry one — an operator has no tag
+    ##   in hand — so this is enforced only against the gateway-proxied path.
+    ##
+    ## REQUIRED FROM: 2026-11-30. Flip this to True on that date. The optional phase exists to
+    ## let ERP start sending the field without a flag-day; it is not an indefinite state, and a
+    ## date is recorded because "optional for now" with no date stays optional for ever.
+    # nfc_cross_check_required: bool = False
 
     # v3.43 — how long ERP may go without reconciling before it is treated as a fault. Only
     # pedestals with a BACKLOG alarm: a quiet marina reconciles nothing and is not broken, and

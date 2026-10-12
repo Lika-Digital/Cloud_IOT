@@ -18,7 +18,7 @@ TC-SIX-16 wrote nfc_user_id straight into the database, so nothing exercised the
   TC-WF-03  activate with an EXPIRED reservation is refused
   TC-WF-04  activate with a live reservation publishes and marks it "activated"
   TC-WF-05  the whole flow: reservation -> activate -> OutletActivated -> user + webhook
-  TC-WF-06  MODE 2 is unchanged: activate needs no reservation there
+  TC-WF-06  MODE 2 is unchanged — SKIPPED since D6.1 commented MODE 2 out
   TC-WF-07  OutletActivated on a valve with no reservation attaches nobody, reports nothing
 """
 from __future__ import annotations
@@ -89,7 +89,7 @@ def _session(sid):
     try:
         s = db.get(Session, sid)
         return None if s is None else {"status": s.status, "type": s.type,
-                                       "nfc_user_id": s.nfc_user_id}
+                                       "erp_ref": s.erp_ref}
     finally:
         db.close()
 
@@ -183,7 +183,7 @@ def _active_water(pid, valve_id):
         s = (db.query(Session).filter(Session.pedestal_id == pid, Session.socket_id == valve_id,
                                       Session.type == "water", Session.status == "active")
              .first())
-        return None if s is None else {"id": s.id, "nfc_user_id": s.nfc_user_id}
+        return None if s is None else {"id": s.id, "erp_ref": s.erp_ref}
     finally:
         db.close()
 
@@ -247,8 +247,8 @@ def test_tc_wf_05_the_whole_flow_gives_the_water_session_its_user_and_reaches_th
 
     s = _active_water(wpid, 2)
     assert s is not None, "OutletActivated did not open a water session"
-    assert s["nfc_user_id"] == "erp-water-customer", (
-        f"the water session carries user {s['nfc_user_id']!r} — unattributed water is "
+    assert s["erp_ref"] == "erp-water-customer", (
+        f"the water session carries erp_ref {s['erp_ref']!r} — unattributed water is "
         f"withheld from the ERP and can never be billed")
     # call_count, not await_count: the webhook goes out via asyncio.create_task, and
     # asyncio.run may cancel that task before it is awaited (it passed alone and failed in
@@ -256,11 +256,14 @@ def test_tc_wf_05_the_whole_flow_gives_the_water_session_its_user_and_reaches_th
     assert post.call_count == 1, "the attributed water session was not reported to the ERP"
     payload = post.call_args.args[0]
     assert payload["session_type"] == "water" and payload["socket_id"] == "V2"
+    assert payload["erp_ref"] == "erp-water-customer"
     _clear(wpid)
 
 
 # ═══ TC-WF-06 / 07 ═══════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): MODE 2 is commented out — a water activate "
+                         "always needs a reservation now (TC-WF-02)")
 def test_tc_wf_06_mode_2_needs_no_reservation(client, auth_headers, wpid):
     from app.config import settings
     _clear(wpid)
@@ -278,6 +281,6 @@ def test_tc_wf_07_a_valve_opened_without_a_scan_attaches_nobody_and_reports_noth
     with _webhook_configured():
         post = _outlet_activated(wpid, "V1")
     s = _active_water(wpid, 1)
-    assert s is not None and s["nfc_user_id"] is None
+    assert s is not None and s["erp_ref"] is None
     assert post.call_count == 0
     _clear(wpid)

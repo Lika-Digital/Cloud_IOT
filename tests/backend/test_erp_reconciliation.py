@@ -48,12 +48,9 @@ CAB = "TST_RECON_CAB"
 def _erp_key():
     from app.config import settings
     prev = settings.erp_api_key
-    prev_mode = settings.nfc_direct_client_mode
     settings.erp_api_key = ERP_KEY
-    settings.nfc_direct_client_mode = False
     yield
     settings.erp_api_key = prev
-    settings.nfc_direct_client_mode = prev_mode
 
 
 def _erp() -> dict:
@@ -110,7 +107,7 @@ def _session(pid: int, *, user: str = "erp-recon-user", status: str = "completed
             started_at=datetime.utcnow() - timedelta(days=started_days_ago),
             ended_at=None if status == "active"
             else datetime.utcnow() - timedelta(days=started_days_ago - 0.01),
-            energy_kwh=energy, nfc_user_id=user,
+            energy_kwh=energy, erp_ref=user,  # D6.1: was nfc_user_id
             last_reconciled_at=None if reconciled_days_ago is None
             else datetime.utcnow() - timedelta(days=reconciled_days_ago),
         )
@@ -163,6 +160,7 @@ async def _run_check():
 # ═══ TC-ERPR-01 ══════════════════════════════════════════════════════════════
 
 def test_tc_erpr_01_erp_read_stamps_but_customer_read_does_not(client, recon_pid):
+    # Step c turns this around: a read will stamp nothing, the ERP will acknowledge explicitly.
     """The distinction the whole detector rests on.
 
     A customer opening the app to check their charge is not the billing system reconciling.
@@ -178,42 +176,46 @@ def test_tc_erpr_01_erp_read_stamps_but_customer_read_does_not(client, recon_pid
     stamped = _reconciled_at(sid)
     assert stamped is not None, "an ERP read did not record that reconciliation happened"
 
-    # Now a customer reading the same session must NOT move the timestamp. The customer is
-    # created here rather than borrowed from whatever the session has seeded: this negative
-    # half is the more important one, and a skip because no customer happened to exist would
-    # leave the actual claim unverified.
-    email = "recon-customer@example.com"
-    client.post("/api/customer/auth/register", json={
-        "email": email, "password": "customer1234",
-        "name": "Recon Customer", "ship_name": "Recon Vessel",
-    })
-    login = client.post("/api/customer/auth/login",
-                        json={"email": email, "password": "customer1234"})
-    assert login.status_code == 200, login.text
-    token = login.json()["access_token"]
-    me = client.get("/api/customer/auth/me",
-                    headers={"Authorization": f"Bearer {token}"})
-    customer_id = me.json()["id"]
+    # D6.1 (2026-10-12): MODE 2 and customer tokens on /api/nfc/* are commented out, so
+    # there is no customer read left to tell apart. The customer half, commented out:
+    # # Now a customer reading the same session must NOT move the timestamp. The customer is
+    # # created here rather than borrowed from whatever the session has seeded: this negative
+    # # half is the more important one, and a skip because no customer happened to exist would
+    # # leave the actual claim unverified.
+    # email = "recon-customer@example.com"
+    # client.post("/api/customer/auth/register", json={
+    #     "email": email, "password": "customer1234",
+    #     "name": "Recon Customer", "ship_name": "Recon Vessel",
+    # })
+    # login = client.post("/api/customer/auth/login",
+    #                     json={"email": email, "password": "customer1234"})
+    # assert login.status_code == 200, login.text
+    # token = login.json()["access_token"]
+    # me = client.get("/api/customer/auth/me",
+    #                 headers={"Authorization": f"Bearer {token}"})
+    # customer_id = me.json()["id"]
 
-    # Attach the session to that customer so the ownership check lets the read through.
-    from app.models.session import Session
-    db = _S()
-    try:
-        db.get(Session, sid).customer_id = customer_id
-        db.commit()
-    finally:
-        db.close()
-    r2 = client.get(f"/api/nfc/session/{sid}",
-                    headers={**_erp(), "Authorization": f"Bearer {token}"})
-    assert r2.status_code == 200, r2.text
-    assert _reconciled_at(sid) == stamped, (
-        "a customer reading their own session advanced last_reconciled_at, which would mute "
-        "the silence detector whenever someone opened the app"
-    )
+    # # Attach the session to that customer so the ownership check lets the read through.
+    # from app.models.session import Session
+    # db = _S()
+    # try:
+    #     db.get(Session, sid).customer_id = customer_id
+    #     db.commit()
+    # finally:
+    #     db.close()
+    # r2 = client.get(f"/api/nfc/session/{sid}",
+    #                 headers={**_erp(), "Authorization": f"Bearer {token}"})
+    # assert r2.status_code == 200, r2.text
+    # assert _reconciled_at(sid) == stamped, (
+    #     "a customer reading their own session advanced last_reconciled_at, which would mute "
+    #     "the silence detector whenever someone opened the app"
+    # )
 
 
 # ═══ TC-ERPR-02 ══════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): GET /sessions/by-user is commented out; its "
+                         "replacement GET /sessions stamps nothing by design")
 def test_tc_erpr_02_by_user_stamps_everything_it_returns(client, recon_pid):
     """This endpoint exists so ERP can reconcile, so a machine read of it IS the event."""
     ids = [_session(recon_pid, user="erp-bulk", socket_id=i) for i in (1, 2, 3)]
@@ -324,6 +326,7 @@ async def test_tc_erpr_06_recent_reconciliation_with_backlog_does_not_alarm(reco
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="D6.1 (2026-10-12): MODE 2 is commented out — there is always an ERP")
 async def test_tc_erpr_07_mode_2_never_alarms(recon_pid):
     """There is no ERP in MODE 2, so ERP silence is not a fault — it is the topology."""
     from app.config import settings
@@ -353,11 +356,8 @@ def test_tc_erpr_08_active_session_is_not_a_backlog_item(recon_pid):
 
 
 def test_tc_erpr_09_status_endpoint_says_when_it_is_not_applicable(client, auth_headers):
-    """MODE 2 must not return empty lists that read as "all healthy"."""
-    from app.config import settings
-
-    settings.nfc_direct_client_mode = True
+    """D6.1 (2026-10-12): MODE 2 is commented out, so the status always applies — and says so,
+    rather than leaving a reader to infer it from empty lists."""
     body = client.get("/api/nfc/reconciliation", headers=auth_headers).json()
-    assert body["applicable"] is False, \
-        "MODE 2 reported as applicable; empty lists would read as a clean bill of health"
-    assert body["mode"] == "direct"
+    assert body["applicable"] is True
+    assert body["mode"] == "erp"

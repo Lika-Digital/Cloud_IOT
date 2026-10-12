@@ -17,7 +17,7 @@ import { getValveConfigs, setValveConfig } from '../../api/valveConfig'
 import { setSmartMode } from '../../api/pedestalConfig'
 import LedScheduleSection from './LedScheduleSection'
 import { SocketQrGrid } from './SocketQrGrid'
-import NfcProvisioningTable from './NfcProvisioningTable'
+// import NfcProvisioningTable from './NfcProvisioningTable'  // D6.1 — commented out
 import { getProvisioningMode, setProvisioningMode, type ProvisioningMode } from '../../api/nfc'
 import SocketBreakerPanel from './SocketBreakerPanel'
 import SocketLoadMeterPanel from './SocketLoadMeterPanel'
@@ -1454,12 +1454,13 @@ function QrCodesSection({
               onCopyFailed={(sid) => onFeedback(`qr-copy-${cabinetId}-${sid}`, 'error', 'Clipboard unavailable')}
             />
           ) : (
-            <NfcProvisioningTable
-              cabinetId={cabinetId}
-              pedestalId={pedestalId}
-              isAdmin={canConfigure}
-              onFeedback={onFeedback}
-            />
+            // D6.1 (2026-10-12): the tag table is commented out — the ERP maps tags to outlets.
+            // <NfcProvisioningTable cabinetId={cabinetId} pedestalId={pedestalId}
+            //   isAdmin={canConfigure} onFeedback={onFeedback} />
+            <div className="text-xs text-gray-400 px-1 py-1.5">
+              NFC tags are mapped to outlets in the ERP (myMarina). This cabinet keeps no tag
+              list: the ERP tells it which outlet to reserve for whom.
+            </div>
           )}
         </>
       )}

@@ -37,7 +37,7 @@ from ..time_utils import now_iso, iso_z
 # is how the QR path came to disagree with the NFC path in the first place.
 from ..services.nfc_service import (
     OUTLET_SOCKET, OUTLET_VALVE, VALID_OUTLETS,
-    WaterTagBlockedByAppVersion, assert_valve_provisioning_allowed,
+    # WaterTagBlockedByAppVersion, assert_valve_provisioning_allowed,  # D6.1 — commented out
     outlet_type_for, session_type_for,
 )
 
@@ -384,14 +384,16 @@ def socket_qr_image(
     if _resolve_pedestal_db_id(db, pedestal_id) is None:
         raise HTTPException(status_code=404, detail="Pedestal not found")
     kind, _num = _outlet_name_to_kind_and_id(socket_id)
-    if kind == OUTLET_VALVE:
-        # Same app-version gate as an NFC water tag, and for a stronger reason: a printed
-        # sticker outlives the deploy that produced it. Generating one now for a site whose
-        # app cannot read a water outlet puts a permanent artefact on the pontoon.
-        try:
-            assert_valve_provisioning_allowed()
-        except WaterTagBlockedByAppVersion as e:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    # D6.1 (2026-10-12): the water app-version gate is commented out with MODE 2. It applied
+    # only in MODE 2 (it returned at once in MODE 1), so MODE 1 behaviour is unchanged.
+    # if kind == OUTLET_VALVE:
+    #     # Same app-version gate as an NFC water tag, and for a stronger reason: a printed
+    #     # sticker outlives the deploy that produced it. Generating one now for a site whose
+    #     # app cannot read a water outlet puts a permanent artefact on the pontoon.
+    #     try:
+    #         assert_valve_provisioning_allowed()
+    #     except WaterTagBlockedByAppVersion as e:
+    #         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
     url = f"{QR_BASE_URL}/{pedestal_id}/{socket_id}"
     qr = qrcode.QRCode(

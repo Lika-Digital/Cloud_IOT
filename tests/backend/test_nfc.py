@@ -95,6 +95,7 @@ def _clear_sessions(pid, socket_id):
 
 # ── Provisioning (admin) ──────────────────────────────────────────────────────
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): the NFC tag registry is commented out — the ERP owns the tag mapping")
 def test_provision_tag_stored(client, auth_headers, nfc_pid):
     _clear_nfc()
     r = client.post("/api/nfc/tags", headers=auth_headers,
@@ -105,6 +106,7 @@ def test_provision_tag_stored(client, auth_headers, nfc_pid):
     assert any(t["nfc_tag_id"] == "TAG-A" and t["socket_id"] == "Q1" for t in lst)
 
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): the NFC tag registry is commented out — the ERP owns the tag mapping")
 def test_provision_duplicate_rejected_with_owner(client, auth_headers, nfc_pid):
     _clear_nfc()
     client.post("/api/nfc/tags", headers=auth_headers,
@@ -115,6 +117,7 @@ def test_provision_duplicate_rejected_with_owner(client, auth_headers, nfc_pid):
     assert CAB in r.json()["detail"] and "Q1" in r.json()["detail"]
 
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): the NFC tag registry is commented out — the ERP owns the tag mapping")
 def test_provision_replaces_existing_for_socket(client, auth_headers, nfc_pid):
     _clear_nfc()
     client.post("/api/nfc/tags", headers=auth_headers,
@@ -126,6 +129,7 @@ def test_provision_replaces_existing_for_socket(client, auth_headers, nfc_pid):
     assert len(q3) == 1 and q3[0]["nfc_tag_id"] == "NEW"
 
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): the NFC tag registry is commented out — the ERP owns the tag mapping")
 def test_remove_tag(client, auth_headers, nfc_pid):
     _clear_nfc()
     client.post("/api/nfc/tags", headers=auth_headers,
@@ -136,6 +140,7 @@ def test_remove_tag(client, auth_headers, nfc_pid):
     assert not any(t["socket_id"] == "Q4" for t in active)
 
 
+@pytest.mark.skip(reason="D6.1 (2026-10-12): the NFC tag registry is commented out — the ERP owns the tag mapping")
 def test_bulk_save_all(client, auth_headers, nfc_pid):
     _clear_nfc()
     r = client.post("/api/nfc/tags/bulk", headers=auth_headers, json={
@@ -181,9 +186,8 @@ def test_switch_back_to_qr_restores_auto_activate(client, auth_headers, nfc_pid)
 
 def test_scan_creates_pending(client, auth_headers, nfc_pid):
     _clear_nfc(); _clear_sessions(nfc_pid, 1)
-    client.post("/api/nfc/tags", headers=auth_headers,
-                json={"cabinet_id": CAB, "socket_id": "Q1", "nfc_tag_id": "S1"})
-    r = client.post("/api/nfc/scan", headers=_erp(), json={"nfc_tag_id": "S1", "user_id": "erp-77"})
+    # D6.1: no tag registry — the ERP maps tag "S1" to Q1; /scan names the outlet.
+    r = client.post("/api/nfc/scan", headers=_erp(), json={"cabinet_id": CAB, "outlet": "Q1", "erp_ref": "erp-77"})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["status"] == "pending"
@@ -193,25 +197,26 @@ def test_scan_creates_pending(client, auth_headers, nfc_pid):
 
 
 def test_scan_unknown_tag_404(client, nfc_pid):
-    r = client.post("/api/nfc/scan", headers=_erp(), json={"nfc_tag_id": "NOPE", "user_id": "u"})
+    # D6.1: no tags here — the caller names the cabinet, and an unknown one is 404.
+    r = client.post("/api/nfc/scan", headers=_erp(),
+                    json={"cabinet_id": "NOPE_CAB", "outlet": "Q1", "erp_ref": "u"})
     assert r.status_code == 404
 
 
 def test_scan_missing_key_401(client, nfc_pid):
-    r = client.post("/api/nfc/scan", json={"nfc_tag_id": "x", "user_id": "u"})
+    r = client.post("/api/nfc/scan", json={"cabinet_id": CAB, "outlet": "Q1", "erp_ref": "u"})
     assert r.status_code == 401
 
 
 def test_scan_invalid_key_401(client, nfc_pid):
     r = client.post("/api/nfc/scan", headers={"X-API-Key": "wrong"},
-                    json={"nfc_tag_id": "x", "user_id": "u"})
+                    json={"cabinet_id": CAB, "outlet": "Q1", "erp_ref": "u"})
     assert r.status_code == 401
 
 
 def test_scan_socket_active_409(client, auth_headers, nfc_pid):
     _clear_nfc(); _clear_sessions(nfc_pid, 2)
-    client.post("/api/nfc/tags", headers=auth_headers,
-                json={"cabinet_id": CAB, "socket_id": "Q2", "nfc_tag_id": "ACT"})
+    # D6.1: no tag registry — the ERP maps tag "ACT" to Q2; /scan names the outlet.
     from app.models.session import Session
     db = _S()
     try:
@@ -220,15 +225,14 @@ def test_scan_socket_active_409(client, auth_headers, nfc_pid):
         db.commit()
     finally:
         db.close()
-    r = client.post("/api/nfc/scan", headers=_erp(), json={"nfc_tag_id": "ACT", "user_id": "u"})
+    r = client.post("/api/nfc/scan", headers=_erp(), json={"cabinet_id": CAB, "outlet": "Q2", "erp_ref": "u"})
     assert r.status_code == 409
     _clear_sessions(nfc_pid, 2)
 
 
 def test_scan_socket_fault_503(client, auth_headers, nfc_pid):
     _clear_nfc(); _clear_sessions(nfc_pid, 3)
-    client.post("/api/nfc/tags", headers=auth_headers,
-                json={"cabinet_id": CAB, "socket_id": "Q3", "nfc_tag_id": "FLT"})
+    # D6.1: no tag registry — the ERP maps tag "FLT" to Q3; /scan names the outlet.
     from app.models.socket_config import SocketConfig
     db = _S()
     try:
@@ -238,7 +242,7 @@ def test_scan_socket_fault_503(client, auth_headers, nfc_pid):
         db.commit()
     finally:
         db.close()
-    r = client.post("/api/nfc/scan", headers=_erp(), json={"nfc_tag_id": "FLT", "user_id": "u"})
+    r = client.post("/api/nfc/scan", headers=_erp(), json={"cabinet_id": CAB, "outlet": "Q3", "erp_ref": "u"})
     assert r.status_code == 503
     db = _S()
     try:
@@ -252,18 +256,16 @@ def test_scan_socket_fault_503(client, auth_headers, nfc_pid):
 
 def test_two_simultaneous_scans_second_409(client, auth_headers, nfc_pid):
     _clear_nfc(); _clear_sessions(nfc_pid, 1)
-    client.post("/api/nfc/tags", headers=auth_headers,
-                json={"cabinet_id": CAB, "socket_id": "Q1", "nfc_tag_id": "S1B"})
-    r1 = client.post("/api/nfc/scan", headers=_erp(), json={"nfc_tag_id": "S1B", "user_id": "a"})
+    # D6.1: no tag registry — the ERP maps tag "S1B" to Q1; /scan names the outlet.
+    r1 = client.post("/api/nfc/scan", headers=_erp(), json={"cabinet_id": CAB, "outlet": "Q1", "erp_ref": "a"})
     assert r1.status_code == 200
-    r2 = client.post("/api/nfc/scan", headers=_erp(), json={"nfc_tag_id": "S1B", "user_id": "b"})
+    r2 = client.post("/api/nfc/scan", headers=_erp(), json={"cabinet_id": CAB, "outlet": "Q1", "erp_ref": "b"})
     assert r2.status_code == 409
 
 
 def test_scan_expired_pending_creates_new(client, auth_headers, nfc_pid):
     _clear_nfc(); _clear_sessions(nfc_pid, 4)
-    client.post("/api/nfc/tags", headers=auth_headers,
-                json={"cabinet_id": CAB, "socket_id": "Q4", "nfc_tag_id": "EXP"})
+    # D6.1: no tag registry — the ERP maps tag "EXP" to Q4; /scan names the outlet.
     # Seed an expired pending row directly.
     from app.models.nfc_pending_session import NfcPendingSession
     db = _S()
@@ -275,7 +277,7 @@ def test_scan_expired_pending_creates_new(client, auth_headers, nfc_pid):
         db.commit()
     finally:
         db.close()
-    r = client.post("/api/nfc/scan", headers=_erp(), json={"nfc_tag_id": "EXP", "user_id": "new"})
+    r = client.post("/api/nfc/scan", headers=_erp(), json={"cabinet_id": CAB, "outlet": "Q4", "erp_ref": "new"})
     assert r.status_code == 200, r.text
 
 
@@ -286,7 +288,8 @@ def _seed_active_session(pid, socket_id, nfc_user="erp-1"):
     db = _S()
     try:
         s = Session(pedestal_id=pid, socket_id=socket_id, type="electricity",
-                    status="active", started_at=datetime.utcnow(), nfc_user_id=nfc_user)
+                    status="active", started_at=datetime.utcnow(),
+                    erp_ref=nfc_user)  # D6.1: was nfc_user_id
         db.add(s); db.commit(); db.refresh(s)
         return s.id
     finally:
@@ -300,7 +303,7 @@ def test_get_session_returns_fields(client, nfc_pid):
     assert r.status_code == 200, r.text
     b = r.json()
     assert b["session_id"] == sid and b["status"] == "active"
-    assert b["customer_id"] == "erp-9"
+    assert b["erp_ref"] == "erp-9"  # D6.1: was customer_id
     assert b["socket_id"] == "Q1" and b["cabinet_id"] == CAB
     assert "duration_minutes" in b and "energy_kwh" in b and "power_kw_current" in b
     _clear_sessions(nfc_pid, 1)

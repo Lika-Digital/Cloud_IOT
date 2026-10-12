@@ -1,5 +1,12 @@
 """NFC provisioning + ERP integration endpoints (v3.26, access model revised v3.43).
 
+D6.1 (2026-10-12) — THE ERP IS THE ONLY OWNER OF THE NFC MAPPING AND THE CUSTOMER.
+  * The tag registry (/tags, /tags/bulk) and MODE 2 (direct client mode, customer tokens on
+    /api/nfc/*) are COMMENTED OUT below, not deleted.
+  * POST /scan takes {cabinet_id, outlet, erp_ref}; sessions carry `erp_ref`.
+  * GET /sessions/by-user is replaced by GET /sessions (by erp_ref and/or end-time range).
+  * One caller remains: the ERP's machine key. The text below describes the pre-D6.1 design.
+
 Two audiences:
   * **Admin (JWT, require_admin): provisioning.** Writing, re-assigning or deleting a tag, and
     switching a cabinet's provisioning mode, are INSTALLATION acts — after one, a customer's
@@ -29,7 +36,7 @@ from sqlalchemy.orm import Session as DBSession
 from ..config import settings
 from ..database import get_db
 from ..auth.user_database import get_user_db
-from ..auth.customer_dependencies import optional_customer
+# from ..auth.customer_dependencies import optional_customer  # D6.1 — MODE 2 commented out
 from ..auth.dependencies import require_admin, require_any_role
 from ..auth.erp_api_key import require_erp_api_key
 from ..auth.models import User
@@ -38,11 +45,11 @@ from ..models.pedestal_config import PedestalConfig
 from ..services.session_service import session_service
 from ..services import erp_reconciliation, nfc_service
 from ..services.nfc_service import (
-    DuplicateNfcTagError,
+    # DuplicateNfcTagError,  # D6.1 — tag registry commented out
     OUTLET_SOCKET,
     OUTLET_VALVE,
     VALID_OUTLETS,
-    WaterTagBlockedByAppVersion,
+    # WaterTagBlockedByAppVersion,  # D6.1
     outlet_type_for,
     session_type_for,
 )
@@ -135,33 +142,46 @@ def _valve_state(db: DBSession, pedestal_id: int, valve_id: int) -> str:
 
 # ── Pydantic bodies ───────────────────────────────────────────────────────────
 
+# D6.1 (2026-10-12): the tag-based scan body, commented out.
+# class NfcScanBody(BaseModel):
+#     nfc_tag_id: str = Field(..., min_length=1, max_length=256)
+#     user_id: str = Field(..., min_length=1, max_length=128)
 class NfcScanBody(BaseModel):
-    nfc_tag_id: str = Field(..., min_length=1, max_length=256)
-    user_id: str = Field(..., min_length=1, max_length=128)
+    """D6.1 (2026-10-12) — the ERP names the outlet and its own reference. No tag here."""
+    cabinet_id: str = Field(..., min_length=1, max_length=64)
+    # "Q1".."Q4" for a socket, "V1"/"V2" for a valve — exactly as the cabinet publishes them.
+    # A bare number is refused: "1" cannot say whether it means socket 1 or valve 1.
+    outlet: str = Field(..., min_length=2, max_length=8)
+    # The ERP's own reference for whoever the session belongs to. Opaque here: stored
+    # verbatim, never parsed or looked up, returned as `erp_ref` in every session payload.
+    erp_ref: str = Field(..., min_length=1, max_length=128)
 
 
-class NfcProvisionBody(BaseModel):
-    cabinet_id: str = Field(..., min_length=1)
-    # "Q1".."Q4" for a socket, "V1"/"V2" for a valve. Still 2 characters on today's
-    # hardware, but the field no longer pins it at exactly 2 — the outlet vocabulary is
-    # validated against nfc_service.VALID_OUTLETS, which is the list that actually knows.
-    socket_id: str = Field(..., min_length=2, max_length=8)
-    nfc_tag_id: str = Field(..., min_length=1, max_length=256)
-    # Which kind of outlet the caller believes this is. Defaults to "socket" so every
-    # existing client keeps working unchanged; a water tag must state "valve" explicitly.
-    # The service refuses a mismatch (valve + Q3) rather than correcting it.
-    outlet_type: str = Field(OUTLET_SOCKET, pattern="^(socket|valve)$")
 
 
-class NfcBulkItem(BaseModel):
-    socket_id: str = Field(..., min_length=2, max_length=8)
-    nfc_tag_id: str = Field(..., min_length=1, max_length=256)
-    outlet_type: str = Field(OUTLET_SOCKET, pattern="^(socket|valve)$")
+# D6.1 (2026-10-12): provisioning bodies commented out with the tag registry.
+# class NfcProvisionBody(BaseModel):
+#     cabinet_id: str = Field(..., min_length=1)
+#     # "Q1".."Q4" for a socket, "V1"/"V2" for a valve. Still 2 characters on today's
+#     # hardware, but the field no longer pins it at exactly 2 — the outlet vocabulary is
+#     # validated against nfc_service.VALID_OUTLETS, which is the list that actually knows.
+#     socket_id: str = Field(..., min_length=2, max_length=8)
+#     nfc_tag_id: str = Field(..., min_length=1, max_length=256)
+#     # Which kind of outlet the caller believes this is. Defaults to "socket" so every
+#     # existing client keeps working unchanged; a water tag must state "valve" explicitly.
+#     # The service refuses a mismatch (valve + Q3) rather than correcting it.
+#     outlet_type: str = Field(OUTLET_SOCKET, pattern="^(socket|valve)$")
 
 
-class NfcBulkBody(BaseModel):
-    cabinet_id: str = Field(..., min_length=1)
-    items: List[NfcBulkItem]
+# class NfcBulkItem(BaseModel):
+#     socket_id: str = Field(..., min_length=2, max_length=8)
+#     nfc_tag_id: str = Field(..., min_length=1, max_length=256)
+#     outlet_type: str = Field(OUTLET_SOCKET, pattern="^(socket|valve)$")
+
+
+# class NfcBulkBody(BaseModel):
+#     cabinet_id: str = Field(..., min_length=1)
+#     items: List[NfcBulkItem]
 
 
 class NfcModeBody(BaseModel):
@@ -291,10 +311,11 @@ def list_cabinet_outlets(cabinet_id: str, db: DBSession = Depends(get_db),
                     "state": ("unknown" if kind == OUTLET_VALVE else None),
                 })
 
-    tags = {t.socket_id: t for t in nfc_service.list_tags(db, cabinet_id)}
-    for o in outlets:
-        tag = tags.get(o["outlet_name"])
-        o["nfc_tag_id"] = tag.nfc_tag_id if tag else None
+    # D6.1: no tag registry, so no nfc_tag_id per outlet.
+    # tags = {t.socket_id: t for t in nfc_service.list_tags(db, cabinet_id)}
+    # for o in outlets:
+    #     tag = tags.get(o["outlet_name"])
+    #     o["nfc_tag_id"] = tag.nfc_tag_id if tag else None
 
     return {
         "cabinet_id": cabinet_id,
@@ -303,105 +324,107 @@ def list_cabinet_outlets(cabinet_id: str, db: DBSession = Depends(get_db),
     }
 
 
-def _tag_out(tag) -> dict:
-    return {
-        "nfc_tag_id": tag.nfc_tag_id,
-        "cabinet_id": tag.cabinet_id,
-        "socket_id": tag.socket_id,
-        # v3.43 — "socket" or "valve". The UI cannot infer it from the name: both inbound
-        # vocabularies accept bare digits, so "1" is genuinely ambiguous.
-        "outlet_type": tag.outlet_type or OUTLET_SOCKET,
-        "session_type": session_type_for(tag.outlet_type or OUTLET_SOCKET),
-        "provisioned_at": iso_z(tag.provisioned_at),
-        "provisioned_by": tag.provisioned_by,
-        "is_active": tag.is_active,
-        # v3.43 — surfaced so the trail is readable without a DB query. Null for an active tag
-        # and for rows removed before the columns existed.
-        "removed_at": iso_z(tag.removed_at) if tag.removed_at else None,
-        "removed_by": tag.removed_by,
-    }
+# ── D6.1 (2026-10-12): the NFC tag registry routes are COMMENTED OUT, not deleted. ───
+# The ERP owns the tag→outlet mapping; /scan now names the outlet itself.
+# def _tag_out(tag) -> dict:
+#     return {
+#         "nfc_tag_id": tag.nfc_tag_id,
+#         "cabinet_id": tag.cabinet_id,
+#         "socket_id": tag.socket_id,
+#         # v3.43 — "socket" or "valve". The UI cannot infer it from the name: both inbound
+#         # vocabularies accept bare digits, so "1" is genuinely ambiguous.
+#         "outlet_type": tag.outlet_type or OUTLET_SOCKET,
+#         "session_type": session_type_for(tag.outlet_type or OUTLET_SOCKET),
+#         "provisioned_at": iso_z(tag.provisioned_at),
+#         "provisioned_by": tag.provisioned_by,
+#         "is_active": tag.is_active,
+#         # v3.43 — surfaced so the trail is readable without a DB query. Null for an active tag
+#         # and for rows removed before the columns existed.
+#         "removed_at": iso_z(tag.removed_at) if tag.removed_at else None,
+#         "removed_by": tag.removed_by,
+#     }
 
 
-@router.get("/tags/{cabinet_id}")
-def list_nfc_tags(cabinet_id: str, db: DBSession = Depends(get_db),
-                  _: User = Depends(require_any_role)):
-    """Active NFC tag mappings for a cabinet (summary of the configuration)."""
-    return [_tag_out(t) for t in nfc_service.list_tags(db, cabinet_id)]
+# @router.get("/tags/{cabinet_id}")
+# def list_nfc_tags(cabinet_id: str, db: DBSession = Depends(get_db),
+#                   _: User = Depends(require_any_role)):
+#     """Active NFC tag mappings for a cabinet (summary of the configuration)."""
+#     return [_tag_out(t) for t in nfc_service.list_tags(db, cabinet_id)]
 
 
-def _provision_one(db, cabinet_id: str, socket_id: str, nfc_tag_id: str, by: str,
-                   outlet_type: str = OUTLET_SOCKET):
-    _outlet_kind_or_400(socket_id)
-    try:
-        return nfc_service.provision_tag(db, nfc_tag_id, cabinet_id, socket_id,
-                                         provisioned_by=by, outlet_type=outlet_type)
-    except WaterTagBlockedByAppVersion as e:
-        # 409, not 400: the request is well-formed and will be valid once the app ships.
-        # 400 would read as "you typed something wrong" and invite a retry.
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
-    except DuplicateNfcTagError as e:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"NFC tag already provisioned to cabinet {e.cabinet_id} socket {e.socket_id}",
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+# def _provision_one(db, cabinet_id: str, socket_id: str, nfc_tag_id: str, by: str,
+#                    outlet_type: str = OUTLET_SOCKET):
+#     _outlet_kind_or_400(socket_id)
+#     try:
+#         return nfc_service.provision_tag(db, nfc_tag_id, cabinet_id, socket_id,
+#                                          provisioned_by=by, outlet_type=outlet_type)
+#     except WaterTagBlockedByAppVersion as e:
+#         # 409, not 400: the request is well-formed and will be valid once the app ships.
+#         # 400 would read as "you typed something wrong" and invite a retry.
+#         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+#     except DuplicateNfcTagError as e:
+#         raise HTTPException(
+#             status_code=status.HTTP_409_CONFLICT,
+#             detail=f"NFC tag already provisioned to cabinet {e.cabinet_id} socket {e.socket_id}",
+#         )
+#     except ValueError as e:
+#         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.post("/tags")
-def provision_nfc_tag(body: NfcProvisionBody, db: DBSession = Depends(get_db),
-                      admin: User = Depends(require_admin)):
-    """Provision (or replace) the NFC tag for one socket."""
-    tag = _provision_one(db, body.cabinet_id, body.socket_id, body.nfc_tag_id, admin.email,
-                         outlet_type=body.outlet_type)
-    return _tag_out(tag)
+# @router.post("/tags")
+# def provision_nfc_tag(body: NfcProvisionBody, db: DBSession = Depends(get_db),
+#                       admin: User = Depends(require_admin)):
+#     """Provision (or replace) the NFC tag for one socket."""
+#     tag = _provision_one(db, body.cabinet_id, body.socket_id, body.nfc_tag_id, admin.email,
+#                          outlet_type=body.outlet_type)
+#     return _tag_out(tag)
 
 
-@router.post("/tags/bulk")
-def provision_nfc_tags_bulk(body: NfcBulkBody, db: DBSession = Depends(get_db),
-                            admin: User = Depends(require_admin)):
-    """Save All — provision multiple sockets at once. Validated per item; a
-    duplicate/invalid item aborts the whole batch (nothing committed past the
-    failing item is left half-applied because each provision commits, so we
-    pre-validate duplicates across the batch first)."""
-    # Pre-validate: reject in-batch duplicate tag ids and bad socket ids.
-    seen: dict[str, str] = {}
-    for it in body.items:
-        _outlet_kind_or_400(it.socket_id)
-        if it.outlet_type == OUTLET_VALVE:
-            # In the PRE-PASS, not the write loop. Each provision commits individually,
-            # so discovering this mid-loop would leave the electricity tags before it
-            # applied and the ones after it not — a half-provisioned cabinet.
-            try:
-                nfc_service.assert_valve_provisioning_allowed()
-            except WaterTagBlockedByAppVersion as e:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
-        if it.nfc_tag_id in seen and seen[it.nfc_tag_id] != it.socket_id:
-            raise HTTPException(
-                status_code=409,
-                detail=f"NFC tag {it.nfc_tag_id} assigned to two sockets in the same request",
-            )
-        seen[it.nfc_tag_id] = it.socket_id
-    out = []
-    for it in body.items:
-        out.append(_tag_out(_provision_one(db, body.cabinet_id, it.socket_id, it.nfc_tag_id,
-                                           admin.email, outlet_type=it.outlet_type)))
-    return {"cabinet_id": body.cabinet_id, "tags": out}
+# @router.post("/tags/bulk")
+# def provision_nfc_tags_bulk(body: NfcBulkBody, db: DBSession = Depends(get_db),
+#                             admin: User = Depends(require_admin)):
+#     """Save All — provision multiple sockets at once. Validated per item; a
+#     duplicate/invalid item aborts the whole batch (nothing committed past the
+#     failing item is left half-applied because each provision commits, so we
+#     pre-validate duplicates across the batch first)."""
+#     # Pre-validate: reject in-batch duplicate tag ids and bad socket ids.
+#     seen: dict[str, str] = {}
+#     for it in body.items:
+#         _outlet_kind_or_400(it.socket_id)
+#         if it.outlet_type == OUTLET_VALVE:
+#             # In the PRE-PASS, not the write loop. Each provision commits individually,
+#             # so discovering this mid-loop would leave the electricity tags before it
+#             # applied and the ones after it not — a half-provisioned cabinet.
+#             try:
+#                 nfc_service.assert_valve_provisioning_allowed()
+#             except WaterTagBlockedByAppVersion as e:
+#                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+#         if it.nfc_tag_id in seen and seen[it.nfc_tag_id] != it.socket_id:
+#             raise HTTPException(
+#                 status_code=409,
+#                 detail=f"NFC tag {it.nfc_tag_id} assigned to two sockets in the same request",
+#             )
+#         seen[it.nfc_tag_id] = it.socket_id
+#     out = []
+#     for it in body.items:
+#         out.append(_tag_out(_provision_one(db, body.cabinet_id, it.socket_id, it.nfc_tag_id,
+#                                            admin.email, outlet_type=it.outlet_type)))
+#     return {"cabinet_id": body.cabinet_id, "tags": out}
 
 
-@router.delete("/tags/{cabinet_id}/{socket_id}")
-def remove_nfc_tag(cabinet_id: str, socket_id: str, db: DBSession = Depends(get_db),
-                   admin: User = Depends(require_admin)):
-    """Clear the NFC tag mapping for a socket (is_active=False).
+# @router.delete("/tags/{cabinet_id}/{socket_id}")
+# def remove_nfc_tag(cabinet_id: str, socket_id: str, db: DBSession = Depends(get_db),
+#                    admin: User = Depends(require_admin)):
+#     """Clear the NFC tag mapping for a socket (is_active=False).
 
-    The actor is recorded from v3.43 — the dependency was `_: User` before, discarding the one
-    piece of information the audit trail was missing.
-    """
-    _outlet_kind_or_400(socket_id)
-    cleared = nfc_service.remove_tag(db, cabinet_id, socket_id, removed_by=admin.email)
-    if not cleared:
-        raise HTTPException(status_code=404, detail="No active NFC tag for this socket")
-    return {"cabinet_id": cabinet_id, "socket_id": socket_id, "removed": True}
+#     The actor is recorded from v3.43 — the dependency was `_: User` before, discarding the one
+#     piece of information the audit trail was missing.
+#     """
+#     _outlet_kind_or_400(socket_id)
+#     cleared = nfc_service.remove_tag(db, cabinet_id, socket_id, removed_by=admin.email)
+#     if not cleared:
+#         raise HTTPException(status_code=404, detail="No active NFC tag for this socket")
+#     return {"cabinet_id": cabinet_id, "socket_id": socket_id, "removed": True}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -428,70 +451,72 @@ def remove_nfc_tag(cabinet_id: str, socket_id: str, db: DBSession = Depends(get_
 # and the backend was discarding it in favour of the request body.
 
 
-def _customer_identities(customer) -> set[str]:
-    """Every string that legitimately identifies this customer in `nfc_user_id`.
+# ── D6.1 (2026-10-12): per-customer authorisation COMMENTED OUT with MODE 2. ─────────
+# There is one caller now, the ERP's machine key, and the ERP owns the customer.
+# def _customer_identities(customer) -> set[str]:
+#     """Every string that legitimately identifies this customer in `nfc_user_id`.
 
-    The app sends `profile.email || String(profile.id)`
-    (`mobile/app/(app)/scan.tsx:42`), so both forms appear in stored rows and both must be
-    accepted — otherwise the fix would lock customers out of their own sessions depending on
-    which app version wrote the row.
-    """
-    out = {str(customer.id)}
-    if getattr(customer, "email", None):
-        out.add(customer.email)
-        out.add(customer.email.lower())
-    return out
-
-
-def _owns(session, customer) -> bool:
-    """Whether this customer owns this session.
-
-    `customer_id` is the real foreign key and is checked first; `nfc_user_id` is the external
-    string the app or ERP supplied, and is the only link for sessions created through the NFC
-    path before an owner was claimed.
-    """
-    if session.customer_id is not None and session.customer_id == customer.id:
-        return True
-    if session.nfc_user_id:
-        return session.nfc_user_id in _customer_identities(customer)
-    return False
+#     The app sends `profile.email || String(profile.id)`
+#     (`mobile/app/(app)/scan.tsx:42`), so both forms appear in stored rows and both must be
+#     accepted — otherwise the fix would lock customers out of their own sessions depending on
+#     which app version wrote the row.
+#     """
+#     out = {str(customer.id)}
+#     if getattr(customer, "email", None):
+#         out.add(customer.email)
+#         out.add(customer.email.lower())
+#     return out
 
 
-def _require_session_access(session, customer) -> None:
-    """Gate a single session record.
+# def _owns(session, customer) -> bool:
+#     """Whether this customer owns this session.
 
-    404, not 403, on a mismatch: a distinct "forbidden" would confirm that the session exists,
-    which is all an enumeration needs. The caller who legitimately owns nothing and the caller
-    probing someone else's id get the same answer.
-
-    When there is no customer principal the caller is the ERP machine key. In MODE 1 that is a
-    server acting on its own records and is allowed; in MODE 2 it is refused before reaching
-    here, by `_require_direct_client_principal`.
-    """
-    if customer is None:
-        return
-    if not _owns(session, customer):
-        raise HTTPException(status_code=404, detail="Session not found")
+#     `customer_id` is the real foreign key and is checked first; `nfc_user_id` is the external
+#     string the app or ERP supplied, and is the only link for sessions created through the NFC
+#     path before an owner was claimed.
+#     """
+#     if session.customer_id is not None and session.customer_id == customer.id:
+#         return True
+#     if session.nfc_user_id:
+#         return session.nfc_user_id in _customer_identities(customer)
+#     return False
 
 
-def _require_direct_client_principal(customer) -> None:
-    """In MODE 2 a customer token is mandatory on the session endpoints.
+# def _require_session_access(session, customer) -> None:
+#     """Gate a single session record.
 
-    Without this the object checks above are bypassable by simply omitting the Bearer header:
-    the caller falls back to being "the ERP", and the ERP key is compiled into the mobile app
-    bundle (EXPO_PUBLIC_ERP_API_KEY), so it must be assumed known. A check that an attacker
-    opts out of by sending fewer headers is not a check.
+#     404, not 403, on a mismatch: a distinct "forbidden" would confirm that the session exists,
+#     which is all an enumeration needs. The caller who legitimately owns nothing and the caller
+#     probing someone else's id get the same answer.
 
-    MODE 1 deliberately still accepts the bare key, because there the caller really is ERP's
-    server. Closing the app-shaped hole there means the app must stop holding the key at all —
-    a separate change, and the key rotated with it.
-    """
-    if settings.nfc_direct_client_mode and customer is None:
-        raise HTTPException(
-            status_code=401,
-            detail="This marina runs without an ERP, so a customer sign-in is required "
-                   "for session data.",
-        )
+#     When there is no customer principal the caller is the ERP machine key. In MODE 1 that is a
+#     server acting on its own records and is allowed; in MODE 2 it is refused before reaching
+#     here, by `_require_direct_client_principal`.
+#     """
+#     if customer is None:
+#         return
+#     if not _owns(session, customer):
+#         raise HTTPException(status_code=404, detail="Session not found")
+
+
+# def _require_direct_client_principal(customer) -> None:
+#     """In MODE 2 a customer token is mandatory on the session endpoints.
+
+#     Without this the object checks above are bypassable by simply omitting the Bearer header:
+#     the caller falls back to being "the ERP", and the ERP key is compiled into the mobile app
+#     bundle (EXPO_PUBLIC_ERP_API_KEY), so it must be assumed known. A check that an attacker
+#     opts out of by sending fewer headers is not a check.
+
+#     MODE 1 deliberately still accepts the bare key, because there the caller really is ERP's
+#     server. Closing the app-shaped hole there means the app must stop holding the key at all —
+#     a separate change, and the key rotated with it.
+#     """
+#     if settings.nfc_direct_client_mode and customer is None:
+#         raise HTTPException(
+#             status_code=401,
+#             detail="This marina runs without an ERP, so a customer sign-in is required "
+#                    "for session data.",
+#         )
 
 
 def _require_pedestal_can_act(cfg: PedestalConfig) -> None:
@@ -540,107 +565,193 @@ def _require_pedestal_can_act(cfg: PedestalConfig) -> None:
         )
 
 
+# ── D6.1 (2026-10-12): the tag-based /scan is COMMENTED OUT; the new one is below. ────
+# @router.post("/scan")
+# def nfc_scan(body: NfcScanBody, db: DBSession = Depends(get_db),
+#              customer=Depends(optional_customer),
+#              _: str = Depends(require_erp_api_key)):
+#     """Pre-register a marina customer's intent to use a socket (NFC tag scanned
+#     in myMarina). Does NOT activate the socket — activation happens on plug-in.
+
+#     `body.user_id` is NOT trusted when a customer token is present. It becomes
+#     `sessions.nfc_user_id`, which is what ERP reconciles billing against in MODE 1 and what
+#     attributes the charge itself in MODE 2 — so a value the caller simply asserts is a way to
+#     make someone else pay. Identity comes from the authenticated principal; a body value that
+#     disagrees is refused rather than quietly corrected, because a disagreement means either a
+#     client bug or an attempt, and both are worth surfacing.
+#     """
+#     _require_direct_client_principal(customer)
+
+#     user_id = body.user_id
+#     if customer is not None:
+#         allowed = _customer_identities(customer)
+#         if user_id not in allowed:
+#             logger.warning(
+#                 "[NFC] scan REFUSED: customer id=%s presented user_id=%r which is not theirs",
+#                 customer.id, user_id,
+#             )
+#             raise HTTPException(
+#                 status_code=403,
+#                 detail="user_id does not match the signed-in customer",
+#             )
+#         # Normalise to the authenticated identity rather than the supplied spelling, so
+#         # attribution is stable regardless of what the client sent.
+#         user_id = customer.email or str(customer.id)
+
+#     tag = nfc_service.get_active_tag_by_id(db, body.nfc_tag_id)
+#     if tag is None:
+#         # Still a 404, and still no fallback to a default socket — but worded for the person
+#         # reading it. "NFC tag not provisioned" told a customer nothing they could act on.
+#         raise HTTPException(
+#             status_code=404,
+#             detail="This tag is not registered to a socket. Please contact the marina office "
+#                    "to have it registered.",
+#         )
+
+#     cabinet_id, socket_id = tag.cabinet_id, tag.socket_id
+#     cfg = _resolve_pedestal(db, cabinet_id)
+#     if cfg is None:
+#         # DISTINCT from "unknown tag" (v3.43). The tag IS provisioned — to a cabinet this
+#         # system has no record of. That is our provisioning error, not the customer's unknown
+#         # token, and sharing the 404 made a configuration fault indistinguishable from a
+#         # stranger's tag. 500 because it is a server-side inconsistency, not a bad request.
+#         logger.error("[NFC] tag %s is provisioned to cabinet %s, which has no pedestal row",
+#                      body.nfc_tag_id, cabinet_id)
+#         raise HTTPException(
+#             status_code=500,
+#             detail="This tag is registered to a pedestal the system does not recognise. "
+#                    "Please contact the marina office.",
+#         )
+
+#     # Can the NUC act at all? Smart mode and liveness, neither of which was checked before.
+#     _require_pedestal_can_act(cfg)
+
+#     # v3.43 — WHAT KIND of outlet this tag is on, taken from the tag rather than assumed.
+#     # This endpoint hardcoded session_type="electricity", so a water tag opened an
+#     # ELECTRICITY session against socket N — and the litres it later drew were billed as
+#     # kWh on an outlet the customer never touched. Rows written before the column exists
+#     # default to "socket", which is what they all were.
+#     outlet_type = tag.outlet_type or OUTLET_SOCKET
+#     session_type = session_type_for(outlet_type)
+#     is_valve = outlet_type == OUTLET_VALVE
+#     outlet_word = "water outlet" if is_valve else "socket"
+
+#     outlet_int = _outlet_str_to_id(socket_id, outlet_type)
+#     # Kept for the electricity path and for the response, which has always used this name.
+#     socket_int = outlet_int
+
+#     # Outlet availability. The fault check applies to electricity only.
+#     #
+#     # Not because a valve has no state — it does: `opta/water/V{n}/status` carries
+#     # `state` and `hw_status`, and v3.43 persists both on `valve_configs`. The reason is
+#     # narrower and specific to WHEN a valve fault becomes observable.
+#     #
+#     # The firmware has a valve `STATE_FAULT`, but it reports it REACTIVELY: an attempt to
+#     # open a faulted valve answers on `opta/acks` with
+#     # `{"status":"error","reason":"outlet_fault"}` (docs/firmware_requirements.md, v3.9).
+#     # It does not appear in the status topic, and no capture has ever shown a `state` or
+#     # `hw_status` value other than `idle`/`off`.
+#     #
+#     # `/scan` runs BEFORE any open command, so at this moment there is genuinely nothing
+#     # to read. A check here would test for a string we invented, pass always, and be
+#     # indistinguishable from a check that works — the failure mode worth naming. The
+#     # fault surfaces where it actually can: the ACK handler, on activation.
+#     #
+#     # Passing a valve through `_socket_display_state` would be worse: that reads
+#     # socket-keyed tables, so V1 would be judged on socket 1's hardware.
+#     if not is_valve and _socket_display_state(db, cfg.pedestal_id, outlet_int) == "fault":
+#         raise HTTPException(
+#             status_code=503,
+#             detail="This socket has a fault and cannot be used. Please contact the marina "
+#                    "office, or try another socket.",
+#         )
+#     # Filtered by session_type, so a water session on V1 no longer blocks an electricity
+#     # session on Q1 — they are different outlets that happen to share the number 1.
+#     active = session_service.get_active_for_socket(db, cfg.pedestal_id, outlet_int,
+#                                                   session_type=session_type)
+#     if active is not None and active.status == "active":
+#         raise HTTPException(
+#             status_code=409,
+#             detail=f"This {outlet_word} is already in use. Please use another {outlet_word}.",
+#         )
+
+#     # A still-valid pending scan for this socket blocks a second one. DISTINCT from
+#     # "already in use" (v3.43): sharing that message meant ERP — and the customer — could not
+#     # tell "someone is charging here" from "someone tapped 30 seconds ago", which are minutes
+#     # apart in what you should do about them.
+#     live = nfc_service.get_live_pending(db, cabinet_id, socket_id)
+#     if live is not None:
+#         raise HTTPException(
+#             status_code=409,
+#             detail=f"Someone else tapped this {outlet_word} a moment ago and it is being "
+#                    f"held for them until {iso_z(live.expires_at)}. Please wait, or use "
+#                    f"another {outlet_word}.",
+#         )
+
+#     rec = nfc_service.create_pending(db, body.nfc_tag_id, user_id, cabinet_id, socket_id)
+#     # Log the resolved mapping and the authenticated principal, so an attribution dispute is
+#     # answerable from the journal rather than by inference.
+#     logger.info("[NFC] scan pre-registered user=%s (principal=%s) cabinet=%s outlet=%s "
+#                 "type=%s tag=%s expires=%s",
+#                 user_id, f"customer:{customer.id}" if customer else "erp-api-key",
+#                 cabinet_id, socket_id, session_type, body.nfc_tag_id, iso_z(rec.expires_at))
+
+#     return {
+#         "status": "pending",
+#         "message": ("Please open your tap to activate the water outlet" if is_valve
+#                     else "Please plug in your charger to activate the socket"),
+#         "cabinet_id": cabinet_id,
+#         "socket_id": socket_id,
+#         # v3.43 — so ERP and the app can tell an electricity scan from a water one without
+#         # parsing the outlet name. Additive: existing fields are unchanged.
+#         "outlet_type": outlet_type,
+#         "session_type": session_type,
+#         "berth_id": getattr(cfg, "berth_ref", None),
+#         "expires_at": iso_z(rec.expires_at),
+#     }
+
+
 @router.post("/scan")
 def nfc_scan(body: NfcScanBody, db: DBSession = Depends(get_db),
-             customer=Depends(optional_customer),
              _: str = Depends(require_erp_api_key)):
-    """Pre-register a marina customer's intent to use a socket (NFC tag scanned
-    in myMarina). Does NOT activate the socket — activation happens on plug-in.
+    """Reserve one outlet for the ERP's customer for 5 minutes (D6.1, 2026-10-12).
 
-    `body.user_id` is NOT trusted when a customer token is present. It becomes
-    `sessions.nfc_user_id`, which is what ERP reconciles billing against in MODE 1 and what
-    attributes the charge itself in MODE 2 — so a value the caller simply asserts is a way to
-    make someone else pay. Identity comes from the authenticated principal; a body value that
-    disagrees is refused rather than quietly corrected, because a disagreement means either a
-    client bug or an attempt, and both are worth surfacing.
+    The ERP owns the NFC mapping and the customer. It resolves the tag itself and tells us
+    WHICH outlet and WHOSE reference — `{cabinet_id, outlet, erp_ref}` — so the cabinet knows
+    nothing about stickers.
+
+    Does NOT switch anything on. A socket activates when the customer plugs in within the
+    window (UserPluggedIn); a valve opens when the ERP then sends water/{V}/cmd activate,
+    which refuses without this reservation. Either way OutletActivated copies `erp_ref` onto
+    the session, and every payload the ERP receives carries it back verbatim.
     """
-    _require_direct_client_principal(customer)
+    # 400 for anything that is not exactly Q1..Q4 / V1..V2. The kind comes from the name only
+    # because the vocabulary has no overlap once bare digits are refused.
+    outlet_type = _outlet_kind_or_400(body.outlet)
+    cabinet_id, socket_id = body.cabinet_id, body.outlet
 
-    user_id = body.user_id
-    if customer is not None:
-        allowed = _customer_identities(customer)
-        if user_id not in allowed:
-            logger.warning(
-                "[NFC] scan REFUSED: customer id=%s presented user_id=%r which is not theirs",
-                customer.id, user_id,
-            )
-            raise HTTPException(
-                status_code=403,
-                detail="user_id does not match the signed-in customer",
-            )
-        # Normalise to the authenticated identity rather than the supplied spelling, so
-        # attribution is stable regardless of what the client sent.
-        user_id = customer.email or str(customer.id)
-
-    tag = nfc_service.get_active_tag_by_id(db, body.nfc_tag_id)
-    if tag is None:
-        # Still a 404, and still no fallback to a default socket — but worded for the person
-        # reading it. "NFC tag not provisioned" told a customer nothing they could act on.
-        raise HTTPException(
-            status_code=404,
-            detail="This tag is not registered to a socket. Please contact the marina office "
-                   "to have it registered.",
-        )
-
-    cabinet_id, socket_id = tag.cabinet_id, tag.socket_id
     cfg = _resolve_pedestal(db, cabinet_id)
     if cfg is None:
-        # DISTINCT from "unknown tag" (v3.43). The tag IS provisioned — to a cabinet this
-        # system has no record of. That is our provisioning error, not the customer's unknown
-        # token, and sharing the 404 made a configuration fault indistinguishable from a
-        # stranger's tag. 500 because it is a server-side inconsistency, not a bad request.
-        logger.error("[NFC] tag %s is provisioned to cabinet %s, which has no pedestal row",
-                     body.nfc_tag_id, cabinet_id)
-        raise HTTPException(
-            status_code=500,
-            detail="This tag is registered to a pedestal the system does not recognise. "
-                   "Please contact the marina office.",
-        )
+        # The caller named the cabinet, so an unknown one is the caller's 404 — unlike the
+        # tag path, where it meant our own provisioning had gone wrong (500).
+        raise HTTPException(status_code=404, detail=f"Unknown cabinet {cabinet_id}")
 
-    # Can the NUC act at all? Smart mode and liveness, neither of which was checked before.
+    # Can the NUC act at all? Smart mode and liveness.
     _require_pedestal_can_act(cfg)
 
-    # v3.43 — WHAT KIND of outlet this tag is on, taken from the tag rather than assumed.
-    # This endpoint hardcoded session_type="electricity", so a water tag opened an
-    # ELECTRICITY session against socket N — and the litres it later drew were billed as
-    # kWh on an outlet the customer never touched. Rows written before the column exists
-    # default to "socket", which is what they all were.
-    outlet_type = tag.outlet_type or OUTLET_SOCKET
     session_type = session_type_for(outlet_type)
     is_valve = outlet_type == OUTLET_VALVE
     outlet_word = "water outlet" if is_valve else "socket"
-
     outlet_int = _outlet_str_to_id(socket_id, outlet_type)
-    # Kept for the electricity path and for the response, which has always used this name.
-    socket_int = outlet_int
 
-    # Outlet availability. The fault check applies to electricity only.
-    #
-    # Not because a valve has no state — it does: `opta/water/V{n}/status` carries
-    # `state` and `hw_status`, and v3.43 persists both on `valve_configs`. The reason is
-    # narrower and specific to WHEN a valve fault becomes observable.
-    #
-    # The firmware has a valve `STATE_FAULT`, but it reports it REACTIVELY: an attempt to
-    # open a faulted valve answers on `opta/acks` with
-    # `{"status":"error","reason":"outlet_fault"}` (docs/firmware_requirements.md, v3.9).
-    # It does not appear in the status topic, and no capture has ever shown a `state` or
-    # `hw_status` value other than `idle`/`off`.
-    #
-    # `/scan` runs BEFORE any open command, so at this moment there is genuinely nothing
-    # to read. A check here would test for a string we invented, pass always, and be
-    # indistinguishable from a check that works — the failure mode worth naming. The
-    # fault surfaces where it actually can: the ACK handler, on activation.
-    #
-    # Passing a valve through `_socket_display_state` would be worse: that reads
-    # socket-keyed tables, so V1 would be judged on socket 1's hardware.
+    # The fault check applies to electricity only: a valve fault is reported reactively on the
+    # activate ACK, so at scan time there is nothing to read (see the commented-out /scan).
     if not is_valve and _socket_display_state(db, cfg.pedestal_id, outlet_int) == "fault":
         raise HTTPException(
             status_code=503,
             detail="This socket has a fault and cannot be used. Please contact the marina "
                    "office, or try another socket.",
         )
-    # Filtered by session_type, so a water session on V1 no longer blocks an electricity
-    # session on Q1 — they are different outlets that happen to share the number 1.
     active = session_service.get_active_for_socket(db, cfg.pedestal_id, outlet_int,
                                                   session_type=session_type)
     if active is not None and active.status == "active":
@@ -648,11 +759,6 @@ def nfc_scan(body: NfcScanBody, db: DBSession = Depends(get_db),
             status_code=409,
             detail=f"This {outlet_word} is already in use. Please use another {outlet_word}.",
         )
-
-    # A still-valid pending scan for this socket blocks a second one. DISTINCT from
-    # "already in use" (v3.43): sharing that message meant ERP — and the customer — could not
-    # tell "someone is charging here" from "someone tapped 30 seconds ago", which are minutes
-    # apart in what you should do about them.
     live = nfc_service.get_live_pending(db, cabinet_id, socket_id)
     if live is not None:
         raise HTTPException(
@@ -662,13 +768,9 @@ def nfc_scan(body: NfcScanBody, db: DBSession = Depends(get_db),
                    f"another {outlet_word}.",
         )
 
-    rec = nfc_service.create_pending(db, body.nfc_tag_id, user_id, cabinet_id, socket_id)
-    # Log the resolved mapping and the authenticated principal, so an attribution dispute is
-    # answerable from the journal rather than by inference.
-    logger.info("[NFC] scan pre-registered user=%s (principal=%s) cabinet=%s outlet=%s "
-                "type=%s tag=%s expires=%s",
-                user_id, f"customer:{customer.id}" if customer else "erp-api-key",
-                cabinet_id, socket_id, session_type, body.nfc_tag_id, iso_z(rec.expires_at))
+    rec = nfc_service.create_pending(db, body.erp_ref, cabinet_id, socket_id)
+    logger.info("[NFC] scan reserved cabinet=%s outlet=%s type=%s erp_ref=%s expires=%s",
+                cabinet_id, socket_id, session_type, body.erp_ref, iso_z(rec.expires_at))
 
     return {
         "status": "pending",
@@ -676,10 +778,9 @@ def nfc_scan(body: NfcScanBody, db: DBSession = Depends(get_db),
                     else "Please plug in your charger to activate the socket"),
         "cabinet_id": cabinet_id,
         "socket_id": socket_id,
-        # v3.43 — so ERP and the app can tell an electricity scan from a water one without
-        # parsing the outlet name. Additive: existing fields are unchanged.
         "outlet_type": outlet_type,
         "session_type": session_type,
+        "erp_ref": body.erp_ref,
         "berth_id": getattr(cfg, "berth_ref", None),
         "expires_at": iso_z(rec.expires_at),
     }
@@ -688,73 +789,151 @@ def nfc_scan(body: NfcScanBody, db: DBSession = Depends(get_db),
 @router.get("/session/{session_id}")
 def nfc_session_status(session_id: int, db: DBSession = Depends(get_db),
                        user_db: DBSession = Depends(get_user_db),
-                       customer=Depends(optional_customer),
+                       # customer=Depends(optional_customer),  # D6.1 — MODE 2 commented out
                        _: str = Depends(require_erp_api_key)):
     """Current session status + spending data for the ERP to poll.
 
     A customer may read only their own session. The payload carries energy, duration and
     estimated cost, and in MODE 2 that is the billing record itself.
     """
-    _require_direct_client_principal(customer)
+    # _require_direct_client_principal(customer)  # D6.1
     session = db.get(Session, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    _require_session_access(session, customer)
+    # _require_session_access(session, customer)  # D6.1
     # v3.43 — a machine caller reading this IS reconciliation; a customer reading their own
     # charge is not. Stamping both would silence the divergence detector every time someone
     # opened the app.
-    if customer is None:
-        erp_reconciliation.mark_reconciled(db, [session])
+    # D6.1: the only caller is the ERP machine key, so this always applied. Removed in step c
+    # (reads must not stamp; the ERP will acknowledge explicitly).
+    # if customer is None:
+    erp_reconciliation.mark_reconciled(db, [session])
     return nfc_service.build_session_payload(db, user_db, session)
 
 
-@router.get("/sessions/by-user/{user_id}")
-def nfc_sessions_by_user(
-    user_id: str,
-    status: Optional[str] = Query(None, pattern="^(active|ended)$"),
+# ── D6.1 (2026-10-12): GET /sessions/by-user is COMMENTED OUT. ───────────────────────
+# It filtered on nfc_user_id, which the NFC flow no longer writes, and it stamped every
+# row it returned as reconciled. Replaced by GET /api/nfc/sessions below.
+# @router.get("/sessions/by-user/{user_id}")
+# def nfc_sessions_by_user(
+#     user_id: str,
+#     status: Optional[str] = Query(None, pattern="^(active|ended)$"),
+#     limit: int = Query(default=100, ge=1, le=500),
+#     db: DBSession = Depends(get_db),
+#     user_db: DBSession = Depends(get_user_db),
+#     customer=Depends(optional_customer),
+#     _: str = Depends(require_erp_api_key),
+# ):
+#     """All sessions (active + historical) for one ERP user_id, newest first.
+
+#     Lets the ERP reconcile its own records against our DB by *its own* user id —
+#     the `nfc_user_id` we stored from POST /api/nfc/scan. Each entry uses the same
+#     payload as GET /api/nfc/session/{id} — 16 keys, specified in
+#     docs/erp_session_payload_contract.md. Optional `status` narrows to active or
+#     ended; `limit` caps the result (default 100, max 500).
+
+#     v3.47 — this said the payload carried `estimated_cost`. It no longer does: the
+#     cabinet does not price consumption, the ERP does. The payload now also carries both
+#     meter boundary readings and `consumption_source`, so the ERP can recompute each
+#     figure and see how it was derived. A consumption figure may be null, which means
+#     "do not bill this session" and never zero.
+
+#     A customer may list only their own sessions. 403 rather than 404 here, and deliberately:
+#     the `user_id` in the path was supplied by the caller, so refusing it plainly leaks nothing
+#     they did not already type, and a silent empty list would read as "you have no sessions"
+#     when the truth is "that is not you".
+#     """
+#     _require_direct_client_principal(customer)
+#     if customer is not None and user_id not in _customer_identities(customer):
+#         raise HTTPException(
+#             status_code=403, detail="You may only list your own sessions",
+#         )
+#     q = db.query(Session).filter(Session.nfc_user_id == user_id)
+#     if status == "active":
+#         q = q.filter(Session.status == "active")
+#     elif status == "ended":
+#         q = q.filter(Session.status != "active")
+#     rows = q.order_by(Session.started_at.desc()).limit(limit).all()
+#     # This endpoint exists so ERP can reconcile, so a machine read of it is the reconciliation
+#     # event itself — the strongest signal we get that the integration is alive.
+#     if customer is None:
+#         erp_reconciliation.mark_reconciled(db, rows)
+#     return {
+#         "user_id": user_id,
+#         "count": len(rows),
+#         "sessions": [nfc_service.build_session_payload(db, user_db, s) for s in rows],
+#     }
+
+
+def _naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """Session timestamps are stored as naive UTC; compare like with like."""
+    if dt is None or dt.tzinfo is None:
+        return dt
+    from datetime import timezone
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+@router.get("/sessions")
+def nfc_sessions(
+    erp_ref: Optional[str] = Query(None, min_length=1, max_length=128),
+    ended_from: Optional[datetime] = Query(None),
+    ended_to: Optional[datetime] = Query(None),
     limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: DBSession = Depends(get_db),
     user_db: DBSession = Depends(get_user_db),
-    customer=Depends(optional_customer),
     _: str = Depends(require_erp_api_key),
 ):
-    """All sessions (active + historical) for one ERP user_id, newest first.
+    """Sessions by the ERP's reference, or by when they ENDED — paged (D6.1, 2026-10-12).
 
-    Lets the ERP reconcile its own records against our DB by *its own* user id —
-    the `nfc_user_id` we stored from POST /api/nfc/scan. Each entry uses the same
-    payload as GET /api/nfc/session/{id} — 16 keys, specified in
-    docs/erp_session_payload_contract.md. Optional `status` narrows to active or
-    ended; `limit` caps the result (default 100, max 500).
+    Replaces GET /sessions/by-user. Give `erp_ref`, or both `ended_from` and `ended_to`, or
+    all three:
 
-    v3.47 — this said the payload carried `estimated_cost`. It no longer does: the
-    cabinet does not price consumption, the ERP does. The payload now also carries both
-    meter boundary readings and `consumption_source`, so the ERP can recompute each
-    figure and see how it was derived. A consumption figure may be null, which means
-    "do not bill this session" and never zero.
+      * `erp_ref` alone — every session for that reference, active and ended, newest first.
+      * `ended_from`/`ended_to` — sessions that ended in [ended_from, ended_to): from is
+        INCLUSIVE, to is EXCLUSIVE, so consecutive windows never count a session twice.
+        Active sessions have not ended and are never in a range. Oldest end first, so a
+        billing run can walk the pages forward.
 
-    A customer may list only their own sessions. 403 rather than 404 here, and deliberately:
-    the `user_id` in the path was supplied by the caller, so refusing it plainly leaks nothing
-    they did not already type, and a silent empty list would read as "you have no sessions"
-    when the truth is "that is not you".
+    Pages: `limit` (max 500) and `offset`; `total` is the full match count and `next_offset`
+    is null on the last page. The order is total (ties broken by session id), so a page
+    boundary never drops or repeats a row while the set is unchanged.
+
+    A READ WITH NO SIDE EFFECTS. Unlike the endpoint it replaces, it stamps nothing as
+    reconciled — the ERP acknowledges what it billed explicitly (step c).
     """
-    _require_direct_client_principal(customer)
-    if customer is not None and user_id not in _customer_identities(customer):
-        raise HTTPException(
-            status_code=403, detail="You may only list your own sessions",
-        )
-    q = db.query(Session).filter(Session.nfc_user_id == user_id)
-    if status == "active":
-        q = q.filter(Session.status == "active")
-    elif status == "ended":
-        q = q.filter(Session.status != "active")
-    rows = q.order_by(Session.started_at.desc()).limit(limit).all()
-    # This endpoint exists so ERP can reconcile, so a machine read of it is the reconciliation
-    # event itself — the strongest signal we get that the integration is alive.
-    if customer is None:
-        erp_reconciliation.mark_reconciled(db, rows)
+    if (ended_from is None) != (ended_to is None):
+        raise HTTPException(status_code=400,
+                            detail="ended_from and ended_to must be given together")
+    if erp_ref is None and ended_from is None:
+        raise HTTPException(status_code=400,
+                            detail="give erp_ref, or ended_from and ended_to, or all three")
+    ended_from, ended_to = _naive_utc(ended_from), _naive_utc(ended_to)
+    if ended_from is not None and ended_to <= ended_from:
+        raise HTTPException(status_code=400, detail="ended_to must be after ended_from")
+
+    q = db.query(Session)
+    if erp_ref is not None:
+        q = q.filter(Session.erp_ref == erp_ref)
+    if ended_from is not None:
+        q = (q.filter(Session.ended_at.isnot(None),
+                      Session.ended_at >= ended_from, Session.ended_at < ended_to)
+              .order_by(Session.ended_at.asc(), Session.id.asc()))
+    else:
+        q = q.order_by(Session.started_at.desc(), Session.id.desc())
+
+    total = q.count()
+    rows = q.offset(offset).limit(limit).all()
+    nxt = offset + len(rows)
     return {
-        "user_id": user_id,
+        "erp_ref": erp_ref,
+        "ended_from": iso_z(ended_from) if ended_from else None,
+        "ended_to": iso_z(ended_to) if ended_to else None,
+        "total": total,
         "count": len(rows),
+        "offset": offset,
+        "limit": limit,
+        "next_offset": nxt if nxt < total else None,
         "sessions": [nfc_service.build_session_payload(db, user_db, s) for s in rows],
     }
 
@@ -762,7 +941,7 @@ def nfc_sessions_by_user(
 @router.post("/session/{session_id}/stop")
 async def nfc_session_stop(session_id: int, db: DBSession = Depends(get_db),
                            user_db: DBSession = Depends(get_user_db),
-                           customer=Depends(optional_customer),
+                           # customer=Depends(optional_customer),  # D6.1 — MODE 2 commented out
                            _: str = Depends(require_erp_api_key)):
     """Remote stop from the ERP. Operator override is highest priority: if the
     session is already ended (e.g. operator stopped it), return 409 and never
@@ -773,11 +952,11 @@ async def nfc_session_stop(session_id: int, db: DBSession = Depends(get_db),
     Ownership is verified BEFORE the already-ended check, so a probe cannot learn the state of
     a session it does not own.
     """
-    _require_direct_client_principal(customer)
+    # _require_direct_client_principal(customer)  # D6.1
     session = db.get(Session, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    _require_session_access(session, customer)
+    # _require_session_access(session, customer)  # D6.1
     if session.status != "active":
         raise HTTPException(status_code=409, detail="Session already ended by operator")
 
@@ -816,11 +995,13 @@ def erp_reconciliation_status(db: DBSession = Depends(get_db),
     """
     states = erp_reconciliation.status_by_pedestal(db)
     return {
-        "mode": "direct" if settings.nfc_direct_client_mode else "erp",
+        # D6.1: "mode": "direct" if settings.nfc_direct_client_mode else "erp",
+        "mode": "erp",
         "silence_threshold_days": settings.erp_reconciliation_silence_days,
         # In MODE 2 there is no ERP, so none of this is meaningful. Said explicitly rather than
         # returning empty lists that read as "all healthy".
-        "applicable": not settings.nfc_direct_client_mode,
+        # D6.1: "applicable": not settings.nfc_direct_client_mode,
+        "applicable": True,
         "pedestals": [s.as_dict() for s in states],
         "needs_attention": [s.as_dict() for s in states
                             if s.state == erp_reconciliation.STATE_SILENT_WITH_BACKLOG],

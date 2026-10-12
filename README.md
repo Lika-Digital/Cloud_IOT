@@ -184,6 +184,12 @@ Fills the one gap the myMarina/ERP verification surfaced: the ERP could read a
 session **by `session_id`** but had no way to query our DB **by its own user id**.
 Both additions just expose data we already store — no new tracking, low risk.
 
+> **Superseded by D6.1 (2026-10-12).** The ERP is the only owner of the NFC mapping and the
+> customer: `POST /api/nfc/scan` now takes `{cabinet_id, outlet, erp_ref}`, sessions carry
+> `erp_ref`, the tag registry (`/api/nfc/tags*`) and MODE 2 are commented out, and
+> `GET /api/nfc/sessions/by-user` is replaced by `GET /api/nfc/sessions`. Current contract:
+> `docs/erp_session_payload_contract.md`. The text below is kept as history.
+
 **How the NFC/ERP model actually works** (confirmed against the code during this
 work, documented here so it isn't re-derived every time):
 
@@ -529,6 +535,7 @@ myMarina ERP to pre-register an NFC scan that activates the socket on plug-in.
   table** (per-socket live status, tag id input, Provision/Remove, Save All,
   config summary). Switching to NFC warns the operator and **disables
   `auto_activate` on all four sockets**; switching back to QR restores it.
+- *(D6.1, 2026-10-12: NFC provisioning below is commented out — the ERP owns the mapping.)*
 - **NFC provisioning** (`/api/nfc/tags*`, admin): one tag per socket; a tag already
   assigned elsewhere is rejected with a message identifying the owning cabinet/socket.
 - **ERP NFC API** (`/api/nfc/*`, `X-API-Key: ERP_API_KEY`): `POST /scan` pre-registers

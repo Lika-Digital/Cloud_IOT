@@ -1302,7 +1302,10 @@ async def _standalone_usage_tick(now: datetime) -> None:
             # session (the app never sent stop). Runs in BOTH smart modes; never
             # touches standalone sessions (handled by the grace logic below).
             attributed = open_sess if (
-                open_sess is not None and (open_sess.customer_id or open_sess.nfc_user_id)
+                # D6.1: erp_ref is the attribution now; the two legacy columns still count
+                # for sessions opened before it existed.
+                open_sess is not None and (open_sess.erp_ref or open_sess.customer_id
+                                           or open_sess.nfc_user_id)
             ) else None
             if attributed is not None:
                 if _socket_delivering_power(sc, now=now):
@@ -1771,12 +1774,12 @@ async def _maybe_auto_open_valve(pedestal_id: int, valve_id: int, cabinet_id: st
         #
         # Gated on the mode, not on erp_api_key being set: a missing key must not silently turn
         # auto-open back on. MODE 1 is the default, so this fails safe.
-        from ..config import settings
-        if not settings.nfc_direct_client_mode:
-            logger.info("[ValveAutoOpen] pedestal=%d valve=%d SKIPPED: ERP mode (MODE 1) — a "
-                        "valve opens only on an ERP command after an NFC scan",
-                        pedestal_id, valve_id)
-            return
+        # D6.1 (2026-10-12): MODE 2 is commented out, so this is unconditional — everything
+        # below it is unreachable and kept, not deleted. (It read
+        # `if not settings.nfc_direct_client_mode:`.)
+        logger.info("[ValveAutoOpen] pedestal=%d valve=%d SKIPPED: ERP mode — a valve opens "
+                    "only on an ERP command after an NFC scan", pedestal_id, valve_id)
+        return
 
         cfg = db.query(ValveConfig).filter(
             ValveConfig.pedestal_id == pedestal_id,
@@ -2024,10 +2027,13 @@ async def _handle_event_outlet_activated(db, pedestal_id: int, outlet_id: str, r
                .order_by(_NPS.created_at.desc())
                .first())
         if rec is not None:
-            session.nfc_user_id = rec.user_id
+            # D6.1 (2026-10-12): the reservation holds the ERP's erp_ref (in user_id), and it
+            # goes to sessions.erp_ref. nfc_user_id is no longer written by this flow.
+            # session.nfc_user_id = rec.user_id
+            session.erp_ref = rec.user_id
             nfc_user_id = rec.user_id
             db.commit()
-            logger.info("[NFC] attached user=%s to session %d", rec.user_id, session.id)
+            logger.info("[NFC] attached erp_ref=%s to session %d", rec.user_id, session.id)
 
     await ws_manager.broadcast({
         "event": "session_created",
@@ -2040,7 +2046,10 @@ async def _handle_event_outlet_activated(db, pedestal_id: int, outlet_id: str, r
             "started_at": iso_z(session.started_at),
             "customer_id": None,
             "customer_name": None,
+            # D6.1: the value is the erp_ref. "nfc_user_id" kept for the dashboard until it reads
+            # erp_ref; both carry the same string.
             "nfc_user_id": nfc_user_id,
+            "erp_ref": nfc_user_id,
         },
     })
     await _broadcast_socket_state(pedestal_id, socket_id, "active", resource=resource)

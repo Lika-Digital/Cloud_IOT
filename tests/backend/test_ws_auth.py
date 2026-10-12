@@ -141,17 +141,35 @@ def test_tc_wsa_07_the_connection_closes_when_the_token_expires(client):
     instead of hanging."""
     import queue
     import threading
+    import time
     tok = _admin_token(exp=datetime.now(timezone.utc) + timedelta(seconds=2))
     with client.websocket_connect("/ws", subprotocols=["bearer", tok]) as ws:
         ws.send_text("ping")
         assert ws.receive_text() == "pong"
+        # Every message until the close. An admin connection also receives broadcasts that
+        # background tasks of other tests emit (seen in the gate 2026-10-12: a stray
+        # session_completed arrived first) — those are skipped, not counted as the answer.
         got: queue.Queue = queue.Queue()
-        threading.Thread(target=lambda: got.put(ws.receive()), daemon=True).start()
-        try:
-            msg = got.get(timeout=10)
-        except queue.Empty:
-            pytest.fail("the connection was still open 10 s after its token expired")
-        assert msg["type"] == "websocket.close" and msg.get("code") == 1008, msg
+
+        def _pump():
+            while True:
+                m = ws.receive()
+                got.put(m)
+                if m["type"] == "websocket.close":
+                    return
+        threading.Thread(target=_pump, daemon=True).start()
+        deadline = time.monotonic() + 10
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                pytest.fail("the connection was still open 10 s after its token expired")
+            try:
+                msg = got.get(timeout=left)
+            except queue.Empty:
+                continue
+            if msg["type"] == "websocket.close":
+                break
+        assert msg.get("code") == 1008, msg
 
 
 def test_tc_wsa_08_ws_checks_the_same_user_database_as_http(client):

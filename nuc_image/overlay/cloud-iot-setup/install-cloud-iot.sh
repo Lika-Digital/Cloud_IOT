@@ -289,7 +289,7 @@ ExecStartPre=/bin/bash -c '\
       "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA cache_size=-32000;" \
       || true; \
   done'
-ExecStart=${VENV_BIN}/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
+ExecStart=${VENV_BIN}/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
 Restart=always
 RestartSec=5
 StandardOutput=journal

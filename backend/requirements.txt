@@ -156,9 +156,13 @@ tzdata>=2024.1
 # nothing here pinned them, so they are listed as floors to make the resolver move them.
 #
 #   NOT in this series, deliberately — do not read them as closed vulnerabilities:
-#     starlette / fastapi  the only reachable exposure (multipart DoS, 1943/1941). Needs a
-#                          newer FastAPI than 0.115.0: its own branch, full gate + Playwright.
-#                          Interim mitigation: a request-body size limit at nginx.
+#     starlette / fastapi  multipart DoS (1943/1941). Needs a newer FastAPI than 0.115.0:
+#                          its own branch, full gate + Playwright. Reach, corrected by the
+#                          owner 2026-10-12: :8000 was reachable from the cabinet LAN and the
+#                          Tailnet, NOT the internet (the router has no inbound rules) — so it
+#                          needs an attacker already inside. The loopback bind (upgrade.sh)
+#                          closes that; internet traffic arrives only via the Cloudflare
+#                          tunnel, and through nginx it meets client_max_body_size 10M.
 #     zeroconf             17 minor versions for ~5 s of admin-triggered exposure: own run.
 #     cryptography, requests  NOT AFFECTED per analysis (we use neither PKCS7 decrypt nor
 #                          .netrc). If they are raised, it is hygiene, and named so.

@@ -315,6 +315,27 @@ if $FRONTEND_CHANGED; then
 fi
 
 # ── Backend copy + restart ────────────────────────────────────────────────────
+# ── Backend bind: loopback only (2026-10-12) ──────────────────────────────────
+# The unit started uvicorn with --host 0.0.0.0, so :8000 answered on every interface and a
+# client on the cabinet LAN or the Tailnet reached the backend directly, around nginx and its
+# client_max_body_size. (Not the internet: the router has no inbound rules; the only ways in
+# are the outbound-initiated Tailscale and Cloudflare tunnels.) nginx proxies to
+# 127.0.0.1:8000, so loopback is all the backend needs.
+#
+# The installers set the bind, but this script never rewrote the unit — so an installer change
+# alone would have left every existing cabinet as it was. Idempotent: a unit already on
+# loopback is not touched.
+BACKEND_UNIT="$(systemctl show -p FragmentPath --value cloud-iot-backend.service 2>/dev/null || true)"
+if [ -n "$BACKEND_UNIT" ] && [ -f "$BACKEND_UNIT" ] && grep -q -- "--host 0\.0\.0\.0" "$BACKEND_UNIT"; then
+  phase "Binding the backend to loopback"
+  sed -i 's/--host 0\.0\.0\.0/--host 127.0.0.1/' "$BACKEND_UNIT"
+  grep -q -- "--host 127\.0\.0\.1" "$BACKEND_UNIT" \
+    || error "Could not rewrite the bind in ${BACKEND_UNIT} — upgrade stopped."
+  systemctl daemon-reload
+  info "Backend unit now binds 127.0.0.1:8000 (${BACKEND_UNIT})"
+  BACKEND_CHANGED=true
+fi
+
 if $BACKEND_CHANGED; then
   phase "Deploying backend"
 
@@ -323,8 +344,18 @@ if $BACKEND_CHANGED; then
   if $DEPS_UNKNOWN || echo "$CHANGED_FILES" | grep -q "^backend/requirements.txt"; then
     info "Installing backend dependencies (requirements.txt changed, or unknown)"
     VENV_PIP="${APP_DIR}/backend/.venv/bin/pip"
-    [ -f "$VENV_PIP" ] && "$VENV_PIP" install -r "${REPO_DIR}/backend/requirements.txt" -q \
-      2>&1 | tee -a "$LOG_FILE" || warn "pip install had errors — check logs"
+    # 2026-10-12 — BOTH failures stop the upgrade. This read
+    #     [ -f "$VENV_PIP" ] && "$VENV_PIP" install ... | tee ... || warn "pip install had errors"
+    # so a failed install only WARNED and the upgrade went on to copy new code onto the old
+    # dependencies, restart, and report success — and a missing pip skipped the install and
+    # printed the same misleading warning. (pipefail is on, so the pipeline did carry pip's
+    # exit code; the defect was what happened next.) New code on dependencies it was not
+    # written for is the crash-loop this script has already produced once on the py3.14 venv.
+    [ -x "$VENV_PIP" ] \
+      || error "No pip at ${VENV_PIP} — the backend venv is broken; dependencies NOT installed. Upgrade stopped."
+    "$VENV_PIP" install -r "${REPO_DIR}/backend/requirements.txt" -q \
+      2>&1 | tee -a "$LOG_FILE" \
+      || error "pip install FAILED — upgrade stopped before any code was copied. See ${LOG_FILE}"
   fi
 
   info "Copying backend/app to ${APP_DIR}/backend/"
@@ -344,6 +375,18 @@ if $BACKEND_CHANGED; then
     fi
     [ "$i" -eq 15 ] && warn "Backend taking longer than expected — check: sudo journalctl -u cloud-iot-backend.service -n 30"
   done
+fi
+
+# Every upgrade proves the bind, whether or not this run changed it: a unit edited by hand
+# back to 0.0.0.0 is caught on the next upgrade instead of living on unseen.
+phase "Checking the backend listens on loopback only"
+LISTEN_8000="$(ss -ltnH 'sport = :8000' 2>/dev/null | awk '{print $4}' || true)"
+if [ -z "$LISTEN_8000" ]; then
+  warn "Nothing listening on :8000 yet — the bind could not be checked. Re-check: ss -ltn 'sport = :8000'"
+elif echo "$LISTEN_8000" | grep -qvE '^(127\.0\.0\.1|\[::1\]):8000$'; then
+  error "Backend listens on a non-loopback address: $(echo $LISTEN_8000) — :8000 is reachable from the LAN and the Tailnet, around nginx."
+else
+  info "Backend bound to loopback only: $(echo $LISTEN_8000)"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

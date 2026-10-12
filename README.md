@@ -1670,6 +1670,22 @@ The production system runs at `/opt/cloud-iot/` on Ubuntu 24.04.
 | `cloudflared` | systemd | Cloudflare Tunnel | `systemctl status cloudflared` |
 | `tailscaled` | systemd | Tailscale VPN | `systemctl status tailscaled` |
 
+> **Network exposure — what is measured (2026-10-12).** The cabinet router has **no inbound
+> rules**: the internet reaches nothing directly. The only ways in are the Tailscale and
+> Cloudflare tunnels, both initiated outbound; SSH to the NUC goes through the tunnel, and from
+> the NUC on to the other IP devices in the cabinet.
+>
+> | port / service | reachable from | note |
+> |---|---|---|
+> | `:8000` uvicorn | was: cabinet LAN + Tailnet | **bound to `127.0.0.1` from this release** — `upgrade.sh` rewrites the unit and checks `ss` on every run |
+> | `:80` nginx | LAN, Tailnet, and the internet via the Cloudflare tunnel (`marina2.lika.solutions`) | `client_max_body_size 10M`; proxies `/api` and `/ws` to `127.0.0.1:8000` |
+> | `:1883` Mosquitto (anonymous) | cabinet LAN | needs an attacker on the LAN — lower priority |
+> | camera, TME sensor (http) | **public**, through the Cloudflare tunnel | open item **R4** |
+>
+> Not yet measured: which local port the Cloudflare tunnel targets. If it is `:8000`, the
+> loopback bind breaks that path — the post-upgrade check that `marina2.lika.solutions` still
+> works is what will show it.
+
 > **Mosquitto runs in Docker, NOT as a systemd service.** The `cloud-iot-compose` systemd unit
 > starts Docker Compose which in turn starts the `pedestal-mqtt-broker` container.
 > `systemctl status mosquitto` will show "not found" — this is expected.

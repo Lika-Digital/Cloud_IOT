@@ -279,3 +279,165 @@ def test_deps_unknown_is_set_on_the_sync_only_branch_and_read_by_both_guards():
 def test_upgrade_script_still_parses():
     r = _run(f'bash -n "{UPGRADE_SH}"')
     assert r.returncode == 0, f"upgrade.sh no longer parses:\n{r.stderr}"
+
+
+# ── 2026-10-12: a pip failure STOPS the upgrade ───────────────────────────────
+#
+# The dependency install read
+#     [ -f "$VENV_PIP" ] && "$VENV_PIP" install ... | tee ... || warn "pip install had errors"
+# so a failed install only warned and the script went on to copy new code onto the old
+# dependencies, restart, and report success; a missing pip took the same branch. These run the
+# REAL block out of the file with a fake pip, and a marker after the block shows whether the
+# upgrade carried on.
+#
+# NEGATIVE CONTROL — the two refusal tests must FAIL against the previous script:
+#     git show f591426:nuc_image/upgrade.sh > /tmp/old.sh
+#     UPGRADE_SH_PATH=/tmp/old.sh pytest tests/backend/test_upgrade_script_deps.py -k pip_
+# (run 2026-10-12: both failed — the old block reached the marker with exit 0.)
+
+def _helpers(src: str) -> str:
+    """The script's own info/warn/error, verbatim (error() is what makes a failure fatal)."""
+    return "\n".join(l for l in src.splitlines()
+                     if re.match(r"^(info|warn|error)\(\)\s*\{", l))
+
+
+def _pip_block(src: str) -> str:
+    """The `if $DEPS_UNKNOWN || ... requirements.txt` install block, verbatim, to its `fi`."""
+    lines = src.splitlines()
+    i = next(k for k, l in enumerate(lines) if 'grep -q "^backend/requirements.txt"' in l)
+    j = next(k for k in range(i, len(lines)) if lines[k].strip() == "fi")
+    return "\n".join(lines[i:j + 1])
+
+
+def _run_pip_block(tmp_path, pip_body: str | None) -> subprocess.CompletedProcess:
+    app = tmp_path / "app"
+    (app / "backend" / ".venv" / "bin").mkdir(parents=True)
+    if pip_body is not None:
+        pip = app / "backend" / ".venv" / "bin" / "pip"
+        pip.write_text("#!/bin/bash\n" + pip_body + "\n", newline="\n")
+        pip.chmod(0o755)
+    src = _script()
+    body = f"""
+set -euo pipefail
+RED=; GREEN=; YELLOW=; CYAN=; BOLD=; NC=
+LOG_FILE="{(tmp_path / 'upgrade.log').as_posix()}"
+APP_DIR="{app.as_posix()}"
+REPO_DIR="{tmp_path.as_posix()}"
+DEPS_UNKNOWN=true
+CHANGED_FILES=""
+{_helpers(src)}
+{_pip_block(src)}
+echo REACHED_THE_CODE_COPY
+"""
+    return _run(body)
+
+
+def test_pip_failure_stops_the_upgrade(tmp_path):
+    r = _run_pip_block(tmp_path, 'echo "ERROR: No matching distribution" >&2; exit 1')
+    assert "REACHED_THE_CODE_COPY" not in r.stdout, (
+        "a failed pip install did not stop the upgrade — new code would be copied onto the "
+        f"old dependencies:\n{r.stdout}\n{r.stderr}")
+    assert r.returncode != 0
+    assert "pip install FAILED" in r.stdout
+
+
+def test_pip_missing_stops_the_upgrade(tmp_path):
+    r = _run_pip_block(tmp_path, None)
+    assert "REACHED_THE_CODE_COPY" not in r.stdout, (
+        f"a venv with no pip was treated as installed:\n{r.stdout}\n{r.stderr}")
+    assert r.returncode != 0
+    assert "No pip at" in r.stdout
+
+
+def test_pip_success_carries_on(tmp_path):
+    """Positive control: the refusals above are about failure, not about pip being called."""
+    r = _run_pip_block(tmp_path, "exit 0")
+    assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
+    assert "REACHED_THE_CODE_COPY" in r.stdout
+
+
+# ── 2026-10-12: the backend binds loopback, and every upgrade proves it ────────
+#
+# The unit ran uvicorn --host 0.0.0.0: :8000 answered on the cabinet LAN and the Tailnet,
+# around nginx. upgrade.sh never rewrote the unit, so changing the installers alone would have
+# left cabinet 1 unchanged. These run the REAL blocks with `systemctl` and `ss` stubbed.
+
+def _bind_block(src: str) -> str:
+    start = src.index('BACKEND_UNIT="$(systemctl show -p FragmentPath')
+    end = src.index("if $BACKEND_CHANGED; then", start)
+    return src[start:end]
+
+
+def _listen_check(src: str) -> str:
+    start = src.index('phase "Checking the backend listens on loopback only"')
+    end = src.index("# ── Summary", start)
+    return src[start:end]
+
+
+def _run_bind(tmp_path, unit_text: str) -> tuple[subprocess.CompletedProcess, str]:
+    unit = tmp_path / "cloud-iot-backend.service"
+    unit.write_text(unit_text, newline="\n")
+    calls = tmp_path / "systemctl.calls"
+    src = _script()
+    body = f"""
+set -euo pipefail
+RED=; GREEN=; YELLOW=; CYAN=; BOLD=; NC=
+LOG_FILE="{(tmp_path / 'upgrade.log').as_posix()}"
+{_helpers(src)}
+phase() {{ echo "PHASE $*"; }}
+systemctl() {{
+  echo "$*" >> "{calls.as_posix()}"
+  if [ "$1" = show ]; then echo "{unit.as_posix()}"; fi
+}}
+BACKEND_CHANGED=false
+{_bind_block(src)}
+echo "BACKEND_CHANGED=$BACKEND_CHANGED"
+"""
+    r = _run(body)
+    return r, (calls.read_text() if calls.exists() else "")
+
+
+def test_bind_rewrites_a_unit_on_all_interfaces(tmp_path):
+    r, calls = _run_bind(tmp_path, "[Service]\nExecStart=/v/bin/uvicorn app.main:app "
+                                   "--host 0.0.0.0 --port 8000 --workers 1\n")
+    assert r.returncode == 0, r.stderr
+    unit = (tmp_path / "cloud-iot-backend.service").read_text()
+    assert "--host 127.0.0.1 --port 8000" in unit and "0.0.0.0" not in unit
+    assert "daemon-reload" in calls, "the unit changed but systemd was not told"
+    assert "BACKEND_CHANGED=true" in r.stdout, "the rebind would not restart the backend"
+
+
+def test_bind_leaves_a_loopback_unit_alone(tmp_path):
+    text = "[Service]\nExecStart=/v/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000\n"
+    r, calls = _run_bind(tmp_path, text)
+    assert r.returncode == 0, r.stderr
+    assert (tmp_path / "cloud-iot-backend.service").read_text() == text
+    assert "daemon-reload" not in calls and "BACKEND_CHANGED=false" in r.stdout
+
+
+@pytest.mark.parametrize("ss_out,ok", [
+    ("127.0.0.1:8000", True),
+    ("0.0.0.0:8000", False),
+    ("127.0.0.1:8000\n[::]:8000", False),
+    ("", True),            # nothing listening: warned, not failed — the start check covers it
+])
+def test_every_upgrade_checks_the_bind(tmp_path, ss_out, ok):
+    src = _script()
+    rows = "\n".join(f"LISTEN 0 2048 {a} 0.0.0.0:*" for a in ss_out.split("\n") if a)
+    body = f"""
+set -euo pipefail
+RED=; GREEN=; YELLOW=; CYAN=; BOLD=; NC=
+LOG_FILE="{(tmp_path / 'upgrade.log').as_posix()}"
+{_helpers(src)}
+phase() {{ echo "PHASE $*"; }}
+ss() {{ printf "{rows}\n" | sed '/^$/d'; }}
+{_listen_check(src)}
+echo PASSED_THE_CHECK
+"""
+    r = _run(body)
+    if ok:
+        assert r.returncode == 0 and "PASSED_THE_CHECK" in r.stdout, f"{r.stdout}\n{r.stderr}"
+    else:
+        assert r.returncode != 0 and "PASSED_THE_CHECK" not in r.stdout, (
+            f"a non-loopback listener on :8000 passed the upgrade:\n{r.stdout}")
+        assert "non-loopback" in r.stdout

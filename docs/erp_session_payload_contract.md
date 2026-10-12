@@ -39,7 +39,7 @@ forwards this list.
 |---|---|---|---|
 | 1 | Webhook `event` names | this document listed `session_created` / `session_updated` / `session_completed` | the cabinet has only ever sent **`session_activated`**, **`telemetry`** (at most every 60 s) and **`session_ended`** |
 | 2 | **BREAKING** — `/scan` reply field `berth_id` | a string: the cabinet's free-text label, the same for all four berths of a cabinet | an **int** — the real berth id (`berths.id`, the same id the occupancy webhook already sends as `berth_id`) — or **`null`** when not known: every water outlet (water has no berth) and any socket not assigned to a berth. Type changes string → int/null. Never key on the old value |
-| 3 | What `berth_id` carried before, and since when it does not | — | Until the change it carried the column `pedestal_configs.berth_ref` (one label per cabinet). That label is still in the reply, renamed **`cabinet_label`** — a cabinet's label, not a berth. Changed in commit `COMMIT_TBD`; **in effect on a cabinet from that cabinet's upgrade**, not from the commit — your change must go live with the upgrade |
+| 3 | What `berth_id` carried before, and since when it does not | — | Until the change it carried the column `pedestal_configs.berth_ref` (one label per cabinet). That label is still in the reply, renamed **`cabinet_label`** — a cabinet's label, not a berth. Changed in commit `5cb8bf3`; **in effect on a cabinet from that cabinet's upgrade**, not from the commit — your change must go live with the upgrade |
 | 4 | Rotate the ERP key out of the mobile app | the key was shipped in an app build | rotate it (`docs/erp_key_rotation.md`) and keep it on your server only — see Authentication below |
 
 ---
@@ -86,7 +86,7 @@ Answers **200** with `status: "pending"` and `expires_at`, and two placement fie
 | `berth_id` | int or null | the berth this socket serves (`berths.id`, the same id as in the occupancy webhook). **null = not known**: always for a water outlet (water has no berth), and for a socket not assigned to a berth. Never 0 |
 | `cabinet_label` | string or null | the cabinet's free-text label, stored in the column `pedestal_configs.berth_ref`, editable by the operator. ONE per cabinet — the same for all its berths. Display it if you like; never key on it |
 
-**BREAKING, 2026-10-12 (commit `COMMIT_TBD`, in effect on a cabinet from its upgrade):** before
+**BREAKING, 2026-10-12 (commit `5cb8bf3`, in effect on a cabinet from its upgrade):** before
 this, `berth_id` was a string carrying that cabinet label — see "corrections" item 2–3 above.
 Other answers: **409** if the outlet is in use or
 already reserved; **503** if the cabinet is not responding or the socket is faulted; **409** if

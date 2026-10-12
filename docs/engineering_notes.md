@@ -317,6 +317,36 @@ what a column may hold, here about what a view may omit.
 
 ---
 
+## 13. Every channel to data proves identity — the same check as an HTTP route, before any broadcast
+
+The system has users, and they pass two-factor authentication. The rule is that every access,
+at every layer, requires that authenticated user. There is no layer where data is reached
+without one.
+
+**What happened.** Authentication was put on the HTTP routes and the WebSocket was left without
+it. That is not missing functionality; it is a defect in how the interface was originally
+built — 2FA was understood as protection of the SCREENS rather than of every entrance to the
+data. Measured by the owner on 2026-10-12: a client with no token, no cookie and no login got
+`101 Switching Protocols` on `https://marina2.lika.solutions/ws` and then received the cabinet's
+entire telemetry stream (cabinet id, socket states, per-phase amps, water readings carrying
+`customer_id`, door state, temperature, heartbeats). Security events from `security_middleware`
+(403s, suspicious query strings, malformed Bearer tokens — with the client IP) were broadcast
+too; failed logins were not, but only because they are logged from a synchronous route where
+the broadcast finds no event loop — an accident, not a rule.
+
+**The rule.** Any new channel to data — WebSocket, SSE, webhook, stream, long poll — proves
+identity with the SAME check as an HTTP route (`auth.dependencies.operator_from_token`, the one
+function both use) and does so BEFORE it joins any broadcast. A refused client receives
+nothing: not an empty message, not a confirmation that the cabinet exists. Credentials travel
+in a header, never in a URL — URLs are written to access logs. A long-lived channel ends when
+its credential expires.
+
+**And what each role receives is the second half of the same defect.** Owner's decision,
+binding: MARINA STAFF MUST NOT SEE CUSTOMER DATA. The customer's identity lives in the ERP; the
+cabinet shows the session and the consumption, not the customer's name or identifier. Only
+admin sees more. Today one broadcast goes to everyone authenticated; filtering by role is
+part B (planned, not built).
+
 ## Appendix — things that look like over-engineering and are not
 
 One line each on what they prevent, for whoever maintains this next. Each looks like needless

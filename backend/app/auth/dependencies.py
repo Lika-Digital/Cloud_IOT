@@ -22,32 +22,52 @@ _CONTROL_ROLES = {"admin", "monitor_control", "monitor_control_api"}
 _API_CONFIG_ROLES = {"admin", "monitor_control_api"}
 
 
-def _get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
-    db: Session = Depends(get_user_db),
-) -> User:
-    token = credentials.credentials
+class OperatorAuthError(Exception):
+    """Why a token does not identify an operator. Carries the HTTP answer for the HTTP path."""
+
+    def __init__(self, status_code: int, detail: str, headers: dict | None = None):
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+        self.headers = headers
+
+
+def operator_from_token(token: str, db: Session) -> tuple[User, dict]:
+    """THE identity check for every channel to data — HTTP routes and /ws alike (rule 13).
+
+    Extracted 2026-10-12 so the WebSocket uses this function rather than a copy of it: /ws had
+    no check at all while every HTTP route had this one, which is how an anonymous client came
+    to receive the whole telemetry stream. Returns (user, payload); raises OperatorAuthError.
+
+    A pre-2FA token (role "totp_pending") and customer/external tokens fail the role check, so
+    "authenticated" here always means a full, second-factor operator login.
+    """
     payload = decode_token(token)
     if not payload:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise OperatorAuthError(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token",
+                                {"WWW-Authenticate": "Bearer"})
 
     # SECURITY: reject non-operator JWTs (customer, external_api) before DB lookup.
     # Without this check, a customer JWT with sub=1 could match admin User id=1
     # when both DBs share the same ID space (confirmed real break, found by GAP-6 test).
     token_role = payload.get("role", "")
     if token_role not in _OPERATOR_ROLES:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Operator access required",
-        )
+        raise OperatorAuthError(status.HTTP_403_FORBIDDEN, "Operator access required")
 
     user = db.get(User, int(payload["sub"]))
     if not user or not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        raise OperatorAuthError(status.HTTP_401_UNAUTHORIZED, "User not found")
+    return user, payload
+
+
+def _get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    db: Session = Depends(get_user_db),
+) -> User:
+    try:
+        user, _payload = operator_from_token(credentials.credentials, db)
+    except OperatorAuthError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail, headers=e.headers)
     return user
 
 

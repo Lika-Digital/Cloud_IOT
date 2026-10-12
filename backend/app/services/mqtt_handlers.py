@@ -2046,10 +2046,13 @@ async def _handle_event_outlet_activated(db, pedestal_id: int, outlet_id: str, r
             "started_at": iso_z(session.started_at),
             "customer_id": None,
             "customer_name": None,
-            # D6.1: the value is the erp_ref. "nfc_user_id" kept for the dashboard until it reads
-            # erp_ref; both carry the same string.
+            # D6.1: the value is the erp_ref. 2026-10-12 — the duplicate "erp_ref" key D6.1 added
+            # here is removed again: nothing in the dashboard reads it, and a customer
+            # identifier must not travel to non-admin clients (owner's decision; filtering by
+            # role is part B). "nfc_user_id" carried the same identifier before D6.1 and is left
+            # for part B, which removes customer identifiers from non-admin broadcasts.
             "nfc_user_id": nfc_user_id,
-            "erp_ref": nfc_user_id,
+            # "erp_ref": nfc_user_id,
         },
     })
     await _broadcast_socket_state(pedestal_id, socket_id, "active", resource=resource)

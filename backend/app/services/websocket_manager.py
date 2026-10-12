@@ -24,8 +24,11 @@ class WebSocketManager:
         """Register a coroutine function called after every broadcast."""
         self._broadcast_hooks.append(fn)
 
-    async def connect(self, websocket: WebSocket, customer_id: int | None = None):
-        await websocket.accept()
+    async def connect(self, websocket: WebSocket, customer_id: int | None = None,
+                      subprotocol: str | None = None):
+        # `subprotocol` echoes the one the client offered ("bearer" since 2026-10-12): a browser
+        # that offered a subprotocol rejects a handshake that does not select one.
+        await websocket.accept(subprotocol=subprotocol)
         self._connections.append((websocket, customer_id))
         logger.info(f"WebSocket connected (customer_id={customer_id}). Total: {len(self._connections)}")
 

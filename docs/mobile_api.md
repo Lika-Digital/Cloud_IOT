@@ -26,7 +26,12 @@ never stops it via API.
 | Environment | REST | WebSocket |
 |---|---|---|
 | Production | `https://marina.lika.solutions` | `wss://marina.lika.solutions/ws` |
-| LAN dev    | `http://<NUC-IP>:8000`           | `ws://<NUC-IP>:8000/ws`          |
+| LAN dev    | `http://<NUC-IP>` (through nginx) | `ws://<NUC-IP>/ws` (through nginx) |
+
+> **2026-10-12:** the backend binds `127.0.0.1:8000` and is reached only through nginx on
+> `:80` — never on `:8000` from another machine. `/ws` accepts an authenticated **operator**
+> only (token in `Sec-WebSocket-Protocol: bearer, <jwt>`); customer and `ws_session` tokens
+> are refused, so the mobile app's live view no longer connects (D6.1: customers live in the ERP).
 
 All responses are `application/json` unless noted.
 

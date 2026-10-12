@@ -48,7 +48,7 @@ export function useWebSocket() {
     acknowledgeAutoStopAlarm,
     setLedState,
   } = useStore()
-  const { role } = useAuthStore()
+  const { role, token } = useAuthStore()
 
   // Request browser notification permission for admin users
   useEffect(() => {
@@ -58,8 +58,13 @@ export function useWebSocket() {
   }, [role])
 
   useEffect(() => {
+    // 2026-10-12 — /ws accepts an authenticated operator only (the same check as every HTTP
+    // route). No token means no connection: this hook runs outside ProtectedRoute, so before
+    // login it used to open an anonymous socket that received the whole telemetry stream.
+    // The token goes in the subprotocol header, never in the URL (URLs land in access logs).
+    if (!token) return
     function connect() {
-      const ws = new WebSocket(WS_URL)
+      const ws = new WebSocket(WS_URL, ['bearer', token as string])
       wsRef.current = ws
 
       ws.onopen = () => {
@@ -625,5 +630,5 @@ export function useWebSocket() {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       wsRef.current?.close()
     }
-  }, [role])
+  }, [role, token])
 }

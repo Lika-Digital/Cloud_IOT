@@ -383,6 +383,26 @@ parts make it a hand-over: someone, somewhere, still has to answer the question.
 this class of skip is permanent — and checks that only the cabinet can answer belong on the
 spec's §13 list.
 
+## 16. A test that touches a production file is a measurement of an unknown state
+
+*The owner's words, verbatim (2026-10-12):*
+
+> test koji otvara vezu na produkcijsku datoteku nije test, nego mjerenje nad nepoznatim stanjem.
+
+*Translation by Claude:* a test that opens a connection to a production file is not a test, but a
+measurement over an unknown state.
+
+Enforced by `tests/backend/test_test_isolation.py` (TC-ISO-01/02): the app's own engines are the
+per-run test databases.
+
+**Hypothesis, NOT measured** (recorded at the owner's request): before that fix 223 tests wrote
+into `./pedestal.db`, a path relative to the working directory, so two concurrent runs from the
+same directory shared it — and may have contributed to the suite's intermittent failures. The
+only measured cause of those is the shared-path race (`tests/evidence/2026-10-11_shared_test_db_race/`).
+To measure this one: check out the commit before `23dcf1d`, start two full gates at the same moment
+from the same directory, three times; then the same on `23dcf1d`. It is a cause only if the first
+set fails and the second does not.
+
 ## Appendix — things that look like over-engineering and are not
 
 One line each on what they prevent, for whoever maintains this next. Each looks like needless

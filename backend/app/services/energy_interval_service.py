@@ -78,12 +78,8 @@ def _berth_ref(db, pedestal_id: int) -> str | None:
 def _berth_id(db, pedestal_id: int, socket_id: int) -> int | None:
     """The berth this socket serves, from berth_assignments (unique per socket). None means
     NOT KNOWN — the socket is not assigned — and is written as NULL, never as 0 or a guess."""
-    from ..models.berth_assignment import BerthAssignment
-    a = db.query(BerthAssignment).filter(
-        BerthAssignment.pedestal_id == pedestal_id,
-        BerthAssignment.socket_id == socket_id,
-    ).first()
-    return a.berth_id if a else None
+    from ..models.berth_assignment import berth_id_for_socket
+    return berth_id_for_socket(db, pedestal_id, socket_id)
 
 
 def _register_session_to_date(db, session: SessionModel) -> float | None:

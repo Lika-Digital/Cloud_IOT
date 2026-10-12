@@ -37,6 +37,17 @@ from sqlalchemy import (
 from ..database import Base
 
 
+def berth_id_for_socket(db, pedestal_id: int, socket_id: int) -> int | None:
+    """The berth this electricity socket serves. None means NOT KNOWN — the socket is not
+    assigned — and must reach every consumer as null: never 0, never the cabinet label.
+    The one lookup for the ledger (energy_intervals.berth_id) and for /scan."""
+    a = db.query(BerthAssignment).filter(
+        BerthAssignment.pedestal_id == pedestal_id,
+        BerthAssignment.socket_id == socket_id,
+    ).first()
+    return a.berth_id if a else None
+
+
 class BerthAssignment(Base):
     __tablename__ = "berth_assignments"
 

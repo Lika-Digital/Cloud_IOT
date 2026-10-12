@@ -192,7 +192,9 @@ def test_scan_creates_pending(client, auth_headers, nfc_pid):
     body = r.json()
     assert body["status"] == "pending"
     assert body["cabinet_id"] == CAB and body["socket_id"] == "Q1"
-    assert body["berth_id"] == "VEZ_A1"
+    # 2026-10-12, BREAKING: the cabinet label is cabinet_label; berth_id is the real berth id or
+    # null — Q1 is not assigned to a berth here (test_scan_berth_id.py covers the assigned case).
+    assert body["berth_id"] is None and body["cabinet_label"] == "VEZ_A1"
     assert "expires_at" in body
 
 

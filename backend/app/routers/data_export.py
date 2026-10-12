@@ -100,6 +100,9 @@ SESSION_FIELDS = [
 INTERVAL_FIELDS = [
     "id", "pedestal_id", "socket_id", "session_id", "origin", "customer_id",
     "nfc_user_id", "berth_ref", "interval_start", "interval_end", "kwh", "avg_power_kw",
+    # 2026-10-12: LAST, so a reader that takes columns by position is not shifted. null = not
+    # known (models/energy_interval.py); berth_ref is the cabinet's label, not a berth.
+    "berth_id",
 ]
 INVOICE_FIELDS = [
     "id", "session_id", "customer_id", "customer_name", "energy_kwh", "water_liters",
@@ -186,6 +189,7 @@ def export_usage(
             "berth_ref": iv.berth_ref,
             "interval_start": _iso(iv.interval_start), "interval_end": _iso(iv.interval_end),
             "kwh": iv.kwh, "avg_power_kw": iv.avg_power_kw,
+            "berth_id": iv.berth_id,
         }
         for iv in iq.order_by(EnergyInterval.interval_start).all()
     ]

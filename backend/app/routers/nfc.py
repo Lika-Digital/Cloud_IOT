@@ -45,6 +45,7 @@ from ..auth.erp_api_key import require_erp_api_key
 from ..auth.models import User
 from ..models.session import Session
 from ..models.pedestal_config import PedestalConfig
+from ..models.berth_assignment import berth_id_for_socket
 from ..services.session_service import session_service
 from ..services import erp_reconciliation, nfc_service
 from ..services.nfc_service import (
@@ -784,7 +785,16 @@ def nfc_scan(body: NfcScanBody, db: DBSession = Depends(get_db),
         "outlet_type": outlet_type,
         "session_type": session_type,
         "erp_ref": body.erp_ref,
-        "berth_id": getattr(cfg, "berth_ref", None),
+        # BREAKING, 2026-10-12 (owner's decision; ERP list item 2). This field carried
+        # pedestal_configs.berth_ref — ONE free-text label per CABINET, the same for all four
+        # berths — under the name berth_id: a wrong value that looked right. It now carries the
+        # real berths.id (int) from berth_assignments, or null when not known: a water outlet
+        # (water has no berth, decision 3) or a socket not assigned to a berth. Never the label.
+        # "berth_id": getattr(cfg, "berth_ref", None),
+        "berth_id": None if is_valve else berth_id_for_socket(db, cfg.pedestal_id, outlet_int),
+        # The label is kept for the ERP, under a name that says what it is: the cabinet's label,
+        # stored in pedestal_configs.berth_ref. Not a berth.
+        "cabinet_label": getattr(cfg, "berth_ref", None),
         "expires_at": iso_z(rec.expires_at),
     }
 

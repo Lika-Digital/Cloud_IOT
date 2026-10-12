@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session as DBSession
 from ..auth.user_database import get_user_db
 from ..auth.contract_models import ServiceOrder
 from ..auth.customer_models import Customer
-from ..auth.dependencies import require_any_role
+from ..auth.dependencies import require_admin
 from ..auth.customer_dependencies import require_customer
 from ..auth.models import User
 
@@ -85,10 +85,14 @@ def my_service_orders(
 
 # ─── Admin endpoints ───────────────────────────────────────────────────────────
 
+# LEGACY, LOCKED TO ADMIN — 2026-10-12, owner's decision. Every service order with the customer carries customer identity; the
+# cabinet does not hold the customer (the ERP does), this is left over from the mobile-app testing
+# phase, and marina staff must not see customer data (rule 13). Do not lower it.
+# tests/backend/test_identity_route_scan.py TC-IDR-09 fails if a non-admin route returns identity.
 @router.get("/api/admin/service-orders/", response_model=list[AdminServiceOrderResponse])
 def admin_list_service_orders(
     user_db: DBSession = Depends(get_user_db),
-    _: User = Depends(require_any_role),
+    _: User = Depends(require_admin),  # was require_any_role
 ):
     orders = (
         user_db.query(ServiceOrder)

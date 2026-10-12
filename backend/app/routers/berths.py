@@ -362,11 +362,15 @@ def cancel_reservation(
 
 # ─── Admin routes ─────────────────────────────────────────────────────────────
 
+# LEGACY, LOCKED TO ADMIN — 2026-10-12, owner's decision. A berth's reservations, each with its customer_id, carries customer identity; the
+# cabinet does not hold the customer (the ERP does), this is left over from the mobile-app testing
+# phase, and marina staff must not see customer data (rule 13). Do not lower it.
+# tests/backend/test_identity_route_scan.py TC-IDR-09 fails if a non-admin route returns identity.
 @router.get("/api/admin/berths/calendar/{berth_id}", response_model=List[CalendarEntry])
 def get_berth_calendar(
     berth_id: int,
     user_db: DBSession = Depends(get_user_db),
-    _admin=Depends(require_any_role),
+    _admin=Depends(require_admin),  # was require_any_role
 ):
     rows = (
         user_db.query(BerthReservation)

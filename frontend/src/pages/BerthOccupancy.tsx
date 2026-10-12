@@ -27,6 +27,9 @@ export default function BerthOccupancy() {
   const { berthOccupancy, setBerthOccupancy, activeSessions } = useStore()
   // Monitor sees occupancy read-only; control roles get the write actions.
   const readOnly = !canControl(useAuthStore((s) => s.role))
+  // 2026-10-12: the reservation calendar carries customer ids, so its API is admin only. Staff
+  // get no Calendar button rather than an empty calendar that would read as "no reservations".
+  const isAdmin = useAuthStore((s) => s.role) === 'admin'
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
 
@@ -266,7 +269,7 @@ export default function BerthOccupancy() {
             berths={berthOccupancy}
             onBerthClick={(b) => {
               if (b.camera_stream_url) handleLiveView(b as BerthOut)
-              else if (b.status === 'reserved') openCalendar(b as BerthOut)
+              else if (b.status === 'reserved' && isAdmin) openCalendar(b as BerthOut)
             }}
           />
 
@@ -395,7 +398,7 @@ export default function BerthOccupancy() {
                           </button>
 
                           {/* Calendar for reserved berths */}
-                          {b.status === 'reserved' && (
+                          {b.status === 'reserved' && isAdmin && (
                             <button
                               onClick={() => openCalendar(b as BerthOut)}
                               className="text-xs text-amber-400 hover:text-amber-300 border border-amber-600/40 px-2 py-1 rounded"

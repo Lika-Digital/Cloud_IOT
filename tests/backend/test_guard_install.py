@@ -40,10 +40,15 @@ def _bash() -> str | None:
         return override
     if os.name != "nt":
         return shutil.which("bash")
+    found = shutil.which("bash")
+    if found and "system32" not in found.lower():
+        return found
     git = shutil.which("git")
     if git:
-        # git.exe is in Git\cmd or Git\mingw64\bin depending on how PATH was set up
-        for root in Path(git).resolve().parents[1:3]:
+        # git.exe is in Git\cmd, Git\mingw64\bin, or — inside a git hook, which is where the
+        # gate runs — Git\mingw64\libexec\git-core. Walk up until Git's own bin\bash.exe.
+        # (The first version looked two levels up only, and the gate skipped all nine tests.)
+        for root in Path(git).resolve().parents:
             for cand in (root / "bin" / "bash.exe", root / "usr" / "bin" / "bash.exe"):
                 if cand.is_file():
                     return str(cand)

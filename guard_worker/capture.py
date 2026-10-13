@@ -57,6 +57,7 @@ bytes, so this module is importable and testable anywhere, including the staging
 from __future__ import annotations
 
 import logging
+import re
 import os
 import shutil
 import subprocess
@@ -528,7 +529,10 @@ class CameraCapture:
         def _drain() -> None:
             try:
                 for raw in iter(proc.stderr.readline, b""):
-                    line = raw.decode("utf-8", "replace").rstrip()
+                    # line = raw.decode("utf-8", "replace").rstrip()
+                    # Scrubbed HERE, before the buffer and the log: ffmpeg names its input in
+                    # its own errors, password included (2026-10-13).
+                    line = _scrub(raw.decode("utf-8", "replace").rstrip())
                     if not line:
                         continue
                     with self._stderr_lock:
@@ -643,6 +647,16 @@ class CameraCapture:
         it on unexpected exit)."""
         text = "\n".join(self.recent_stderr())
         return text[-limit:] if limit else text
+
+
+# `scheme://user:password@` anywhere in a line. The password may not contain '@' or
+# whitespace for this to find its end; ffmpeg prints it as given, unencoded.
+_CRED_IN_TEXT = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://[^\s:/@]+):[^\s@]+@")
+
+
+def _scrub(text: str) -> str:
+    """Hide credentials anywhere in free text — ffmpeg's stderr, not just one argument."""
+    return _CRED_IN_TEXT.sub(r"\1:***@", text)
 
 
 def _redact(arg: str) -> str:

@@ -23,6 +23,7 @@ merely intended:
   TC-GCAP-06  concat command drops audio too, stream-copies, and caps duration
   TC-GCAP-07  concat list escaping survives quotes and spaces
   TC-GCAP-08  credentials never reach a log line
+  TC-GCAP-08b ...including ffmpeg's OWN stderr, which prints the input URL in its errors
   TC-GCAP-09  MJPEG framing splits a clean stream into exact frames
   TC-GCAP-10  MJPEG framing resynchronises past leading garbage and split reads
   TC-GCAP-11  MJPEG framing bounds its buffer on a stream with no end marker
@@ -215,6 +216,35 @@ def test_tc_gcap_08_credentials_never_logged(tmp_path):
 
     cap = CameraCapture(URL, tmp_path, ffmpeg=FFMPEG)
     assert "secret" not in " ".join(_redact(a) for a in cap.command())
+
+
+def test_tc_gcap_08b_ffmpeg_stderr_is_scrubbed_before_anyone_sees_it(tmp_path, caplog):
+    """ffmpeg names its input in error lines — `rtsp://admin:secret@…: 401 Unauthorized` —
+    and the drain thread logged every stderr line verbatim to journald, kept it in
+    `recent_stderr()`, and the supervisor logs that again on exit. TC-GCAP-08 covered only
+    the command line. (Owner, 2026-10-13: the camera password is printed nowhere.)
+
+    A real child process writes the lines, so this goes through the real pipe and drain."""
+    import logging
+    import subprocess
+    import sys
+    lines = ["[rtsp @ 0x5581] method DESCRIBE failed: 401 Unauthorized",
+             f"{URL}: Server returned 401 Unauthorized (authorization failed)",
+             f"Error opening input file {URL}."]
+    nl = chr(10)
+    cap = CameraCapture(URL, tmp_path, ffmpeg=FFMPEG)
+    cap._proc = subprocess.Popen(
+        [sys.executable, "-c", "import sys; sys.stderr.write(sys.argv[1])", nl.join(lines) + nl],
+        stderr=subprocess.PIPE)
+    with caplog.at_level(logging.DEBUG, logger="guard_worker"):
+        cap._start_stderr_drain()
+        cap._proc.wait(timeout=30)
+        cap._stderr_thread.join(timeout=10)
+    kept = cap.recent_stderr()
+    assert len(kept) == 3, kept
+    assert "secret" not in nl.join(kept) + cap.drain_stderr(), kept
+    assert "secret" not in caplog.text, caplog.text
+    assert "rtsp://admin:***@192.168.1.191:554/profile1" in kept[1],         "scrubbing must keep the line useful — the host and path say WHICH camera failed"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

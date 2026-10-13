@@ -35,6 +35,9 @@ os.environ.setdefault("REPORTS_DIR", _TEST_REPORTS_DIR)
 # before anything imports the app. Proof: test_test_isolation.py.
 os.environ.setdefault("DATABASE_URL", TEST_DB)
 os.environ.setdefault("USER_DATABASE_URL", TEST_USER_DB)
+# 2026-10-13 — guard messages are accepted only from the backend's own worker instance; the
+# fake-worker tests speak as this one.
+os.environ.setdefault("GUARD_INSTANCE_ID", "test-guard-instance")
 
 # ── Test DB URLs (file-based so cross-module fixtures share state) ────────────
 # Per-run, from _test_paths — see its docstring for the concurrent-run race this closes.

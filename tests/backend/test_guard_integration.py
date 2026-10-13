@@ -30,6 +30,8 @@ file replayed at wallclock rate). Nothing else.
   TC-GINT-07  an ack that never arrives does not leave a false ARMED behind
   TC-GINT-08  the refusal mechanism: a skip says it is not a pass, and
               GUARD_INTEGRATION_REQUIRED=1 makes it fatal
+  TC-GINT-09  a SECOND worker for the same camera on the same broker (another install) is
+              neither armed by our command nor able to make us read ARMED (2026-10-13)
 
 Running this on the NUC: the compose broker on :1883 is used automatically. See
 `docs/guard_deploy_runbook.md` §2.
@@ -382,8 +384,13 @@ class Worker:
 
 
 def _start_worker(backend_info: dict, tmp_path: Path, *, source: str = "",
-                  detector: str = "available", confidence: float = 0.95) -> Worker:
-    log_path = tmp_path / "worker.log"
+                  detector: str = "available", confidence: float = 0.95,
+                  instance: str | None = None) -> Worker:
+    """`instance` None = OUR worker (the backend's `guard_instance_id`); anything else is
+    another install's worker on the same broker."""
+    from app.config import settings
+    instance = instance if instance is not None else settings.guard_instance_id
+    log_path = tmp_path / f"worker-{instance}.log"
     log = open(log_path, "w")
     cmd = [
         # -u matters: the harness logs to stderr, and stderr redirected to a file is
@@ -394,7 +401,8 @@ def _start_worker(backend_info: dict, tmp_path: Path, *, source: str = "",
         "--broker-port", str(backend_info["port"]),
         "--marina", backend_info["marina"],
         "--camera", str(CAM),
-        "--storage", str(tmp_path / "recordings"),
+        "--instance", instance,
+        "--storage", str(tmp_path / f"recordings-{instance}"),
         "--detector", detector,
         "--confidence", str(confidence),
     ]
@@ -825,6 +833,99 @@ async def test_an_ack_that_never_arrives_leaves_no_false_armed(backend, tmp_path
         assert status["desired_state"] == "ARMED"
     finally:
         worker.stop_clean()
+
+
+# ═══ TC-GINT-09 ══════════════════════════════════════════════════════════════
+
+class _Observer:
+    """A plain MQTT client on the camera's guard topics: what the BROKER carried, so a
+    negative assertion about the backend is made after the message provably existed."""
+
+    def __init__(self, broker_info: dict, marina: str):
+        import paho.mqtt.client as mqtt
+        self.msgs: list[tuple[str, dict, bool]] = []
+        self.base = f"marina/{marina}/camera/{CAM}/guard"
+        self.c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
+                             client_id=f"int-observer-{marina}-{CAM}")
+        self.c.on_message = self._on
+        self.c.connect(broker_info["host"], broker_info["port"], 30)
+        self.c.subscribe(f"{self.base}/#", qos=1)
+        self.c.loop_start()
+
+    def _on(self, _c, _u, msg):
+        try:
+            data = json.loads(msg.payload or b"{}")
+        except ValueError:
+            data = {}
+        self.msgs.append((msg.topic.rsplit("/", 1)[-1], data, bool(msg.retain)))
+
+    def seen(self, leaf: str, **match) -> bool:
+        return any(l == leaf and not r and all(d.get(k) == v for k, v in match.items())
+                   for l, d, r in self.msgs)
+
+    def publish(self, leaf: str, data: dict) -> None:
+        self.c.publish(f"{self.base}/{leaf}", json.dumps(data), qos=1).wait_for_publish(10)
+
+    def close(self) -> None:
+        self.c.loop_stop()
+        self.c.disconnect()
+
+
+async def test_a_second_workers_armed_is_never_ours(backend, tmp_path):
+    """Two installs, one broker, one camera id: the other one's ARMED is not ours.
+
+    Before 2026-10-13 the topics named only marina and camera, and nothing in a message said
+    which install sent it. A second cabinet left on the defaults (MARINA_ID=KRK, camera 1)
+    publishes on exactly our topics. So:
+      (a) OUR arm command reached ITS worker, which armed and acked — `_on_ack` matched on
+          req_id alone and `_on_state` took its ARMED as ours;
+      (b) and when ITS backend armed it, we read ARMED for a camera nobody here watches.
+    Only our worker is absent, so ARMED here can only have come from theirs.
+
+    The foreign worker is a REAL worker process; the foreign backend is a plain client
+    publishing the command that backend would publish. Every negative assertion is made
+    after the observer saw the message on the broker, so "nothing happened" cannot mean
+    "nothing was sent yet".
+    """
+    from app.config import settings
+    from app.guard.service import liveness
+
+    foreign = f"other-install-{RUN_TAG}"
+    assert foreign != settings.guard_instance_id
+    obs = _Observer(backend, backend["marina"])
+    worker = _start_worker(backend, tmp_path, instance=foreign)
+    try:
+        await _await(lambda: obs.seen("state", state="OFF"), timeout=30,
+                     what="the foreign worker to announce itself", diagnose=worker.output)
+        await asyncio.sleep(0.5)
+        assert not liveness.is_alive(CAM), (
+            "another install's worker announcing itself marked OUR camera's worker alive")
+
+        # (a) our command, on the shared topic. Their worker must neither act nor ack.
+        req_id = _command("arm")
+        await asyncio.sleep(settings.guard_ack_timeout_s + 0.5)
+        assert not obs.seen("ack", req_id=req_id), (
+            "another install's worker ACKED our command — it would have armed for us")
+        assert not obs.seen("state", state="ARMED"), (
+            "another install's worker ARMED on our command")
+
+        # (b) their backend arms their worker. The ARMED is real, live, and not ours.
+        obs.publish("cmd", {"cmd": "arm", "req_id": f"theirs-{RUN_TAG}", "instance": foreign,
+                            "camera_id": CAM, "config": {"config_version": 1}})
+        await _await(lambda: obs.seen("state", state="ARMED"), timeout=30,
+                     what="the foreign worker to arm on its own backend's command",
+                     diagnose=worker.output)
+        await asyncio.sleep(0.5)
+
+        status = _status()
+        assert status["desired_state"] == "ARMED", "precondition: we asked for ARMED"
+        assert status["state"] != "ARMED", (
+            "we read ARMED from another install's worker — a camera nobody here is watching "
+            "was shown to the operator as guarded")
+        assert status["state"] == "UNAVAILABLE" and status["worker_alive"] is False, status
+    finally:
+        worker.stop_clean()
+        obs.close()
 
 
 # ═══ TC-GINT-08 ══════════════════════════════════════════════════════════════

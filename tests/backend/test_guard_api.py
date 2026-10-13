@@ -34,10 +34,13 @@ Two properties matter more than the endpoint list:
   TC-GAPI-20  frame endpoint serves the annotated JPEG
   TC-GAPI-21  detections endpoint filters by band and confidence
   TC-GAPI-22  recording links onto its event
+  TC-GAPI-23  the cmd names our instance; ack/state/health/alarm from another instance, or
+              from none, are dropped — no ARMED, no liveness, no event (2026-10-13)
 """
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
@@ -96,7 +99,10 @@ def published():
 
 
 async def _feed(topic_leaf: str, data: dict, *, retained: bool = False):
+    from app.config import settings
     from app.guard.service import handle_guard_message, topic_base
+    # The fake worker speaks as OUR instance unless a test says otherwise (2026-10-13).
+    data = {"instance": settings.guard_instance_id, **data}
     with patch("app.guard.service.SessionLocal", _S, create=True):
         await handle_guard_message(
             f"{topic_base(CAM)}/{topic_leaf}", json.dumps(data), retained=retained)
@@ -106,7 +112,9 @@ def _feed_sync(topic_leaf: str, data: dict, *, retained: bool = False):
     """Drive an inbound MQTT message with the DB and WS patched to the test rig."""
     import asyncio
 
+    from app.config import settings
     from app.guard import service as svc
+    data = {"instance": settings.guard_instance_id, **data}
 
     async def _noop(*a, **k):
         return None
@@ -488,3 +496,32 @@ def _status(client, headers) -> dict:
         if cam["camera_id"] == CAM:
             return cam
     raise AssertionError(f"camera {CAM} not in status: {body}")
+
+
+@pytest.mark.parametrize("instance", ["another-install", None], ids=["foreign", "missing"])
+def test_tc_gapi_23_only_our_instance_is_heard(client, auth_headers, published, instance):
+    """The integration test (TC-GINT-09) proves it over a real broker; this pins every leaf."""
+    from app.config import settings
+    from app.guard.models import GuardEvent
+    from app.guard.service import liveness
+
+    assert settings.guard_instance_id, "precondition: the test rig names an instance"
+    client.post(f"/api/guard/{CAM}/enable", headers=auth_headers)
+    cmd = json.loads(published[0][1])
+    assert cmd["instance"] == settings.guard_instance_id, "the command must say whose it is"
+
+    who = {"instance": instance}
+    _feed_sync("ack", {**who, "req_id": cmd["req_id"], "accepted": True, "state": "ARMED"})
+    _feed_sync("state", {**who, "state": "ARMED", "flags": []})
+    _feed_sync("health", {**who, "cpu": 1.0})
+    _feed_sync("alarm", {**who, "event_uuid": f"gapi23-{instance}", "confidence": 0.9})
+
+    cam = _status(client, auth_headers)
+    assert cam["state"] == "UNAVAILABLE" and cam["worker_alive"] is False, cam
+    assert any(r == cmd["req_id"] for r, _c in liveness.overdue_acks(time.time() + 10_000)),         "a foreign ack cleared our pending command"
+    db = _S()
+    try:
+        assert db.query(GuardEvent).filter(
+            GuardEvent.event_uuid == f"gapi23-{instance}").first() is None,             "a foreign alarm was persisted as ours"
+    finally:
+        db.close()

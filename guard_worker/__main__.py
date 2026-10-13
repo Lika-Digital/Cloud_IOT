@@ -32,6 +32,15 @@ Shape, and why:
 Last Will is set on `state`, so if this process dies the broker publishes UNAVAILABLE and a
 late subscriber can never read a stale ARMED. With the backend's heartbeat timeout and its
 in-memory `worker_seen_at`, that is the three-way guarantee from B1 §7.
+
+**Instance identity (2026-10-13).** Every message this worker publishes — the Last Will
+included — carries `instance`, and it acts only on a command addressed to its own instance.
+Before this, topics named only marina and camera: a second worker for the same camera on the
+same broker (a second cabinet with the defaults, MARINA_ID=KRK and camera 1) would be armed
+by this backend's commands and its ARMED would be read here as ours. `GUARD_INSTANCE_ID` is
+written once per NUC by the guard install step, into this worker's env and the backend's.
+It is an identifier, not a credential: it separates two honest workers, it does not stop a
+client that sets out to impersonate one — that is the broker's job (MQTT is LAN-only).
 """
 from __future__ import annotations
 
@@ -123,6 +132,8 @@ class WorkerConfig:
     """
     marina_id: str = "KRK"
     camera_id: int = 1
+    # Which install this worker belongs to. Empty = refuse to run (see run()).
+    instance_id: str = ""
     pedestal_id: int = 1
     stream_url: str = ""
     broker_host: str = "localhost"
@@ -150,6 +161,7 @@ class WorkerConfig:
         return cls(
             marina_id=_env("MARINA_ID", "KRK"),
             camera_id=cam,
+            instance_id=_env("GUARD_INSTANCE_ID", "").strip(),
             # camera_id == pedestal_id today; separate so a real cameras table can arrive
             # later without this having to be rewritten.
             pedestal_id=_env_i("GUARD_PEDESTAL_ID", cam),
@@ -261,7 +273,10 @@ class GuardWorker:
             # same id the broker disconnects one whenever the other connects (MQTT-3.1.4-2) —
             # each would then fire its last will and read as dead. Found 2026-10-11 by two
             # concurrent test runs doing exactly that on one dev box.
-            cid = f"guard-worker-{self.cfg.marina_id}-{self.cfg.camera_id}-{socket.gethostname()}"
+            # The instance replaced the hostname (2026-10-13): NUCs from one image can share a
+            # hostname, and two workers with one client id kick each other off the broker.
+            # cid = f"guard-worker-{self.cfg.marina_id}-{self.cfg.camera_id}-{socket.gethostname()}"
+            cid = f"guard-worker-{self.cfg.marina_id}-{self.cfg.camera_id}-{self.cfg.instance_id}"
             self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=cid)
             self.client.reconnect_delay_set(min_delay=1, max_delay=30)
 
@@ -270,7 +285,7 @@ class GuardWorker:
         self.client.will_set(
             self.cfg.topic("state"),
             json.dumps({"state": STATE_UNAVAILABLE, "reason": "worker died (LWT)",
-                        "camera_id": self.cfg.camera_id}),
+                        "camera_id": self.cfg.camera_id, "instance": self.cfg.instance_id}),
             qos=1, retain=True,
         )
         self.client.on_connect = self._on_connect
@@ -304,6 +319,7 @@ class GuardWorker:
         if self.client is None:
             return
         data.setdefault("camera_id", self.cfg.camera_id)
+        data["instance"] = self.cfg.instance_id
         data.setdefault("ts", _utc_iso())
         try:
             self.client.publish(self.cfg.topic(leaf), json.dumps(data),
@@ -329,6 +345,12 @@ class GuardWorker:
     def apply_command(self, cmd: dict) -> None:
         action = cmd.get("cmd")
         req_id = cmd.get("req_id", "")
+        # Not ours: no action and NO ack. An ack would tell the other backend its command
+        # landed, and acting on it is the false ARMED this check exists to prevent.
+        if cmd.get("instance") != self.cfg.instance_id:
+            logger.warning("ignoring command %s req_id=%s addressed to instance %r (this is %r)",
+                           action, req_id, cmd.get("instance"), self.cfg.instance_id)
+            return
         config = cmd.get("config") or {}
         logger.info("command=%s req_id=%s config_version=%s",
                     action, req_id, config.get("config_version"))
@@ -806,6 +828,10 @@ class GuardWorker:
         if not self.cfg.stream_url:
             logger.error("GUARD_STREAM_URL is not set — there is nothing to capture")
             return 2
+        if not self.cfg.instance_id:
+            logger.error("GUARD_INSTANCE_ID is not set — this worker cannot say whose it is, "
+                         "and the backend would ignore it; run the guard install step")
+            return 4
 
         try:
             self.connect()

@@ -24,12 +24,19 @@ state lets a restarting backend learn the last known value, but retained is NEVE
 liveness. `cmd` is deliberately NOT retained — a replayed command would arm a restarting
 worker with nobody having asked, which is exactly the shape of the bug v3.40 fixed.
 
-A false ARMED is prevented three independent ways:
+A false ARMED is prevented four independent ways:
   1. the worker sets a Last Will on `state`, so the broker publishes UNAVAILABLE if it dies;
   2. a heartbeat gap beyond `guard_heartbeat_timeout_s` marks it unavailable regardless of
      what retained state says;
   3. `worker_seen_at` is **in-memory and deliberately not persisted**, so a stale retained
-     ARMED cannot survive a backend restart as truth.
+     ARMED cannot survive a backend restart as truth;
+  4. (2026-10-13) **instance identity.** The topics name only marina and camera, so a second
+     worker for the same camera on the same broker — a second cabinet left on the defaults —
+     published on OUR topics: `_on_state` took its ARMED and `_on_ack` matched on req_id
+     alone. Now every command carries `settings.guard_instance_id`, the worker acts only on
+     its own, and every inbound message without our instance is dropped before any handler,
+     the Last Will included. An identifier, not a credential: it separates two honest
+     workers; stopping a deliberate impersonator is the broker's job.
 """
 from __future__ import annotations
 
@@ -143,8 +150,11 @@ class WorkerLiveness:
     def expect_ack(self, req_id: str, camera_id: int, now: float | None = None) -> None:
         self._pending_acks[req_id] = (camera_id, now if now is not None else time.time())
 
-    def ack_received(self, req_id: str) -> None:
-        self._pending_acks.pop(req_id, None)
+    def ack_received(self, req_id: str, camera_id: int | None = None) -> None:
+        """Clear a pending ack. With `camera_id`, only if the command went to that camera."""
+        pending = self._pending_acks.get(req_id)
+        if pending is not None and (camera_id is None or pending[0] == camera_id):
+            self._pending_acks.pop(req_id, None)
 
     def overdue_acks(self, now: float | None = None) -> list[tuple[str, int]]:
         now = now if now is not None else time.time()
@@ -271,6 +281,7 @@ def publish_command(db: DBSession, cfg: GuardConfig, cmd: str,
     payload = {
         "cmd": cmd,
         "req_id": req_id,
+        "instance": settings.guard_instance_id,
         "camera_id": cfg.camera_id,
         "pedestal_id": cfg.pedestal_id,
         "config": config_payload(cfg),
@@ -299,6 +310,14 @@ async def handle_guard_message(topic: str, payload: str, *, retained: bool = Fal
         logger.warning("[Guard] bad JSON on %s: %s", topic, exc)
         return
 
+    # Not from our worker → not evidence of anything, in either direction. Checked before the
+    # handler so no leaf (state, ack, health, alarm, …) can be fed by another instance.
+    instance = data.get("instance") if isinstance(data, dict) else None
+    if not settings.guard_instance_id or instance != settings.guard_instance_id:
+        logger.warning("[Guard] dropped %s for camera %d from instance %r (ours: %r)",
+                       leaf, camera_id, instance, settings.guard_instance_id or None)
+        return
+
     handler = {
         "ack": _on_ack,
         "state": _on_state,
@@ -318,7 +337,9 @@ async def handle_guard_message(topic: str, payload: str, *, retained: bool = Fal
 
 async def _on_ack(camera_id: int, data: dict, retained: bool) -> None:
     req_id = data.get("req_id", "")
-    liveness.ack_received(req_id)
+    # liveness.ack_received(req_id)
+    # The ack must be for a command sent to THIS camera — a req_id is not proof on its own.
+    liveness.ack_received(req_id, camera_id)
     liveness.mark_seen(camera_id)
     logger.info("[Guard] ack camera=%d req_id=%s accepted=%s state=%s",
                 camera_id, req_id, data.get("accepted"), data.get("state"))

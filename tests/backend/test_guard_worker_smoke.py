@@ -51,6 +51,9 @@ from guard_worker.__main__ import GuardWorker, WorkerConfig  # noqa: E402
 pytest.importorskip("PIL", reason="Pillow is needed to synthesise frames")
 
 
+# The worker acts only on commands addressed to its own instance (2026-10-13).
+INST = "smoke-instance"
+
 def _ffmpeg() -> str | None:
     """Resolve ffmpeg the same way CameraCapture does, including the explicit override.
 
@@ -229,6 +232,7 @@ def cfg(tmp_path: Path) -> WorkerConfig:
         marina_id="TST",
         camera_id=7,
         pedestal_id=7,
+        instance_id=INST,
         # lavfi is the "synthetic source, not the camera" the smoke test requires. Only
         # TC-GSMOKE-05 actually starts ffmpeg; the rest just need a non-empty URL so run()
         # does not exit 2.
@@ -385,6 +389,7 @@ def _module_env(tmp_path: Path, stub: Path) -> dict:
     env.update({
         "MARINA_ID": "TST",
         "GUARD_CAMERA_ID": "7",
+        "GUARD_INSTANCE_ID": INST,
         "GUARD_STREAM_URL": "synthetic",
         "GUARD_STORAGE_PATH": str(tmp_path / "recordings"),
         "GUARD_MODEL_DIR": str(tmp_path / "models"),
@@ -530,7 +535,7 @@ def test_arm_to_alarm_to_clip_through_the_real_loop(cfg: WorkerConfig) -> None:
     _wait(lambda: worker.ready, what="the worker to come up")
 
     client.deliver("marina/TST/camera/7/guard/cmd", {
-        "cmd": "arm", "req_id": "smoke-1",
+        "instance": INST, "cmd": "arm", "req_id": "smoke-1",
         "config": {"config_version": 4, "conf_threshold": 0.5, "uncertain_min": 0.2,
                    "fps": 4, "window_seconds": 4, "frames_required": 2,
                    "cooldown_seconds": 1, "zone": [0.0, 0.0, 1.0, 1.0],
@@ -626,7 +631,7 @@ def test_arm_without_a_detector_is_refused_not_crashed(cfg: WorkerConfig) -> Non
     _wait(lambda: worker.ready, what="the worker to come up")
 
     client.deliver("marina/TST/camera/7/guard/cmd", {
-        "cmd": "arm", "req_id": "no-model", "config": {"config_version": 1},
+        "instance": INST, "cmd": "arm", "req_id": "no-model", "config": {"config_version": 1},
     })
     _wait(lambda: client.messages("ack"), what="an ack for the refused arm")
 
@@ -663,7 +668,7 @@ def test_disarm_releases_the_model_and_the_capture_process(cfg: WorkerConfig) ->
     _wait(lambda: worker.ready, what="the worker to come up")
 
     client.deliver("marina/TST/camera/7/guard/cmd", {
-        "cmd": "arm", "req_id": "a1",
+        "instance": INST, "cmd": "arm", "req_id": "a1",
         "config": {"config_version": 1, "conf_threshold": 0.5, "uncertain_min": 0.2,
                    "fps": 2, "zone": [0.0, 0.0, 1.0, 1.0],
                    "visibility_min_luma": 1.0, "visibility_min_variance": 0.1},
@@ -677,7 +682,7 @@ def test_disarm_releases_the_model_and_the_capture_process(cfg: WorkerConfig) ->
     assert ffmpeg_pid is not None
 
     client.deliver("marina/TST/camera/7/guard/cmd",
-                   {"cmd": "disarm", "req_id": "d1", "config": {}})
+                   {"instance": INST, "cmd": "disarm", "req_id": "d1", "config": {}})
     _wait(lambda: worker.state == "OFF", timeout=30, what="the worker to report OFF")
 
     assert detector.unloaded, "the model was not released on disarm"
@@ -709,3 +714,28 @@ def _pid_alive(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def test_a_command_for_another_instance_is_neither_acted_on_nor_acked(cfg: WorkerConfig) -> None:
+    """Instance identity, worker side (2026-10-13). An ack would tell the other install's
+    backend its command landed; acting on it is the false ARMED. Then our own command still
+    works, so the check is not "ignore everything"."""
+    client = FakeClient()
+    worker = GuardWorker(cfg, client=client, detector_factory=FakeDetector)
+    for theirs in ({"instance": "another-install"}, {}):
+        worker.apply_command({**theirs, "cmd": "disarm", "req_id": "theirs", "config": {}})
+    assert client.messages("ack") == [], "the worker acked a command that was not addressed to it"
+
+    worker.apply_command({"instance": INST, "cmd": "disarm", "req_id": "ours", "config": {}})
+    acks = client.messages("ack")
+    assert [a["req_id"] for a in acks] == ["ours"] and acks[0]["instance"] == INST, acks
+    assert all(p.get("instance") == INST for _t, p, _r in client.published),         "every message the worker publishes must say whose it is"
+
+
+def test_a_worker_without_an_instance_refuses_to_start(cfg: WorkerConfig) -> None:
+    """Exit 4 before connecting: a worker that cannot say whose it is would be ignored by
+    the backend — better a unit that is visibly down than one that is running and unheard."""
+    cfg.instance_id = ""
+    client = FakeClient()
+    assert GuardWorker(cfg, client=client, detector_factory=FakeDetector).run() == 4
+    assert client.published == [], "it published before refusing"

@@ -136,7 +136,9 @@ silently failing to detect.
 ## 4. MQTT contract
 
 `{M}` = `MARINA_ID` from config (not derived). `{cam}` = `camera_id`.
-QoS 1 throughout. Client id `guard-worker-{M}-{cam}-{hostname}` (marina included since 2026-10-11 — a shared id makes the broker disconnect one client whenever the other connects), keepalive 30 s.
+QoS 1 throughout. Client id `guard-worker-{M}-{cam}-{instance}` (marina included since 2026-10-11 — a shared id makes the broker disconnect one client whenever the other connects; `{instance}` replaced `{hostname}` on 2026-10-13, because NUCs installed from one image can share a hostname), keepalive 30 s.
+
+**Instance identity (2026-10-13).** Every payload below carries `"instance": GUARD_INSTANCE_ID`, the Last Will included. The topics name only marina and camera, so a second install with the same `MARINA_ID` and camera id on the same broker publishes on exactly these topics. The worker acts only on a `cmd` whose `instance` is its own and does **not ack** any other; the backend drops every inbound message whose `instance` is not `settings.guard_instance_id` before any handler runs (empty setting = drop all, so guard reads UNAVAILABLE). This makes the question "does cabinet 2 share cabinet 1's broker" irrelevant to correctness. It is an identifier, not a credential: it separates two honest installs, it does not stop a client that deliberately impersonates one — that is broker access control, and the broker is LAN-only. Proof: TC-GINT-09 (real broker, real second worker), TC-GAPI-23, the two worker-side smoke tests. Known residue: both installs still write the one retained `state` topic, so after a backend restart the retained value may be the other install's — it is dropped, and ours reads UNAVAILABLE until our worker speaks, which is the safe direction.
 
 | Topic | Dir | Retained | Payload |
 |---|---|---|---|

@@ -81,6 +81,8 @@ def main() -> int:
     ap.add_argument("--broker-port", type=int, required=True)
     ap.add_argument("--marina", required=True)
     ap.add_argument("--camera", type=int, required=True)
+    ap.add_argument("--instance", required=True,
+                    help="GUARD_INSTANCE_ID of this worker — whose worker it is")
     ap.add_argument("--storage", required=True)
     ap.add_argument("--source", default="",
                     help="pre-encoded H.264 file replayed as the camera; empty = no capture")
@@ -102,6 +104,7 @@ def main() -> int:
         marina_id=args.marina,
         camera_id=args.camera,
         pedestal_id=args.camera,
+        instance_id=args.instance,
         # A non-empty URL is required or run() exits 2 before connecting; the tests that do
         # not need frames pass a placeholder and never arm.
         stream_url=args.source or "no-capture",

@@ -111,6 +111,10 @@ class Settings(BaseSettings):
     # a false ARMED; heartbeat_timeout catches a worker that wedged with its socket open.
     guard_ack_timeout_s: float = 5.0
     guard_heartbeat_timeout_s: float = 15.0
+    # Which guard worker install is OURS (2026-10-13). Commands carry it; every inbound guard
+    # message must carry it or it is dropped. Written by the guard install step into this
+    # .env and the worker's guard.env. Empty = no worker is ours, so guard reads unavailable.
+    guard_instance_id: str = ""
     # Phase 1 ships NO notification path at all — not built-and-disabled. The dashboard and
     # MQTT are the only outputs, so there is nothing to switch on by accident.
     guard_notify_enabled: bool = False

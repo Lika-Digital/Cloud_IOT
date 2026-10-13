@@ -882,6 +882,12 @@ async def test_a_second_workers_armed_is_never_ours(backend, tmp_path):
       (b) and when ITS backend armed it, we read ARMED for a camera nobody here watches.
     Only our worker is absent, so ARMED here can only have come from theirs.
 
+    WHAT THIS IS NOT (owner, 2026-10-13): `instance` is an IDENTIFIER, not a credential. It
+    separates two honest installs that happen to share a broker. It does NOT stop anyone who
+    deliberately publishes a forged message carrying our instance id — the id travels in clear
+    on every message. Stopping that is authentication on the broker: R4, already on the list.
+    This test is a correctness test, not a security control, and must not be read as one.
+
     The foreign worker is a REAL worker process; the foreign backend is a plain client
     publishing the command that backend would publish. Every negative assertion is made
     after the observer saw the message on the broker, so "nothing happened" cannot mean

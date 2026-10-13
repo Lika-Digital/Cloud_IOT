@@ -49,6 +49,20 @@ for the component that runs a large C++ library and talks to the camera. Recordi
 
 ## 2. The systemd unit
 
+> **Superseded by the committed unit (2026-10-13): `nuc_image/cloud-iot-guard.service`,
+> installed by `nuc_image/install-guard.sh` (install only — never enables or starts it).**
+> The block below is the design as approved and is kept for its reasoning. What changed, and
+> why: `WorkingDirectory=/opt/cloud-iot` and the worker at `/opt/cloud-iot/guard_worker` —
+> `__main__.py` puts its parent and `<parent>/backend` on `sys.path`, so with the design's
+> `/opt/cloud-iot/guard` it would not have found the shared modules; `Group=guard` — the
+> install creates the account with its own group, `cloud-iot` is not a group every cabinet
+> has; `IPAddressAllow` gained `172.18.0.0/16` — MEASURED: with Docker's `userland-proxy=false`
+> the filter sees the broker container's address after the kernel's DNAT, and without that
+> entry the worker cannot reach the broker (with the default docker-proxy, `localhost` alone
+> suffices). The owner first ruled the filter out as a new network mechanism, then took it
+> back on 2026-10-13 with two conditions: the measurement above, and a §13 check that tells a
+> blocked connection from a dead device (§13.6c, F.3).
+
 ```ini
 [Unit]
 Description=Cloud IoT Guard — camera person detection worker

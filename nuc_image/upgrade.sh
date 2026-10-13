@@ -389,6 +389,25 @@ else
   info "Backend bound to loopback only: $(echo $LISTEN_8000)"
 fi
 
+# ── Guard install (opt-in, 2026-10-13) ──────────────────────────────────────────
+# `sudo GUARD_INSTALL=1 bash upgrade.sh` also runs the guard INSTALL step. Off by default: the
+# step pulls openvino into the guard's own venv, and the §13 list runs it as its own check
+# (§13.6c G.1). It never enables or starts the worker. Guard is independent of the marina, so
+# its failure is reported, not fatal: the backend upgrade above is complete either way.
+GUARD_RESULT="not run (GUARD_INSTALL=1 to run it)"
+if [ "${GUARD_INSTALL:-0}" = "1" ]; then
+  phase "Guard install step (install only — not started)"
+  set +e
+  bash "${SCRIPT_DIR}/install-guard.sh"
+  GUARD_RC=$?
+  set -e
+  case "$GUARD_RC" in
+    0) GUARD_RESULT="installed, not started"; info "Guard: ${GUARD_RESULT}" ;;
+    3) GUARD_RESULT="NOT READY — model missing"; warn "Guard: ${GUARD_RESULT}" ;;
+    *) GUARD_RESULT="FAILED (exit ${GUARD_RC}) — see /var/log/cloud-iot/guard-install.log"; warn "Guard: ${GUARD_RESULT}" ;;
+  esac
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "──────────────────────────────────────────────────────"
@@ -412,6 +431,7 @@ if command -v docker &>/dev/null && docker ps --format '{{.Names}}' 2>/dev/null 
 else
   echo -e "    ${YELLOW}●${NC} mosquitto (docker): not running"
 fi
+echo -e "    ${CYAN}●${NC} guard install: ${GUARD_RESULT}; cloud-iot-guard: $(systemctl is-active cloud-iot-guard 2>/dev/null || true)"
 echo ""
 info "Log: ${LOG_FILE}"
 echo ""

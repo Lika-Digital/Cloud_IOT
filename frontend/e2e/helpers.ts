@@ -4,12 +4,15 @@ import { Page } from '@playwright/test'
 export async function loginAs(page: Page, role: 'admin' | 'monitor' = 'admin') {
   // Real JWT structure: header.payload.signature
   // Payload: { sub: "1", email: "admin@test.local", role: "admin", exp: far future }
+  // base64url, as a real JWT is: plain btoa leaves '=' padding (the admin payload gets '=='),
+  // and the app passes the token as a WebSocket subprotocol, where '=' is invalid — the
+  // constructor throws and the admin shell crashed in the test, never in production.
   const payload = btoa(JSON.stringify({
     sub: '1',
     email: 'admin@test.local',
     role,
     exp: Math.floor(Date.now() / 1000) + 86400 * 365,
-  }))
+  })).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_')
   const fakeJwt = `eyJhbGciOiJIUzI1NiJ9.${payload}.fake_sig`
 
   await page.addInitScript((args) => {

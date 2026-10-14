@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
-import { loginAs } from './helpers'
+import { loginAs, mockApi } from './helpers'
 
 /**
  * Marina dashboard — boot, and the three behaviours a JSON response cannot show.
@@ -328,4 +328,25 @@ test('TC-UIN-01 Analytics is not in the nav; berth detail opens it for its pedes
   await expect(page.getByTestId('berth-detail')).toBeVisible()
   const link = page.getByRole('link', { name: /Pedestal consumption history/ })
   await expect(link).toHaveAttribute('href', '/analytics?pedestal=7')
+})
+
+// ═══ TC-UIN-02 — the setup wizard is admin only, in the ROUTE, not just the menu ══════
+
+test('TC-UIN-02 staff typing the wizard address do not get the wizard; admin does', async ({ page }) => {
+  // Saving the wizard is require_admin. A page staff can open but never save is a false offer;
+  // hiding it from the menu alone would leave it one typed address away (§0.2, 2026-10-15).
+  await mockCore(page, healthyCore())
+  await page.goto('/marina/setup/1')
+  await expect(page).toHaveURL(/\/dashboard$/)
+  await expect(page.getByTestId('marina-setup')).toHaveCount(0)
+
+  // Positive control: the same address, as admin, renders the wizard — so the redirect above
+  // is the role, not a broken route. (A later init script overrides the monitor login.)
+  // The admin shell polls more endpoints than the monitor's, and crashes on unmocked ones —
+  // so it gets the shared mocks, and the marina mock again on top (last route wins).
+  await loginAs(page, 'admin')
+  await mockApi(page)
+  await mockCore(page, healthyCore())
+  await page.goto('/marina/setup/1')
+  await expect(page.getByTestId('marina-setup')).toBeVisible()
 })

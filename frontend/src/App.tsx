@@ -72,9 +72,13 @@ function AppInner() {
         <Route path="marina/water" element={<MarinaWater />} />
         <Route path="marina/alarms" element={<MarinaAlarms />} />
         <Route path="marina/guard" element={<MarinaGuard />} />
-        {/* Installation. The BACKEND enforces admin on the write; this route being
-            reachable is not what protects it. */}
-        <Route path="marina/setup/:pedestalId" element={<MarinaSetup />} />
+        {/* Installation — admin only, in the route and not just the menu (2026-10-15). The
+            backend enforces admin on the write; a page staff could open but never save is a
+            false offer. Owner: smart mode and configuration are set only from admin screens. */}
+        <Route
+          path="marina/setup/:pedestalId"
+          element={<ProtectedRoute adminOnly><MarinaSetup /></ProtectedRoute>}
+        />
         <Route path="analytics" element={<Analytics />} />
         <Route path="history" element={<History />} />
         <Route

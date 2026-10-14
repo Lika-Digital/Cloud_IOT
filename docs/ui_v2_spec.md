@@ -56,7 +56,7 @@ Evidence is a test, a commit or a path, never a claim.
 | TC-UIR-01 (no raw colour classes) | BUILT+PROVEN, with exemptions | `test_ui_rule_colours.py` (block 3, 2026-10-12): no status hue (red/green/amber/yellow/orange/emerald/lime/rose on a colour utility) in `pages/marina/**`, `components/marina/**` outside `Status.tsx`, whose exported `TONE` is the only palette. Measured with that pattern: 29 lines, 2 of them in `Status.tsx` (the earlier "32" used a pattern that was not recorded). Fixed now: MarinaGuard, MarinaAlarms, MarinaWater. Exempt per file until block 4: MarinaDashboard, BerthDetail, MarinaSetup — the gate fails when block 4 is marked DONE below while any is still exempt |
 | Block 4 — UI v2 remainder | NOT DONE | Row controls, L3 history, nav of 4 (Analytics already out — see the "Block 4 (part)" row below; do not redo), `<PhaseBlock>`, wizard step 3, §9 splits, `/marina` on the websocket. **This row is the deadline of TC-UIR-01's exemptions** — `test_ui_rule_colours.py` reads it; setting it to DONE with exemptions left fails the gate |
 | L3 history, `<PhaseBlock>`, nav of 4, Card 5 (water toggle) | NOT BUILT | no history route in `App.tsx`; `Layout.tsx:40-57` has 8 items |
-| Setup wizard | PARTIAL, UNPROVEN | `MarinaSetup.tsx` (`4eb381e`); step 3 missing; route not `adminOnly`; no UI test |
+| Setup wizard | PARTIAL | `MarinaSetup.tsx` (`4eb381e`); step 3 missing. **Route `adminOnly` since 2026-10-15** — before that it was admin only in the backend write and nowhere else, so staff could open it by typing the address. `marina.spec.ts` TC-UIN-02: staff typing `/marina/setup/1` land on `/dashboard` with no wizard (failed on the code before: the URL stayed), admin gets the wizard (positive control) |
 | §9 size limits | FAILS | 377 / 302 lines; 1 890 total |
 | `match_ok_bit` "never analysed" | BUILT+PROVEN | block 3, 2026-10-12: `vessel_matches` is `false` only for a measured mismatch (`state_code` 2), `true` only for `match_ok_bit` 1, otherwise `null` = not known — never analysed, analysis failed, berth empty, no reference to compare. UI says "not known" for null. `test_vessel_match_truth.py` TC-VMT-01 (the four not-known cases failed on the code before) |
 | D2 paired redaction test (HTTP) | BUILT+PROVEN | `test_identity_redaction.py` TC-IDR-03: monitor gets none of the identity keys, admin gets them (failed on the code before, 2026-10-12) |
@@ -633,6 +633,8 @@ not afterwards.
 
 **DECIDED — smart mode does not appear in this wizard at all.** Backend-enforced regardless.
 
+**Owner's decision, 2026-10-15:** smart mode and configuration are set ONLY from admin screens; no other view shows them, because using them without being admin is dangerous. The wizard is therefore admin only — in the route (`App.tsx`, `adminOnly`), not just in the menu — and is not in the staff nav (§9).
+
 **DECIDED — the wizard is re-runnable and shows the current mapping pre-filled.**
 **WHY:** re-pointing a berth is an installation act that will happen (a socket fails, a boat
 moves). A one-shot wizard means the second change is made in the database by hand.
@@ -778,7 +780,7 @@ three items are admin-gated) and the per-card figure count (I said 11; the card 
 
 | | Today | UI v2 target | Measured how |
 |---|---|---|---|
-| Nav items visible to a marina `monitor` | **7** | **4** (Marina, Alarms, Guard, Setup) | `Layout.tsx:40-57` — 7 unconditional; `system-health` and `settings` are `isAdmin`, `api-gateway` is `canApi` |
+| Nav items visible to a marina `monitor` | **7** | **4** (Marina, Water, Alarms, Guard) — *corrected 2026-10-15: Setup is NOT staff nav, because saving the wizard is `require_admin` and a menu item staff can open but never save is a false offer; the admin nav keeps what it has, plus Setup* | `Layout.tsx:40-57` — 7 unconditional; `system-health` and `settings` are `isAdmin`, `api-gateway` is `canApi` |
 | Routes defined | **16** | **+6** marina, admin routes untouched | `App.tsx`, `grep -c '<Route'` |
 | Pages | **12** | 12 kept for admin, **+1** marina root | `ls pages/` |
 | Numbers on one dashboard tile | **5** (temp °C, moisture %, heartbeat age, pending count, active count) | **2** on an L1 row (amps, litres/min) — *amps since 2026-10-12, decision 2* | `PedestalCard.tsx:93-135` |

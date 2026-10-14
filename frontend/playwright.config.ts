@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
+const E2E_PORT = 5199
+
 export default defineConfig({
   testDir: './e2e',
   // Specs beginning with `_` are MANUAL tools, not gate tests. `_screens.spec.ts`
@@ -30,7 +32,7 @@ export default defineConfig({
   ],
 
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL: `http://localhost:${E2E_PORT}`,
     headless: true,
     screenshot: 'only-on-failure',
     video: 'off',
@@ -38,10 +40,19 @@ export default defineConfig({
   },
 
   // Auto-start Vite dev server before tests, shut down after
+  //
+  // ISOLATED, since 2026-10-14. This used :5173 with reuseExistingServer, so any dev server on
+  // :5173 was taken as ours: another project's Vite was running there during a push, every
+  // marina spec ran against ITS login page, and the gate failed with "element not found" — a
+  // message that pointed at our code. Now: our own port, --strictPort (a foreign server on it is
+  // a hard error that names the port, not a silent reuse), never reused, and the /api proxy
+  // aimed at a closed port, so an unmocked call fails the way the specs were written for
+  // (nothing answers) instead of reaching whatever backend is on :8000 and logging the test out.
   webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:5173',
-    reuseExistingServer: true,
+    command: `npm run dev -- --port ${E2E_PORT} --strictPort`,
+    url: `http://localhost:${E2E_PORT}`,
+    reuseExistingServer: false,
+    env: { API_TARGET: 'http://127.0.0.1:9' },
     // 120 s, not 30 s. On the push gate Playwright runs immediately after the full
     // pytest suite, and Vite's cold start — dependency optimisation included — does not
     // finish in 30 s on a machine that has just been hammered. The result was

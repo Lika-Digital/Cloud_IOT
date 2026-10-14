@@ -1,5 +1,13 @@
 # Cloud IoT — DEB Package
 
+> **OBSOLETE — DO NOT INSTALL FROM THIS PACKAGE (recorded 2026-10-14).** `cloud-iot_1.0.0_amd64.deb`
+> was built on 2026-02-28. Its `backend/app/database.py` has no `import_all_models()` at all — it
+> calls `Base.metadata.create_all()` on whatever models happen to be imported by then — so an install
+> from it produces a cabinet with missing tables, which looks like a working install until a feature
+> touches one of them. Install a cabinet with the current installer for its OS
+> (`nuc_image/ubuntu-install-26.04.sh` or the 2.0 ISO's `install-cloud-iot.sh`) and update it with
+> `upgrade.sh`. This directory is kept for its history only.
+
 Single-command installation of the entire Cloud IoT marina pedestal system on Ubuntu 22.04+.
 
 ## What gets installed

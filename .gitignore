@@ -53,3 +53,18 @@ backend/static/qr/
 backend/backgrounds/
 backend/data/
 frontend/test-results/
+
+# Generated documents at the repo root are OUTPUTS of scripts/generate_*.py — the scripts are
+# the source and are committed; the PDF/DOCX they write are not. (Two older outputs are still
+# tracked from before this rule: Cloud_IOT_ERP_Integration_Guide_v3.pdf, docs/User Guide.docx.)
+/*.pdf
+/*.docx
+
+# .deb build output — DEB_Pack/README.md and build_deb.sh are source; the package tree under
+# opt/ and the built .deb are not. DEB_Pack v1.0.0 (2026-02-28) is OBSOLETE: never install from it.
+DEB_Pack/*.deb
+DEB_Pack/package/opt/
+
+# Test evidence goes into the report, not the repo. (Files committed here before this rule
+# remain tracked until someone decides to remove them.)
+tests/evidence/

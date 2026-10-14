@@ -46,8 +46,11 @@ def clean_tables():
 
 def _seed(db):
     """Seed a known mix of old/new rows. Returns (completed_sid, active_sid)."""
+    # A MEASURED session — its figure exists with a provenance, so its raw readings may go.
+    # (nalaz 9: one without a figure keeps them — test_tc_ret_09 below.)
     completed = Session(pedestal_id=1, socket_id=1, type="electricity",
-                        status="completed", started_at=OLD, ended_at=OLD)
+                        status="completed", started_at=OLD, ended_at=OLD,
+                        energy_kwh=1.0, consumption_source="register")
     active = Session(pedestal_id=1, socket_id=2, type="electricity",
                      status="active", started_at=OLD)
     db.add_all([completed, active])
@@ -149,3 +152,40 @@ def test_purge_noop_when_everything_recent(clean_tables):
 
     assert sum(counts.values()) == 0
     assert db.query(SensorReading).count() == 1
+
+
+def test_tc_ret_09_readings_of_an_unmeasured_session_are_kept(clean_tables):
+    """Nalaz 9 (2026-10-14): the purge was justified by "the totals are persisted on the session
+    row" — false for a session with NO figure, whose raw readings are the only record left.
+
+    Old readings of: a measured session -> PRUNED; a completed session with energy_kwh NULL and
+    source 'unknown' -> KEPT; one never stamped (source NULL, figure present) -> KEPT; a water
+    session with water_liters NULL -> KEPT. Failed on the code before: all four were pruned.
+    The emergency clear_telemetry_buffer applies the same protection.
+    """
+    db = clean_tables
+    measured = Session(pedestal_id=1, socket_id=1, type="electricity", status="completed",
+                       started_at=OLD, ended_at=OLD, energy_kwh=2.0, consumption_source="register")
+    unknown = Session(pedestal_id=1, socket_id=2, type="electricity", status="completed",
+                      started_at=OLD, ended_at=OLD, energy_kwh=None, consumption_source="unknown")
+    unstamped = Session(pedestal_id=1, socket_id=3, type="electricity", status="completed",
+                        started_at=OLD, ended_at=OLD, energy_kwh=4.0, consumption_source=None)
+    water = Session(pedestal_id=1, socket_id=1, type="water", status="completed",
+                    started_at=OLD, ended_at=OLD, water_liters=None, consumption_source="unknown")
+    db.add_all([measured, unknown, unstamped, water]); db.commit()
+    for s in (measured, unknown, unstamped, water):
+        db.refresh(s)
+        db.add(SensorReading(session_id=s.id, pedestal_id=1, socket_id=s.socket_id,
+                             type="total_liters" if s.type == "water" else "kwh_total",
+                             value=1.5, unit="L" if s.type == "water" else "kWh", timestamp=OLD))
+    db.commit()
+
+    with patch.object(retention_service, "SessionLocal", TestSession):
+        counts = retention_service.purge_old_data(retention_days=7)
+    db.expire_all()
+    assert counts["sensor_readings"] == 1
+    kept = {r.session_id for r in db.query(SensorReading).all()}
+    assert kept == {unknown.id, unstamped.id, water.id}, kept
+
+    assert retention_service.clear_telemetry_buffer(db) == 0
+    assert {r.session_id for r in db.query(SensorReading).all()} == kept

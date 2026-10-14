@@ -18,16 +18,31 @@ records are NEVER touched here:
 
     * sensor_readings tied to a still-open (pending/active) session are never
       pruned, so an in-progress session's data is safe across the cutoff.
+    * sensor_readings tied to a COMPLETED session that has NO FIGURE are never
+      pruned either (nalaz 9, 2026-10-14) — see below.
 
-Pruning raw sensor_readings is billing/analytics/history-safe because session
-energy_kwh / water_liters totals are persisted on the ``sessions`` row (and
-snapshotted onto the ``invoices`` row) at completion — every downstream
-consumer reads those persisted totals, not the raw readings.
+WHEN PRUNING IS SAFE, AND WHEN IT IS NOT (nalaz 9, 2026-10-14)
+This used to say pruning is safe "because session energy_kwh / water_liters totals are
+persisted on the sessions row ... every downstream consumer reads those persisted totals".
+For a session whose figure is NULL — consumption_source 'unknown' or never stamped, which on
+cabinet 1 was every standalone session before aa1f74f — that was false: there is no persisted
+total, and the raw readings (the firmware's own ``kwh_total`` / ``total_liters``) are the ONLY
+record of what was drawn. A false reason was justifying the deletion of the last evidence.
+
+Now: readings of a completed session are pruned only if the session HAS a figure with a
+provenance (``consumption_source`` 'register' or 'integrated_legacy' and the figure not NULL).
+Readings of a completed session without one are kept — they cost little (one row per telemetry
+event) and cannot be recovered once gone. Readings with no session are pruned as before.
+
+NOT undone by this: on cabinet 1 the readings of every unmeasured session older than 7 days
+were already deleted by the old rule. Nothing here brings them back.
+(The ``invoices`` snapshot the old text cited belongs to the legacy billing path; the cabinet
+does not bill — the ERP does.)
 """
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 
 from ..database import SessionLocal
 from ..models.sensor_reading import SensorReading
@@ -37,6 +52,20 @@ from ..models.meter_load_alarm import MeterLoadAlarm
 from ..models.active_alarm import ActiveAlarm
 
 logger = logging.getLogger(__name__)
+
+_HAS_PROVENANCE = ("register", "integrated_legacy")
+
+
+def _protected_session_ids(db):
+    """Subquery of sessions whose readings must survive pruning: still open, or completed
+    WITHOUT a figure that has a provenance (nalaz 9). Everything else may be pruned."""
+    return db.query(Session.id).filter(or_(
+        Session.status.in_(("pending", "active")),
+        Session.consumption_source.is_(None),
+        Session.consumption_source.notin_(_HAS_PROVENANCE),
+        and_(Session.type == "water", Session.water_liters.is_(None)),
+        and_(Session.type != "water", Session.energy_kwh.is_(None)),
+    ))
 
 RETENTION_DAYS = 7
 
@@ -57,21 +86,16 @@ def purge_old_data(retention_days: int = RETENTION_DAYS) -> dict:
     }
     db = SessionLocal()
     try:
-        # Guard: never prune readings that belong to a session still open
-        # (pending/active) — its totals are not finalised yet.
-        open_ids = [
-            row[0] for row in db.query(Session.id)
-            .filter(Session.status.in_(("pending", "active"))).all()
-        ]
-
-        sr_q = db.query(SensorReading).filter(SensorReading.timestamp < cutoff)
-        if open_ids:
-            # notin_() alone would skip NULL session_id rows (SQL NULL logic),
-            # so explicitly include unattached readings.
-            sr_q = sr_q.filter(or_(
-                SensorReading.session_id.is_(None),
-                SensorReading.session_id.notin_(open_ids),
-            ))
+        # Guard: never prune readings of a session still open (its figure is not final), nor of
+        # a completed session without a figure (they are its only record — nalaz 9).
+        protected = _protected_session_ids(db)
+        # notin_() alone would skip NULL session_id rows (SQL NULL logic), so explicitly
+        # include unattached readings.
+        sr_q = db.query(SensorReading).filter(
+            SensorReading.timestamp < cutoff,
+            or_(SensorReading.session_id.is_(None),
+                SensorReading.session_id.notin_(protected.scalar_subquery())),
+        )
         counts["sensor_readings"] = sr_q.delete(synchronize_session=False)
 
         counts["auto_activation_log"] = (
@@ -121,8 +145,8 @@ def clear_telemetry_buffer(db=None) -> int:
     """Emergency on-demand clear of the telemetry buffer (sensor_readings).
 
     Deletes ALL sensor_readings regardless of age, EXCEPT rows belonging to a
-    still-open (pending/active) session (so an in-progress session's billing
-    total is preserved). Returns rows deleted. Used by the admin
+    still-open (pending/active) session, or to a completed session with no figure — the same
+    protection as purge_old_data (nalaz 9). Returns rows deleted. Used by the admin
     ``POST /api/system/cache/clear`` action to free disk space immediately.
 
     Pass ``db`` to reuse a request-scoped session (testable); otherwise opens
@@ -132,16 +156,11 @@ def clear_telemetry_buffer(db=None) -> int:
     if own:
         db = SessionLocal()
     try:
-        open_ids = [
-            row[0] for row in db.query(Session.id)
-            .filter(Session.status.in_(("pending", "active"))).all()
-        ]
-        q = db.query(SensorReading)
-        if open_ids:
-            q = q.filter(or_(
-                SensorReading.session_id.is_(None),
-                SensorReading.session_id.notin_(open_ids),
-            ))
+        protected = _protected_session_ids(db)
+        q = db.query(SensorReading).filter(or_(
+            SensorReading.session_id.is_(None),
+            SensorReading.session_id.notin_(protected.scalar_subquery()),
+        ))
         deleted = q.delete(synchronize_session=False)
         db.commit()
         logger.info("Telemetry buffer cleared: %d sensor_readings deleted", deleted)

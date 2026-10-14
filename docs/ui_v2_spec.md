@@ -841,7 +841,7 @@ Found during the foundation work. **Yours to prioritise; none of it is in the bu
 | D16 | NOT BUILT — only skipped | `test.skip(true, …D16…)` at line 23 of four specs |
 | D17 | NOT BUILT — not reproduced off the cabinet | §13 check 17 measures it |
 | D18 | NOT BUILT — cabinet configuration | `external_api_admin.py` default `[]` |
-| D19 | NOT BUILT | `SocketCard.tsx:49`, `mqtt_handlers.py:2094` |
+| D19 | **BUILT+PROVEN 2026-10-14** | The only live display was `PedestalView.tsx:508` ("Power … W"); removed — the meter's `current_amps` is shown in the same block. `SocketCard.tsx` and `ActiveSessions.tsx` also rendered it but were imported nowhere: deleted. `test_ui_no_powerkw_watts.py` TC-UIR-04: no `.tsx` reads `.watts`; failed on the code before with all three. The backend still computes and stores `power_watts` (`mqtt_handlers.py`) — nothing renders it |
 
 | | Item | Why deferred |
 |---|---|---|

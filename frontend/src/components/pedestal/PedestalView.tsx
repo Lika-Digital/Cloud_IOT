@@ -505,7 +505,8 @@ function SocketDetailPanel({ zoneId, pedestalId, onClose }: { zoneId: ZoneId; pe
         <div className="bg-green-900/20 border border-green-700/40 rounded-lg p-4 space-y-3">
           {!isWater && liveData && (
             <>
-              <LiveMetric label="Power" value={`${liveData.watts.toFixed(0)} W`} big />
+              {/* D19 (2026-10-14): no "Power … W" here — it was powerKw × 1000 from opta/events,
+                  measured up to 100× too high. Current in amps from the meter is below. */}
               <LiveMetric label="Total Energy" value={`${liveData.kwh_total.toFixed(4)} kWh`} />
             </>
           )}

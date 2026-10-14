@@ -49,13 +49,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/pedestals", tags=["usage-history"])
 
 # _REPORTS_LOCKED — 2026-10-12, owner's decision: the monthly report FILES are admin only, and
-# TEMPORARILY so. They print "customer #<id>", and marina staff must not see customer data.
+# (2026-10-12: "temporarily"; 2026-10-14: permanently — see below.) They print "customer #<id>".
 # Staff do have a legitimate need for consumption per outlet, so the owner considered redacting
 # the identifier instead — and chose to lock: redacting generated text is easier to break than a
 # lock, and the reports are partial and cached anyway. Whether staff get a version WITHOUT the
 # customer identifier is decided when the five legacy .txt reports are labelled (plan item 4).
-# Do not invent redaction over the .txt files before that decision. The usage HISTORY above is
-# not affected: staff get it, without identity (part B).
+# DECIDED 2026-10-14 (owner): staff get a SEPARATE file, generated as its own file with no
+# customer column at all — not redacted from the admin file. The admin file stays locked. Two
+# files with one truth each, never one file in two truths. Routes: /usage/staff-reports below.
 _MONTH_RE = re.compile(r"^(\d{4})-(\d{2})$")
 
 
@@ -102,7 +103,7 @@ def get_usage_history(
 @router.get("/{pedestal_id}/usage/reports")
 def list_usage_reports(
     pedestal_id: int,
-    _: User = Depends(require_admin),  # was require_any_role — TEMPORARY, see _REPORTS_LOCKED
+    _: User = Depends(require_admin),  # admin file stays locked (owner, 2026-10-14); staff: /usage/staff-reports
 ):
     """List available monthly report files for this pedestal (newest first). Admin only."""
     return svc.list_reports(pedestal_id)
@@ -113,7 +114,7 @@ def download_usage_report(
     pedestal_id: int,
     month: str,
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_admin),  # was require_any_role — TEMPORARY, see _REPORTS_LOCKED
+    _: User = Depends(require_admin),  # admin file stays locked (owner, 2026-10-14); staff: /usage/staff-reports
 ):
     """Download the plain-text monthly report. Lazily generated if missing. Admin only."""
     year, mon = _parse_month(month)
@@ -130,6 +131,39 @@ def download_usage_report(
         content=text,
         media_type="text/plain; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{pedestal_id}/usage/staff-reports")
+def list_staff_reports(
+    pedestal_id: int,
+    _: User = Depends(require_any_role),
+):
+    """List the STAFF report files (no customer column). Every operator."""
+    return svc.list_reports(pedestal_id, svc.STAFF)
+
+
+@router.get("/{pedestal_id}/usage/staff-reports/{month}")
+def download_staff_report(
+    pedestal_id: int,
+    month: str,
+    db: DBSession = Depends(get_db),
+    _: User = Depends(require_any_role),
+):
+    """Download the STAFF monthly report — generated as its own file, never redacted from the
+    admin one, so there is no customer column to leak. Lazily generated if missing."""
+    year, mon = _parse_month(month)
+    path = svc.get_or_generate(db, pedestal_id, year, mon, svc.STAFF)
+    if path is None:
+        raise HTTPException(
+            status_code=507,
+            detail="Storage nearly full — report not generated. Free disk space and retry.",
+        )
+    return Response(
+        content=path.read_text(encoding="utf-8"),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition":
+                 f'attachment; filename="{svc.report_filename(pedestal_id, year, mon, svc.STAFF)}"'},
     )
 
 

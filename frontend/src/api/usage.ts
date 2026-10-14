@@ -52,15 +52,17 @@ export const getUsageHistory = (
 export const listUsageReports = (pedestalId: number) =>
   api.get<ReportMeta[]>(`/pedestals/${pedestalId}/usage/reports`).then((r) => r.data)
 
-/** Download the plain-text monthly report and trigger a browser save. */
-export const downloadUsageReport = async (pedestalId: number, month: string) => {
-  const r = await api.get(`/pedestals/${pedestalId}/usage/reports/${month}`, {
-    responseType: 'blob',
-  })
+/** Download the plain-text monthly report and trigger a browser save.
+ *  Admin gets the admin file (customer #id); everyone else the STAFF file, which is generated
+ *  on its own with no customer column — not a redacted copy (owner, 2026-10-14). */
+export const downloadUsageReport = async (pedestalId: number, month: string, isAdmin: boolean) => {
+  const r = isAdmin
+    ? await api.get(`/pedestals/${pedestalId}/usage/reports/${month}`, { responseType: 'blob' })
+    : await api.get(`/pedestals/${pedestalId}/usage/staff-reports/${month}`, { responseType: 'blob' })
   const url = URL.createObjectURL(r.data as Blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `pedestal-${pedestalId}_${month}.txt`
+  a.download = `pedestal-${pedestalId}_${month}${isAdmin ? '' : '.staff'}.txt`
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)

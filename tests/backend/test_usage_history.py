@@ -56,15 +56,22 @@ def _isolate(monkeypatch):
 
 
 def _seed_session(socket_id, resource, started, ended, *, kwh=None, liters=None,
-                  customer_id=None, nfc_user_id=None, status="completed") -> int:
+                  customer_id=None, nfc_user_id=None, status="completed",
+                  source=None, reg_start=None, reg_end=None) -> int:
+    """`source` is the session's consumption_source. Without it the report — correctly — calls
+    the session "not measured" (2026-10-14): a figure without provenance is not reported."""
     from app.models.session import Session as SModel
     db = _S()
     try:
         s = SModel(
             pedestal_id=PID, socket_id=socket_id, type=resource, status=status,
             started_at=started, ended_at=ended, energy_kwh=kwh, water_liters=liters,
-            customer_id=customer_id, nfc_user_id=nfc_user_id,
+            customer_id=customer_id, nfc_user_id=nfc_user_id, consumption_source=source,
         )
+        if resource == "water":
+            s.meter_water_start_l, s.meter_water_end_l = reg_start, reg_end
+        else:
+            s.meter_energy_start_kwh, s.meter_energy_end_kwh = reg_start, reg_end
         db.add(s); db.commit(); db.refresh(s)
         return s.id
     finally:
@@ -94,9 +101,12 @@ def _monitor_headers() -> dict:
 
 def test_report_contains_sections_amounts_and_totals():
     from app.services import usage_report_service as svc
-    _seed_session(1, "electricity", datetime(2026, 5, 3, 14, 0), datetime(2026, 5, 3, 16, 0), kwh=3.42)
-    _seed_session(1, "electricity", datetime(2026, 5, 8, 9, 0), datetime(2026, 5, 8, 11, 0), kwh=1.88)
-    _seed_session(1, "water", datetime(2026, 5, 4, 10, 0), datetime(2026, 5, 4, 10, 30), liters=120.0)
+    _seed_session(1, "electricity", datetime(2026, 5, 3, 14, 0), datetime(2026, 5, 3, 16, 0), kwh=3.42,
+                  source="register", reg_start=100.0, reg_end=103.42)
+    _seed_session(1, "electricity", datetime(2026, 5, 8, 9, 0), datetime(2026, 5, 8, 11, 0), kwh=1.88,
+                  source="register", reg_start=103.42, reg_end=105.30)
+    _seed_session(1, "water", datetime(2026, 5, 4, 10, 0), datetime(2026, 5, 4, 10, 30), liters=120.0,
+                  source="register", reg_start=1000.0, reg_end=1120.0)
 
     db = _S()
     try:
@@ -108,9 +118,12 @@ def test_report_contains_sections_amounts_and_totals():
     assert "Valve V1 (water)" in text
     assert "3.420 kWh" in text and "1.880 kWh" in text
     assert "120.0 L" in text
-    # Subtotal + grand total reflect the seeded usage.
-    assert "5.300 kWh" in text          # 3.42 + 1.88
-    assert "electricity 5.300 kWh across 2 session(s); water 120.0 L across 1 session(s)" in text
+    # Subtotal + grand total reflect the seeded usage — all measured, so a total IS given.
+    assert "Subtotal: 2 session(s), 5.300 kWh" in text          # 3.42 + 1.88
+    assert "TOTAL electricity: 2 session(s), 5.300 kWh" in text
+    assert "TOTAL water: 1 session(s), 120.0 L" in text
+    # Each figure carries its provenance and the two readings it derives from.
+    assert "[meter reading]  register 100.000 kWh -> 103.420 kWh" in text
 
 
 def test_report_blank_customer_when_none():
@@ -170,7 +183,8 @@ def test_customer_and_nfc_resolved():
         udb.close()
 
     _seed_session(3, "electricity", datetime(2026, 5, 9, 8, 0), datetime(2026, 5, 9, 9, 0),
-                  kwh=4.0, customer_id=cid, nfc_user_id="ERP-777")
+                  kwh=4.0, customer_id=cid, nfc_user_id="ERP-777", source="register",
+                  reg_start=10.0, reg_end=14.0)
 
     db = _S()
     try:
@@ -223,7 +237,8 @@ def test_history_endpoint_bad_month(client, auth_headers):
 
 
 def test_report_download_lazy_generate_and_list(client, auth_headers):
-    _seed_session(1, "electricity", datetime(2026, 5, 3, 14, 0), datetime(2026, 5, 3, 16, 0), kwh=3.42)
+    _seed_session(1, "electricity", datetime(2026, 5, 3, 14, 0), datetime(2026, 5, 3, 16, 0), kwh=3.42,
+                  source="register", reg_start=1.0, reg_end=4.42)
     # No file yet — download lazily generates it.
     r = client.get(f"/api/pedestals/{PID}/usage/reports/2026-05", headers=auth_headers)
     assert r.status_code == 200, r.text

@@ -837,7 +837,7 @@ Found during the foundation work. **Yours to prioritise; none of it is in the bu
 | | State | Evidence |
 |---|---|---|
 | D14 | **BUILT+PROVEN 2026-10-14** | every `/api/admin/ext-api` route is `require_admin`; `require_api_config` and `_API_CONFIG_ROLES` deleted; route `adminOnly`, nav item in the admin group. `test_roles.py` TC-ROLE-06b reads the routes from the app (7) and failed on the code before (`monitor_control_api got 200`). Checked first: the ERP service account (`api_client`) never could reach these — it is not an operator role. `monitor_control_api` now acts as `monitor_control`; kept for existing accounts, no longer offered for new ones. **Cabinet fact not checked:** whether any account there holds `monitor_control_api` and used the page |
-| D15 | NOT BUILT — allowlisted and guarded | `test_fe_be_contract.py:112-120`; TC-FEBE-01/05/06 |
+| D15 | **FIXED 2026-10-14 — by removal** | The call is gone, not built: a per-pedestal detections route would have had nothing real to return (synthetic mode plays a demo video; person detection is the guard's). `CameraModal.tsx` plays the video with no overlay and says no detection runs; `getCameraDetections` and its types deleted; the `KNOWN_DEAD_CALLS` entry deleted, so the allowlist is empty and TC-FEBE-01 now fails on ANY dead call |
 | D16 | NOT BUILT — only skipped | `test.skip(true, …D16…)` at line 23 of four specs |
 | D17 | NOT BUILT — not reproduced off the cabinet | §13 check 17 measures it |
 | D18 | NOT BUILT — cabinet configuration | `external_api_admin.py` default `[]` |

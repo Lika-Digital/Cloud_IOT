@@ -151,8 +151,6 @@ export const resetInitialization = (pedestalId: number) =>
   api.post<{ pedestal_id: number; initialized: boolean }>(`/pedestals/${pedestalId}/diagnostics/reset`).then((r) => r.data)
 
 // Camera
-export const getCameraDetections = (pedestalId: number) =>
-  api.get<CameraDetectionResponse>(`/camera/${pedestalId}/detections`).then((r) => r.data)
 export const getCameraStreamUrl = (pedestalId: number) => `/api/camera/${pedestalId}/stream`
 
 // Predictions
@@ -194,26 +192,6 @@ export interface DiagnosticsResult {
   all_ok: boolean
   initialized: boolean
   error: string | null
-}
-
-export interface DetectionBox {
-  label: string
-  confidence: number
-  x1: number
-  y1: number
-  x2: number
-  y2: number
-}
-
-export interface DetectionFrame {
-  time_s: number
-  detections: DetectionBox[]
-}
-
-export interface CameraDetectionResponse {
-  pedestal_id: number
-  mode: string
-  frames: DetectionFrame[]
 }
 
 export interface PredictionResult {

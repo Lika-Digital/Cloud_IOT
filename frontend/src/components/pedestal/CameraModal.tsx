@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { getCameraDetections } from '../../api'
 import { getPedestalConfig } from '../../api/pedestalConfig'
 import { useAuthStore } from '../../store/authStore'
-import type { DetectionFrame } from '../../api'
 
 interface CameraModalProps {
   pedestalId: number
@@ -12,14 +10,6 @@ interface CameraModalProps {
 }
 
 export default function CameraModal({ pedestalId, dataMode, cameraIp, onClose }: CameraModalProps) {
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const animRef = useRef<number>(0)
-  const [frames, setFrames] = useState<DetectionFrame[]>([])
-  const [loadingDetections, setLoadingDetections] = useState(true)
-  const [detectionError, setDetectionError] = useState(false)
-  const [currentDetections, setCurrentDetections] = useState<DetectionFrame | null>(null)
-
   // Live stream state
   const [streamUrl, setStreamUrl] = useState<string | null>(null)
   const [streamReachable, setStreamReachable] = useState(false)
@@ -73,83 +63,6 @@ export default function CameraModal({ pedestalId, dataMode, cameraIp, onClose }:
     }
   }, [hasLiveStream, pedestalId, token])
 
-  // Fetch YOLO detections for synthetic mode (only when no live stream)
-  useEffect(() => {
-    if (hasLiveStream || configLoading) return
-    if (dataMode !== 'synthetic') {
-      setLoadingDetections(false)
-      return
-    }
-    getCameraDetections(pedestalId)
-      .then((data) => {
-        setFrames(data.frames)
-        setLoadingDetections(false)
-      })
-      .catch(() => {
-        setDetectionError(true)
-        setLoadingDetections(false)
-      })
-  }, [pedestalId, dataMode, hasLiveStream, configLoading])
-
-  // Animation loop — read video time, find matching detections, draw on canvas
-  useEffect(() => {
-    if (hasLiveStream || dataMode !== 'synthetic' || frames.length === 0) return
-    const video = videoRef.current
-    const canvas = canvasRef.current
-    if (!video || !canvas) return
-
-    const ctx = canvas.getContext('2d')!
-
-    function draw() {
-      if (!video || !canvas || !ctx) return
-
-      if (canvas.width !== video.clientWidth || canvas.height !== video.clientHeight) {
-        canvas.width = video.clientWidth
-        canvas.height = video.clientHeight
-      }
-
-      const currentTime = video.currentTime
-      const frame = frames.reduce((prev, curr) =>
-        Math.abs(curr.time_s - currentTime) < Math.abs(prev.time_s - currentTime) ? curr : prev,
-        frames[0]
-      )
-
-      setCurrentDetections(frame)
-      ctx.clearRect(0, 0, canvas.width, canvas.height)
-
-      const videoW = video.videoWidth || 1280
-      const videoH = video.videoHeight || 720
-      const scaleX = canvas.width / videoW
-      const scaleY = canvas.height / videoH
-
-      for (const det of frame.detections) {
-        const x = det.x1 * scaleX
-        const y = det.y1 * scaleY
-        const w = (det.x2 - det.x1) * scaleX
-        const h = (det.y2 - det.y1) * scaleY
-
-        ctx.strokeStyle = '#22c55e'
-        ctx.lineWidth = 2
-        ctx.strokeRect(x, y, w, h)
-
-        const label = `${det.label} ${(det.confidence * 100).toFixed(0)}%`
-        ctx.font = 'bold 13px monospace'
-        const textW = ctx.measureText(label).width
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.65)'
-        ctx.fillRect(x, y - 20, textW + 8, 20)
-        ctx.fillStyle = '#22c55e'
-        ctx.fillText(label, x + 4, y - 5)
-      }
-
-      animRef.current = requestAnimationFrame(draw)
-    }
-
-    animRef.current = requestAnimationFrame(draw)
-    return () => cancelAnimationFrame(animRef.current)
-  }, [frames, dataMode, hasLiveStream])
-
-  const shipDetected = (currentDetections?.detections.length ?? 0) > 0
-
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
@@ -171,7 +84,7 @@ export default function CameraModal({ pedestalId, dataMode, cameraIp, onClose }:
             ) : !configLoading && (
               <>
                 {dataMode === 'synthetic' && (
-                  <span className="text-xs bg-blue-900/50 text-blue-300 px-2 py-0.5 rounded-full">Synthetic · YOLO overlay</span>
+                  <span className="text-xs bg-blue-900/50 text-blue-300 px-2 py-0.5 rounded-full">Synthetic · demo video</span>
                 )}
                 {dataMode === 'real' && cameraIp && (
                   <span className="text-xs bg-amber-900/50 text-amber-300 px-2 py-0.5 rounded-full">
@@ -185,12 +98,6 @@ export default function CameraModal({ pedestalId, dataMode, cameraIp, onClose }:
             )}
           </div>
           <div className="flex items-center gap-3">
-            {!hasLiveStream && shipDetected && (
-              <span className="flex items-center gap-1.5 text-sm text-green-400 font-medium">
-                <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-                Ship detected
-              </span>
-            )}
             <button onClick={onClose} className="text-gray-400 hover:text-gray-100 text-xl leading-none">✕</button>
           </div>
         </div>
@@ -214,31 +121,13 @@ export default function CameraModal({ pedestalId, dataMode, cameraIp, onClose }:
               </div>
             )
           ) : dataMode === 'synthetic' ? (
-            <>
-              <video
-                ref={videoRef}
-                src="/Video.mp4"
-                autoPlay
-                muted
-                loop
-                className="w-full h-full object-contain"
-                onLoadedMetadata={() => {}}
-              />
-              <canvas
-                ref={canvasRef}
-                className="absolute inset-0 w-full h-full pointer-events-none"
-              />
-              {loadingDetections && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/50">
-                  <p className="text-gray-300 text-sm">Loading YOLO detections…</p>
-                </div>
-              )}
-              {detectionError && (
-                <div className="absolute top-2 left-2 bg-amber-900/70 text-amber-300 text-xs px-3 py-1 rounded-lg">
-                  Detections unavailable
-                </div>
-              )}
-            </>
+            <video
+              src="/Video.mp4"
+              autoPlay
+              muted
+              loop
+              className="w-full h-full object-contain"
+            />
           ) : cameraIp ? (
             <img
               src={`/api/camera/${pedestalId}/stream`}
@@ -261,21 +150,10 @@ export default function CameraModal({ pedestalId, dataMode, cameraIp, onClose }:
           {hasLiveStream ? (
             <span>Live snapshot · refreshes every 2s</span>
           ) : dataMode === 'synthetic' ? (
-            <>
-              <span>YOLOv8n · COCO class: boat</span>
-              <span>·</span>
-              <span>Confidence threshold: 70%</span>
-              {currentDetections && (
-                <>
-                  <span>·</span>
-                  <span>t={currentDetections.time_s.toFixed(1)}s</span>
-                  <span>·</span>
-                  <span className={shipDetected ? 'text-green-400' : 'text-gray-500'}>
-                    {currentDetections.detections.length} detection(s)
-                  </span>
-                </>
-              )}
-            </>
+            // D15 (2026-10-14): this used to overlay boxes from GET /api/camera/{id}/detections,
+            // a route that never existed — it sat on "Loading YOLO detections…" for ever. No
+            // detection runs on this demo video; person detection is the guard's.
+            <span>Demo video · no detection runs in synthetic mode</span>
           ) : (
             <span>Real-time MJPEG stream from IP camera</span>
           )}

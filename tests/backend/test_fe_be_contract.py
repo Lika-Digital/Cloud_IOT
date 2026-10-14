@@ -109,14 +109,6 @@ def _frontend_calls() -> list[tuple[str, str, Path, int]]:
 #
 # The reason is a sentence, not a ticket number, so a reader does not have to look it up.
 KNOWN_DEAD_CALLS: dict[tuple[str, str], str] = {
-    ("GET", "/api/camera/{}/detections"): (
-        "Pre-existing, found by the first run of this test on 2026-10-02. The backend serves "
-        "/api/camera/{id}/snapshot and /stream, and guard serves /api/guard/detections, but "
-        "there has never been a per-pedestal detections route. CameraModal.tsx calls it in "
-        "synthetic mode and sits on 'Loading YOLO detections...' for ever. Admin profile "
-        "only, not used by the marina profile, so it is DEFERRED (D15) rather than fixed "
-        "inside the UI v2 work."
-    ),
 }
 
 

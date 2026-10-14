@@ -296,3 +296,36 @@ test('TC-UIR-08 no page-level horizontal scroll at 360 px', async ({ page }) => 
     document.documentElement.scrollWidth - document.documentElement.clientWidth)
   expect(overflow, `page scrolls ${overflow}px sideways at 360px wide`).toBeLessThanOrEqual(1)
 })
+
+// ═══ TC-UIN-01 — block 4, nav: Analytics is L3 ═══════════════════════════════
+
+test('TC-UIN-01 Analytics is not in the nav; berth detail opens it for its pedestal', async ({ page }) => {
+  // Block 4, nav (ui_v2_audit §7 #9 — NOT the owner's finding 9, which is retention_service).
+  // Analytics was top-level. It is reached from a berth now, with that berth's
+  // pedestal preselected — a nav item nobody needs on the pier is one more thing to read past.
+  await mockCore(page, healthyCore())
+  const berth = healthyCore().pedestals[0].berths[0]
+  await page.route('**/api/marina/berths/101', (route) => route.fulfill({
+    json: {
+      ...berth,
+      pedestal_id: 7,
+      cabinet_id: 'MAR_KRK_ORM_01',
+      outlet_spec: { outlet: 'Q1', rated_amps: 32, phases: 3, meter_type: null },
+      consumption: { kwh: 12.5, source: 'register', note: '' },
+      reference_image: null,
+      guard: { state: 'on', sentence: 'Guard on', scope: 'pedestal' },
+      guard_scope_note: 'One camera per pedestal.',
+    },
+  }))
+  await gotoMarina(page)
+  await expect(page.getByTestId('marina-dashboard')).toBeVisible()
+  // The accessible name is "📊 Analytics" — an anchored /^Analytics/ never matched and passed
+  // on the old code; so first prove the nav is there at all.
+  await expect(page.getByRole('link', { name: /History/ }).first()).toBeVisible()
+  await expect(page.getByRole('link', { name: /Analytics/ })).toHaveCount(0)
+
+  await page.goto('/marina/berth/101')
+  await expect(page.getByTestId('berth-detail')).toBeVisible()
+  const link = page.getByRole('link', { name: /Pedestal consumption history/ })
+  await expect(link).toHaveAttribute('href', '/analytics?pedestal=7')
+})

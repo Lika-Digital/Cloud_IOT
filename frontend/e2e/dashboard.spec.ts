@@ -66,7 +66,7 @@ test.describe('Navigation — admin role', () => {
 
   test('sidebar shows all admin nav items', async ({ page }) => {
     await expect(page.getByRole('link', { name: /Dashboard/ })).toBeVisible()
-    await expect(page.getByRole('link', { name: /Analytics/ })).toBeVisible()
+    await expect(page.getByRole('link', { name: /Analytics/ })).toHaveCount(0)   // block 4, nav: L3
     await expect(page.getByRole('link', { name: /History/ })).toBeVisible()
     await expect(page.getByRole('link', { name: /Billing/ })).toBeVisible()
     await expect(page.getByRole('link', { name: /Customers/ })).toBeVisible()
@@ -77,11 +77,6 @@ test.describe('Navigation — admin role', () => {
 
   test('sidebar shows IoT Dashboard label', async ({ page }) => {
     await expect(page.getByText('IoT Dashboard')).toBeVisible()
-  })
-
-  test('navigates to Analytics page', async ({ page }) => {
-    await page.getByRole('link', { name: /Analytics/ }).click()
-    await expect(page).toHaveURL(/\/analytics/)
   })
 
   test('navigates to System Health page', async ({ page }) => {
@@ -110,7 +105,7 @@ test.describe('Navigation — monitor role', () => {
 
   test('sidebar shows read-only nav items for monitor role', async ({ page }) => {
     await expect(page.getByRole('link', { name: /Dashboard/ })).toBeVisible()
-    await expect(page.getByRole('link', { name: /Analytics/ })).toBeVisible()
+    await expect(page.getByRole('link', { name: /Analytics/ })).toHaveCount(0)   // block 4, nav: L3
     await expect(page.getByRole('link', { name: /History/ })).toBeVisible()
   })
 })

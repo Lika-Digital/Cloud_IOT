@@ -34,12 +34,13 @@ export default function Layout() {
   }, [isAdmin])
 
   type NavItem = { to: string; label: string; icon: string; badge: number; hwAlarm?: 'none' | 'warning' | 'critical' | 'auto_stop' }
-  // v3.34 — Dashboard/Analytics/History/Berths are shared by all operators; the admin sections
+  // Block 4, nav (2026-10-14): Analytics is not in the nav — it is L3, opened from berth
+  // detail ("Pedestal consumption history") with that pedestal preselected; /analytics still works.
+  // v3.34 — Dashboard/History/Berths are shared by all operators; the admin sections
   // are gated by isAdmin. (2026-10-12: Billing, Customers, Contracts moved into the admin block.)
   const NAV_ITEMS: NavItem[] = [
     { to: '/marina', label: 'Marina', icon: '⚓', badge: 0 },
     { to: '/dashboard', label: 'Dashboard', icon: '⚡', badge: 0 },
-    { to: '/analytics', label: 'Analytics', icon: '📊', badge: 0 },
     { to: '/history', label: 'History', icon: '📋', badge: 0 },
     { to: '/berths', label: 'Berth Occupancy', icon: '⚓', badge: 0 },
     ...(isAdmin ? [

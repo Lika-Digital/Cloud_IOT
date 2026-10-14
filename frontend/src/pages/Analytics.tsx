@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { getDailyConsumption, getSessionSummary, getConsumptionBySocket, getConsumptionByPedestal, getPedestals } from '../api'
 import type { DailyConsumption, SessionSummary, PedestalConsumption } from '../api'
 import type { Pedestal } from '../store'
@@ -19,7 +20,11 @@ interface SocketBreakdownRow {
 
 export default function Analytics() {
   const [pedestals, setPedestals]       = useState<Pedestal[]>([])
-  const [selectedId, setSelectedId]     = useState<number | undefined>(undefined)
+  // ?pedestal=ID — set when opened from a berth (block 4, nav: Analytics is reached from there).
+  const [params]                        = useSearchParams()
+  const fromBerth                       = Number(params.get('pedestal'))
+  const [selectedId, setSelectedId]     = useState<number | undefined>(
+    Number.isInteger(fromBerth) && fromBerth > 0 ? fromBerth : undefined)
   const [dailyData, setDailyData]       = useState<DailyConsumption[]>([])
   const [summary, setSummary]           = useState<SessionSummary | null>(null)
   const [socketData, setSocketData]     = useState<SocketBreakdownRow[]>([])

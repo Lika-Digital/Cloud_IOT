@@ -163,6 +163,13 @@ export default function BerthDetail() {
           !== sourceLabel(c.source).replace(/[.\s]/g, '').toLowerCase() && (
           <p className="text-xs text-gray-500 mt-1">{c.note}</p>
         )}
+        {/* Analytics is L3 (block 4, nav): reached from here, not from the nav. */}
+        <Link
+          to={`/analytics?pedestal=${d.pedestal_id}`}
+          className="text-xs text-blue-300 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400"
+        >
+          Pedestal consumption history ›
+        </Link>
       </Section>
 
       {/* ── Vessel ─────────────────────────────────────────────────────────── */}

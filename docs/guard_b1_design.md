@@ -62,6 +62,14 @@ for the component that runs a large C++ library and talks to the camera. Recordi
 > suffices). The owner first ruled the filter out as a new network mechanism, then took it
 > back on 2026-10-13 with two conditions: the measurement above, and a §13 check that tells a
 > blocked connection from a dead device (§13.6c, F.3).
+>
+> **What actually holds "no phoning home":** the kernel. `IPAddressDeny=any` plus the allow
+> list is enforced by systemd's cgroup BPF filter on every socket the worker and its children
+> (ffmpeg, OpenVINO) open — a destination outside the list never leaves the box, whatever a
+> library decides to do. `OPENVINO_TELEMETRY_OPT_OUT=1` is a request that OpenVINO honours by
+> its own choice, in this version; it stays as a courtesy and to keep failed telemetry attempts
+> out of the journal, but nothing depends on it. If the filter is not in force (F.2 shows an
+> empty allow list), there is no egress protection — the opt-out does not stand in for it.
 
 ```ini
 [Unit]

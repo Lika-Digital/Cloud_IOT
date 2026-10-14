@@ -55,6 +55,7 @@ IOSchedulingClass=idle
 # timeout); §13 says how to tell the two apart before anyone goes looking for a fault.
 IPAddressDeny=any
 IPAddressAllow=localhost 172.18.0.0/16 192.168.1.0/24
+# A request, not a barrier: OpenVINO honours it by choice. The two lines above are the barrier.
 Environment=OPENVINO_TELEMETRY_OPT_OUT=1
 
 # Filesystem: writes exactly one place.

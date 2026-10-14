@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { getBerthDetail, type BerthDetail as BerthDetailData } from '../../api/marina'
 import { Status } from '../../components/marina/Status'
 import { FacilityLine } from '../../components/marina/FacilityLine'
+import { PhaseBlock } from '../../components/marina/PhaseBlock'
 
 /**
  * L2 — one berth, with the detail L1 deliberately leaves out.
@@ -136,6 +137,7 @@ export default function BerthDetail() {
               : 'The pedestal is switching this itself'
           }
         />
+        <PhaseBlock phases={d.power.phase_amps} />
       </Section>
 
       {/* ── This month ─────────────────────────────────────────────────────── */}

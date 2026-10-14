@@ -171,7 +171,18 @@ export interface ConsumptionSummary {
   note: string
 }
 
+/** Berth detail's power block adds the per-phase currents of a three-phase socket (§5.3). */
+export interface BerthDetailPower extends PowerFacility {
+  /**
+   * Phase 1, 2, 3 in amps — or null, and null makes <PhaseBlock> ABSENT: the socket is
+   * single-phase, no session is running, or the telemetry is older than the outlet window.
+   * A phase the cabinet did not send is null inside the array, never 0.
+   */
+  phase_amps: [number | null, number | null, number | null] | null
+}
+
 export interface BerthDetail extends Berth {
+  power: BerthDetailPower
   pedestal_id: number
   cabinet_id: string | null
   outlet_spec: OutletSpec

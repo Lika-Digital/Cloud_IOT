@@ -53,7 +53,9 @@ def parse_interface(name: str) -> dict[str, str]:
     rather than the truth.
     """
     src = io.open(TS_FILE, encoding="utf-8").read()
-    m = re.search(r"\bexport\s+interface\s+" + re.escape(name) + r"[^{]*\{", src)
+    # \b after the name: `BerthDetail` must not match `BerthDetailPower` (it did; TC-SHAPE-03
+    # caught it as a 1-field parse, 2026-10-15).
+    m = re.search(r"\bexport\s+interface\s+" + re.escape(name) + r"\b[^{]*\{", src)
     if not m:
         raise AssertionError(
             f"`export interface {name}` not found in {TS_FILE.name}. Renamed or moved — "
@@ -261,7 +263,8 @@ def test_tc_shape_02_berth_detail_has_every_field(client, auth_headers, shape_fi
             + "\n".join(f"  {f}: {declared[f]}" for f in missing)
         )
 
-    for iface, key in (("OutletSpec", "outlet_spec"), ("ConsumptionSummary", "consumption")):
+    for iface, key in (("OutletSpec", "outlet_spec"), ("ConsumptionSummary", "consumption"),
+                       ("BerthDetailPower", "power")):
         declared = parse_interface(iface)
         missing = [f for f in declared if f not in body[key]]
         assert not missing, f"{key} is missing {missing} (TS interface {iface})"

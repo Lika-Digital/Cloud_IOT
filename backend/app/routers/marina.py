@@ -500,6 +500,7 @@ def marina_berth_detail(berth_id: int,
         "phases": getattr(sc, "phases", None),
         "meter_type": getattr(sc, "meter_type", None),
     }
+    payload["power"]["phase_amps"] = _phase_amps(sc, running=bool(payload["power"]["on"]))
     payload["consumption"] = _consumption_summary(db, pid, socket_id)
     payload["reference_image"] = getattr(berth, "reference_image", None)
     payload["cabinet_id"] = cfg.opta_client_id
@@ -511,6 +512,25 @@ def marina_berth_detail(berth_id: int,
         "Guard covers the whole pedestal, so these events may come from any berth it serves."
     )
     return payload
+
+
+def _phase_amps(sc, *, running: bool) -> Optional[list]:
+    """Per-phase current for <PhaseBlock> (§5.3), or None — and None makes the block ABSENT.
+
+    Present only when the cabinet actually sent per-phase values (§4.7: a three-phase meter
+    sends currentAmpsL1..L3 and the handler stores them; a single-phase one never does), a
+    session is running (a leftover figure on an idle socket reads as "something is drawing
+    here"), and the telemetry is within the outlet window — an old figure is not "now".
+    A phase missing from the payload stays None, never 0: 0 A is a measurement.
+    """
+    if sc is None or not running:
+        return None
+    values = [getattr(sc, f"meter_current_l{n}", None) for n in (1, 2, 3)]
+    if all(v is None for v in values):
+        return None
+    if ms.outlet_state_is_stale(getattr(sc, "meter_load_updated_at", None)):
+        return None
+    return [None if v is None else round(float(v), 2) for v in values]
 
 
 def _consumption_summary(db: DBSession, pedestal_id: int,

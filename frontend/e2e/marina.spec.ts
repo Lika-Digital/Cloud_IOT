@@ -350,3 +350,40 @@ test('TC-UIN-02 staff typing the wizard address do not get the wizard; admin doe
   await page.goto('/marina/setup/1')
   await expect(page.getByTestId('marina-setup')).toBeVisible()
 })
+
+// ═══ TC-UIP-01 — <PhaseBlock>: per phase, in words, absent when there is nothing per phase ══
+
+test('TC-UIP-01 a three-phase socket shows Phase 1/2/3 in berth detail; single-phase shows none', async ({ page }) => {
+  await mockCore(page, healthyCore())
+  const berth = healthyCore().pedestals[0].berths[0]
+  const detail = (phase_amps: unknown) => ({
+    ...berth,
+    power: { ...berth.power, phase_amps },
+    pedestal_id: 1,
+    cabinet_id: 'MAR_KRK_ORM_01',
+    outlet_spec: { outlet: 'Q1', rated_amps: 32, phases: 3, meter_type: null },
+    consumption: { kwh: 12.5, source: 'register', note: '' },
+    reference_image: null,
+    guard: { state: 'on', sentence: 'Guard on', scope: 'pedestal' },
+    guard_scope_note: 'One camera per pedestal.',
+  })
+  let body = detail([10.04, null, 11])
+  await page.route('**/api/marina/berths/101', (route) => route.fulfill({ json: body }))
+
+  await page.goto('/marina/berth/101')
+  const block = page.getByTestId('phase-block')
+  await expect(block).toBeVisible()
+  await expect(block).toContainText('Phase 1')
+  await expect(block).toContainText('10.04 A')
+  await expect(block).toContainText('Phase 3')
+  await expect(block).toContainText('11 A')
+  // The phase the cabinet did not send is a dash, never "0 A"; and never the word "L1".
+  await expect(block.locator('dd').nth(1)).toHaveText('—')
+  await expect(page.getByTestId('berth-detail')).not.toContainText(/\bL[123]\b/)
+
+  // Single-phase / nothing running / stale: null — the block is ABSENT from the DOM.
+  body = detail(null)
+  await page.reload()
+  await expect(page.getByTestId('berth-detail')).toBeVisible()
+  await expect(page.getByTestId('phase-block')).toHaveCount(0)
+})

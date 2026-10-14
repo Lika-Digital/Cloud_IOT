@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { getBerthDetail, type BerthDetail as BerthDetailData } from '../../api/marina'
+import {
+  getBerthDetail, switchFacility, type BerthDetail as BerthDetailData,
+} from '../../api/marina'
 import { Status } from '../../components/marina/Status'
-import { FacilityLine } from '../../components/marina/FacilityLine'
+import { ControlledLine } from '../../components/marina/ControlledLine'
 import { PhaseBlock } from '../../components/marina/PhaseBlock'
 
 /**
@@ -125,17 +127,17 @@ export default function BerthDetail() {
 
       {/* ── Now ────────────────────────────────────────────────────────────── */}
       <Section title="Now">
-        <FacilityLine
+        <ControlledLine
+          testId="detail-power"
           label="Power"
-          on={d.power.on}
+          facility={d.power}
           figure={d.power.amps}
           unit={d.power.unit}
-          available={d.power.available}
-          unavailableSentence={
-            d.power.unavailable_reason === 'no_socket'
-              ? 'No electricity socket at this berth'
-              : 'The pedestal is switching this itself'
-          }
+          confirmText={(a) => (a === 'off'
+            ? `Turn off power at berth ${d.berth_number ?? ''}? The session there ends.`
+            : undefined)}
+          onSwitch={(a) => switchFacility(d.pedestal_id, { kind: 'socket', outlet: d.power.outlet ?? '' }, a)}
+          onDone={load}
         />
         <PhaseBlock phases={d.power.phase_amps} />
       </Section>

@@ -798,9 +798,11 @@ async def direct_water_cmd(
         if live is None:
             raise HTTPException(
                 status_code=409,
-                detail=f"No valid NFC reservation for {valve_name}. Water opens only after "
-                       f"POST /api/nfc/scan for this valve, within its "
-                       f"{nfc_service.PENDING_TTL_MINUTES}-minute window.",
+                # Read by marina staff on the row control as well as by the ERP, so it says
+                # what a person does first, then the API call behind it (block 4, 2026-10-15).
+                detail=f"No valid NFC reservation for {valve_name}: water opens only after a "
+                       f"card is scanned at this valve (POST /api/nfc/scan), within "
+                       f"{nfc_service.PENDING_TTL_MINUTES} minutes.",
             )
         live.status = "activated"
         db.commit()

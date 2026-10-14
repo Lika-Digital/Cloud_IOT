@@ -387,3 +387,100 @@ test('TC-UIP-01 a three-phase socket shows Phase 1/2/3 in berth detail; single-p
   await expect(page.getByTestId('berth-detail')).toBeVisible()
   await expect(page.getByTestId('phase-block')).toHaveCount(0)
 })
+
+// ═══ TC-UIRC-01..04 — row controls (block 4) ══════════════════════════════════════════
+
+/** The healthy pedestal, with the actions the server would offer a control account. */
+function controllableCore() {
+  const core = healthyCore()
+  const p = core.pedestals[0]
+  p.berths.forEach((b) => {
+    Object.assign(b.power, b.power.on
+      ? { action: 'off', available: true, unavailable_reason: null }
+      : { action: null, available: false, unavailable_reason: 'nothing_plugged' })
+  })
+  Object.assign(p.water_outlets[0], { action: 'off', available: true, unavailable_reason: null })
+  Object.assign(p.water_outlets[1], { action: null, available: false, unavailable_reason: 'needs_scan' })
+  Object.assign(p.light, { action: 'off', available: true, unavailable_reason: null })
+  return core
+}
+
+test('TC-UIRC-01 an offered action is a button that sends exactly that command', async ({ page }) => {
+  await mockCore(page, controllableCore())
+  const sent: { url: string; body: unknown }[] = []
+  await page.route('**/api/controls/**', async (route) => {
+    sent.push({ url: route.request().url(), body: route.request().postDataJSON() })
+    await route.fulfill({ json: { status: 'sent' } })
+  })
+  await gotoMarina(page)
+  await page.getByRole('button', { name: 'All (4)' }).click()
+
+  // Power on berth 1 is running: "Turn off", confirmed first — it ends someone's session.
+  const power = page.getByTestId('power-101')
+  await power.getByRole('button', { name: 'Turn off' }).click()
+  await expect(power).toContainText('Turn off power at berth 1? The session there ends.')
+  expect(sent).toHaveLength(0)
+  await power.getByRole('button', { name: 'Yes, turn off' }).click()
+  await expect(power.getByRole('status')).toHaveText('Sent. The line changes when the pedestal reports back.')
+  expect(sent).toEqual([{ url: expect.stringMatching(/\/api\/controls\/pedestal\/1\/socket\/Q1\/cmd$/),
+                          body: { action: 'stop' } }])
+
+  // The light names every berth it covers before it acts.
+  const light = page.getByTestId('light')
+  await light.getByRole('button', { name: 'Turn off' }).click()
+  await expect(light).toContainText('This light covers berths 1, 2, 3 and 4. Turn it off for all of them?')
+  await light.getByRole('button', { name: 'Yes, turn off' }).click()
+  await expect.poll(() => sent.length).toBe(2)
+  expect(sent[1].url).toMatch(/\/api\/controls\/pedestal\/1\/led$/)
+  expect(sent[1].body).toEqual({ color: 'green', state: 'off' })
+})
+
+test('TC-UIRC-02 water without a scan: no button, and the sentence says why (§15)', async ({ page }) => {
+  await mockCore(page, controllableCore())
+  await gotoMarina(page)
+  const v2 = page.getByTestId('water-V2')
+  await expect(v2).toContainText('Water opens after the customer scans their card at the valve')
+  await expect(v2.getByRole('button')).toHaveCount(0)
+  // Nothing plugged in: likewise a sentence, not a "Turn on" the endpoint would refuse.
+  await page.getByRole('button', { name: 'All (4)' }).click()
+  const p2 = page.getByTestId('power-102')
+  await expect(p2).toContainText('Nothing is plugged in')
+  await expect(p2.getByRole('button')).toHaveCount(0)
+})
+
+test('TC-UIRC-03 a refusal shows the server\'s sentence; no answer says it is not known', async ({ page }) => {
+  const core = controllableCore()
+  Object.assign(core.pedestals[0].water_outlets[1], { action: 'on', available: true, unavailable_reason: null })
+  await mockCore(page, core)
+  let calls = 0
+  await page.route('**/api/controls/**', (route) => {
+    calls += 1
+    return calls === 1
+      ? route.fulfill({ status: 409, json: { detail: 'No valid NFC reservation for V2: water opens only after a card is scanned at this valve.' } })
+      : route.abort('timedout')
+  })
+  await gotoMarina(page)
+  const v2 = page.getByTestId('water-V2')
+  await v2.getByRole('button', { name: 'Turn on' }).click()
+  await expect(v2.getByRole('alert')).toHaveText(
+    'Not switched: No valid NFC reservation for V2: water opens only after a card is scanned at this valve.')
+  // A request that never answered is NOT "not switched" — the command may have gone out.
+  await v2.getByRole('button', { name: 'Turn on' }).click()
+  await expect(v2.getByRole('alert')).toContainText('Whether it switched is not known')
+  await expect(v2.getByRole('alert')).not.toContainText('Not switched')
+})
+
+test('TC-UIRC-04 every reason has its own sentence; out of contact is not "switching itself"', async ({ page }) => {
+  const core = controllableCore()
+  const p = core.pedestals[0]
+  p.reachable = false
+  for (const f of [...p.berths.map((b) => b.power), ...p.water_outlets, p.light]) {
+    Object.assign(f, { action: null, available: false, unavailable_reason: 'no_contact' })
+  }
+  await mockCore(page, core)
+  await gotoMarina(page)
+  await page.getByRole('button', { name: 'All (4)' }).click()
+  await expect(page.getByRole('button', { name: /Turn (on|off)/ })).toHaveCount(0)
+  await expect(page.getByText('No contact with the pedestal, so it cannot be switched from here').first()).toBeVisible()
+  await expect(page.getByText('The pedestal is switching this itself')).toHaveCount(0)
+})

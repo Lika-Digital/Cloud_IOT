@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   getMarinaCore,
+  switchFacility,
   type Berth,
   type MarinaCore,
   type MarinaPedestal,
 } from '../../api/marina'
 import { Status, statusSortKey } from '../../components/marina/Status'
-import { FacilityLine } from '../../components/marina/FacilityLine'
+import { ControlledLine } from '../../components/marina/ControlledLine'
 
 /**
  * L1 — the marina dashboard. One row per berth, needs-attention first.
@@ -163,14 +164,18 @@ export default function MarinaDashboard() {
 
       <div className="flex flex-col gap-4">
         {core.pedestals.map((p) => (
-          <PedestalBlock key={p.pedestal_id} pedestal={p} showAll={showAll} />
+          <PedestalBlock key={p.pedestal_id} pedestal={p} showAll={showAll} onChanged={load} />
         ))}
       </div>
     </div>
   )
 }
 
-function PedestalBlock({ pedestal, showAll }: { pedestal: MarinaPedestal; showAll: boolean }) {
+function PedestalBlock({ pedestal, showAll, onChanged }: {
+  pedestal: MarinaPedestal
+  showAll: boolean
+  onChanged: () => void
+}) {
   const berths = useMemo(() => {
     // `unknown` BELONGS in the needs-attention view, and leaving it out was a real bug the
     // e2e specs caught: a pedestal that has gone silent produces only `unknown` berths, so
@@ -220,7 +225,13 @@ function PedestalBlock({ pedestal, showAll }: { pedestal: MarinaPedestal; showAl
       ) : (
         <ul className="divide-y divide-gray-800">
           {berths.map((b) => (
-            <BerthRow key={b.berth_id} berth={b} standalone={standalone} />
+            <BerthRow
+              key={b.berth_id}
+              berth={b}
+              pedestalId={pedestal.pedestal_id}
+              standalone={standalone}
+              onChanged={onChanged}
+            />
           ))}
         </ul>
       )}
@@ -246,19 +257,17 @@ function PedestalBlock({ pedestal, showAll }: { pedestal: MarinaPedestal; showAl
           </p>
         ) : (
           pedestal.water_outlets.map((w) => (
-            <FacilityLine
+            <ControlledLine
               key={w.outlet}
+              testId={`water-${w.outlet}`}
               label={w.outlet}
-              on={w.on}
+              facility={w}
               stateWord={w.state === 'unknown' ? 'Not known' : w.on ? 'IN USE' : 'FREE'}
               figure={w.litres_per_min}
               unit={w.unit}
-              available={w.available}
-              unavailableSentence={
-                w.unavailable_reason === 'standalone'
-                  ? 'The pedestal is switching this itself'
-                  : undefined
-              }
+              confirmText={(a) => (a === 'off' ? `Close ${w.outlet}? The session on it ends.` : undefined)}
+              onSwitch={(a) => switchFacility(pedestal.pedestal_id, { kind: 'valve', outlet: w.outlet }, a)}
+              onDone={onChanged}
               note={
                 w.state === 'unknown'
                   ? 'The pedestal has not reported this outlet recently.'
@@ -274,17 +283,16 @@ function PedestalBlock({ pedestal, showAll }: { pedestal: MarinaPedestal; showAl
       {/* Light and guard are one per cabinet, so four berth rows would be four views of one
           switch. Kept here, labelled, rather than repeated per row. */}
       <div className="px-3 py-2 border-t border-gray-800 flex flex-wrap gap-x-6 gap-y-1 items-baseline">
-        <FacilityLine
+        <ControlledLine
+          testId="light"
           label="Light"
-          on={pedestal.light.on}
+          facility={pedestal.light}
           figure={null}
           unit=""
-          available={pedestal.light.available}
-          unavailableSentence={
-            pedestal.light.unavailable_reason === 'standalone'
-              ? 'The pedestal is switching this itself'
-              : undefined
-          }
+          // One light per cabinet: a tap switches it for every berth, so say so first (§5.1).
+          confirmText={(a) => `This light covers ${berthList(pedestal)}. Turn it ${a} for all of them?`}
+          onSwitch={(a) => switchFacility(pedestal.pedestal_id, { kind: 'light' }, a)}
+          onDone={onChanged}
           note={`Covers every berth on this pedestal`}
         />
         <Link
@@ -311,7 +319,20 @@ function PedestalBlock({ pedestal, showAll }: { pedestal: MarinaPedestal; showAl
   )
 }
 
-function BerthRow({ berth, standalone }: { berth: Berth; standalone: boolean }) {
+function berthList(p: MarinaPedestal): string {
+  const n = p.berths.map((b) => b.berth_number).filter((x): x is number => x != null)
+    .sort((a, b) => a - b)
+  if (n.length === 0) return 'every berth on this pedestal'
+  if (n.length === 1) return `berth ${n[0]}`
+  return `berths ${n.slice(0, -1).join(', ')} and ${n[n.length - 1]}`
+}
+
+function BerthRow({ berth, pedestalId, standalone, onChanged }: {
+  berth: Berth
+  pedestalId: number
+  standalone: boolean
+  onChanged: () => void
+}) {
   const p = berth.power
 
   const occupancy = !berth.occupied_known
@@ -348,17 +369,17 @@ function BerthRow({ berth, standalone }: { berth: Berth; standalone: boolean }) 
         {match && ` · ${match}`}
       </p>
 
-      <FacilityLine
+      <ControlledLine
+        testId={`power-${berth.berth_id}`}
         label="Power"
-        on={p.on}
+        facility={p}
         figure={p.amps}
         unit={p.unit}
-        available={p.available}
-        unavailableSentence={
-          p.unavailable_reason === 'no_socket'
-            ? 'No electricity socket at this berth'
-            : 'The pedestal is switching this itself'
-        }
+        confirmText={(a) => (a === 'off'
+          ? `Turn off power at berth ${berth.berth_number ?? ''}? The session there ends.`
+          : undefined)}
+        onSwitch={(a) => switchFacility(pedestalId, { kind: 'socket', outlet: p.outlet ?? '' }, a)}
+        onDone={onChanged}
         note={p.outlet ? `socket ${p.outlet}` : undefined}
       />
 

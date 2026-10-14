@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { TONE } from '../../components/marina/Status'
 import { getMarinaCore, type MarinaCore } from '../../api/marina'
+import { UNAVAILABLE_SENTENCE } from '../../components/marina/ControlledLine'
 
 /**
  * L2 — water, in detail.
@@ -174,8 +175,10 @@ export default function MarinaWater() {
                             sentence takes its place. Never a greyed-out button. */}
                         {!w.available && (
                           <p className="text-xs text-gray-400 italic mt-1">
-                            {w.unavailable_reason === 'standalone'
-                              ? 'This pedestal is running on its own, monitoring only'
+                            {/* The same sentence as the dashboard row, from one table — the
+                                reason is the server's (block 4, row controls). */}
+                            {w.unavailable_reason
+                              ? UNAVAILABLE_SENTENCE[w.unavailable_reason]
                               : 'This outlet cannot be switched from here'}
                           </p>
                         )}

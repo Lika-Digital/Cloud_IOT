@@ -58,7 +58,18 @@ export type StatusCode =
   | 'unrecognised'
 
 /** Why a control cannot be rendered. Two reasons, two different sentences. */
-export type UnavailableReason = 'no_socket' | 'standalone' | null
+export type UnavailableReason =
+  | 'no_socket'        // this berth has no electricity socket
+  | 'no_contact'       // the pedestal is out of contact — nobody can switch it
+  | 'standalone'       // smart mode off: the pedestal switches for itself
+  | 'read_only'        // this account cannot switch (the endpoints are require_control)
+  | 'state_unknown'    // the outlet has not reported recently: not switched blind
+  | 'nothing_plugged'  // a socket with no plug: "Turn on" would be refused
+  | 'needs_scan'       // a valve with no live NFC reservation: "Turn on" would be refused (§15)
+  | null
+
+/** What one tap does — decided by the server; null renders the reason's sentence instead. */
+export type ControlAction = 'on' | 'off' | null
 
 export interface PowerFacility {
   /** 'Q1'..'Q4', or null when this berth has no electricity socket. */
@@ -81,6 +92,7 @@ export interface PowerFacility {
    */
   amps: number | null
   unit: string
+  action: ControlAction
   /** false => render a sentence and NO control element in the DOM. Not a disabled button. */
   available: boolean
   unavailable_reason: UnavailableReason
@@ -100,6 +112,7 @@ export interface WaterOutlet {
   unit: string
   rated_liters_per_min: number | null
   in_use: boolean
+  action: ControlAction
   available: boolean
   unavailable_reason: UnavailableReason
 }
@@ -126,6 +139,7 @@ export interface Berth {
 export interface SharedFacility {
   on: boolean
   scope: 'pedestal'
+  action: ControlAction
   available: boolean
   unavailable_reason: UnavailableReason
 }
@@ -172,6 +186,28 @@ export interface ConsumptionSummary {
 }
 
 /** Berth detail's power block adds the per-phase currents of a three-phase socket (§5.3). */
+/**
+ * One tap on a row control. The endpoints are the operator's own (`/api/controls`), so the
+ * same rules apply — smart mode, plug present, water only after a scan — and a refusal comes
+ * back as the server's sentence.
+ */
+export function switchFacility(
+  pedestalId: number,
+  target: { kind: 'socket' | 'valve'; outlet: string } | { kind: 'light' },
+  action: 'on' | 'off',
+): Promise<unknown> {
+  if (target.kind === 'light') {
+    // The cabinet light is single-colour; only on/off matters (controls.py, v3.27).
+    return api.post(`/controls/pedestal/${pedestalId}/led`, { color: 'green', state: action })
+  }
+  const body = { action: action === 'on' ? 'activate' : 'stop' }
+  // Two literal paths, not one with a computed segment: test_fe_be_contract can then check
+  // that each really exists (it cannot follow `${kind}`).
+  return target.kind === 'socket'
+    ? api.post(`/controls/pedestal/${pedestalId}/socket/${target.outlet}/cmd`, body)
+    : api.post(`/controls/pedestal/${pedestalId}/water/${target.outlet}/cmd`, body)
+}
+
 export interface BerthDetailPower extends PowerFacility {
   /**
    * Phase 1, 2, 3 in amps — or null, and null makes <PhaseBlock> ABSENT: the socket is

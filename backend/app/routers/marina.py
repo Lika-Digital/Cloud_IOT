@@ -107,8 +107,56 @@ def _socket_silent(db: DBSession, pedestal_id: int, socket_id: int) -> bool:
     return ms.outlet_state_is_stale(max(stamps) if stamps else None)
 
 
+class Gate:
+    """Whether this viewer may switch anything on this pedestal, and if not, why.
+
+    Row controls (block 4, 2026-10-15). The reason travels to the UI, which renders ONE
+    sentence per reason and no control element. Before this, every refusal was reported as
+    "standalone", so a smart-mode pedestal that had merely lost contact told staff "the
+    pedestal is switching this itself" — a sentence about a decision nobody made.
+    Order matters: a pedestal out of contact cannot be switched by anyone, so `no_contact`
+    outranks smart mode, which outranks the viewer's role.
+    """
+
+    def __init__(self, *, reachable: bool, smart: bool, can_control: bool):
+        self.reason = (None if reachable and smart and can_control
+                       else "no_contact" if not reachable
+                       else "standalone" if not smart
+                       else "read_only")
+
+    @property
+    def open(self) -> bool:
+        return self.reason is None
+
+
+def _can_control(user: User) -> bool:
+    """The same role set the control endpoints admit (`require_control`)."""
+    from ..auth.dependencies import _CONTROL_ROLES
+    return getattr(user, "role", None) in _CONTROL_ROLES
+
+
+def _light_block(cfg, gate: "Gate") -> dict:
+    """One light per cabinet; a tap switches it for every berth, and the UI says so first."""
+    on = bool(getattr(cfg, "led_on", False))
+    return {"on": on, "scope": "pedestal", **_offer(gate, "off" if on else "on", None)}
+
+
+def _offer(gate: "Gate", action: Optional[str], why_not: Optional[str]) -> dict:
+    """`action` is what one tap does ("on" / "off"); None renders a sentence instead.
+
+    `available` stays as the flag every renderer already reads: True exactly when there is an
+    action to render. A control that would be refused is not offered — the pedestal-level
+    reason first, then the facility's own (`nothing_plugged`, `needs_scan`, `state_unknown`).
+    """
+    if not gate.open:
+        return {"action": None, "available": False, "unavailable_reason": gate.reason}
+    if action is None:
+        return {"action": None, "available": False, "unavailable_reason": why_not}
+    return {"action": action, "available": True, "unavailable_reason": None}
+
+
 def _power_block(db: DBSession, pedestal_id: int, socket_id: Optional[int],
-                 *, controllable: bool) -> dict:
+                 *, gate: "Gate") -> dict:
     """One berth's electricity facility.
 
     `available` means "a control may be rendered". False renders a sentence and NO control
@@ -120,7 +168,7 @@ def _power_block(db: DBSession, pedestal_id: int, socket_id: Optional[int],
         return {
             "outlet": None, "on": False, "state": "unknown",
             "amps": None, "unit": "A",
-            "available": False, "unavailable_reason": "no_socket",
+            "action": None, "available": False, "unavailable_reason": "no_socket",
         }
 
     cfg = (
@@ -168,18 +216,49 @@ def _power_block(db: DBSession, pedestal_id: int, socket_id: Optional[int],
     if active is not None and cfg is not None and cfg.meter_current_amps is not None:
         amps = round(float(cfg.meter_current_amps), 2)
 
+    # Turn off whenever a session runs. Turn on only for a plug waiting to be switched on
+    # (`pending`): with nothing plugged in the endpoint refuses ("Socket has no plug
+    # inserted", 409), and a button that can only be refused is a false offer. A socket whose
+    # state is not known is not switched blind.
+    if state == "active":
+        offer = _offer(gate, "off", None)
+    elif state == "pending":
+        offer = _offer(gate, "on", None)
+    elif state == "idle":
+        offer = _offer(gate, None, "nothing_plugged")
+    else:
+        offer = _offer(gate, None, "state_unknown")
+
     return {
         "outlet": f"Q{socket_id}",
         "on": active is not None,
         "state": state,
         "amps": amps,
         "unit": "A",
-        "available": controllable,
-        "unavailable_reason": None if controllable else "standalone",
+        **offer,
     }
 
 
-def _water_outlets(db: DBSession, pedestal_id: int, *, controllable: bool) -> list[dict]:
+def _live_reservation(db: DBSession, cabinet_id: Optional[str], outlet: str) -> bool:
+    """Is there an unexpired NFC reservation for this valve? READ-ONLY.
+
+    The same predicate as `nfc_service.get_live_pending` (status pending, not past
+    `expires_at`) without its side effect: that one marks expired rows as it reads, and a GET
+    that polls every 15 s must not write.
+    """
+    if not cabinet_id:
+        return False
+    from ..models.nfc_pending_session import NfcPendingSession
+    return db.query(NfcPendingSession.id).filter(
+        NfcPendingSession.cabinet_id == cabinet_id,
+        NfcPendingSession.socket_id == outlet,
+        NfcPendingSession.status == "pending",
+        NfcPendingSession.expires_at > datetime.utcnow(),
+    ).first() is not None
+
+
+def _water_outlets(db: DBSession, pedestal_id: int, *, gate: "Gate",
+                   cabinet_id: Optional[str] = None) -> list[dict]:
     """The cabinet's water outlets — a pool, not a per-berth facility.
 
     Each entry reports its own state from `valve_configs`, which the MQTT handler persists
@@ -207,16 +286,28 @@ def _water_outlets(db: DBSession, pedestal_id: int, *, controllable: bool) -> li
         else:
             state = r.last_state
 
+        # §15: an `activate` on a valve is REFUSED (409) without a live NFC reservation, from
+        # every caller — water never opens for nobody. So "Turn on" is offered only while one
+        # exists; otherwise the sentence says the customer scans first. Turn off always.
+        outlet = f"V{r.valve_id}"
+        if state == "active":
+            offer = _offer(gate, "off", None)
+        elif state == "unknown":
+            offer = _offer(gate, None, "state_unknown")
+        elif _live_reservation(db, cabinet_id, outlet):
+            offer = _offer(gate, "on", None)
+        else:
+            offer = _offer(gate, None, "needs_scan")
+
         out.append({
-            "outlet": f"V{r.valve_id}",
+            "outlet": outlet,
             "on": active is not None,
             "state": state,
             "litres_per_min": None,          # live, arrives over the websocket
             "unit": "L/min",
             "rated_liters_per_min": r.rated_liters_per_min,
             "in_use": active is not None,
-            "available": controllable,
-            "unavailable_reason": None if controllable else "standalone",
+            **offer,
         })
     return out
 
@@ -273,7 +364,7 @@ def _vessel_matches(berth) -> Optional[bool]:
 
 
 def _berth_payload(db: DBSession, berth, assignment, *, facts_base: BerthFacts,
-                   controllable: bool) -> dict:
+                   gate: "Gate") -> dict:
     socket_id = assignment.socket_id if assignment is not None else None
 
     cfg = None
@@ -304,7 +395,7 @@ def _berth_payload(db: DBSession, berth, assignment, *, facts_base: BerthFacts,
     payload = {
         "berth_id": berth.id,
         "berth_number": berth.berth_number,
-        "power": _power_block(db, berth.pedestal_id, socket_id, controllable=controllable),
+        "power": _power_block(db, berth.pedestal_id, socket_id, gate=gate),
         "occupied": bool(getattr(berth, "occupied_bit", 0)),
         # Distinguished from `occupied` so the UI can render "we do not know" rather than
         # "empty". Zero and unknown are different values (engineering note 8).
@@ -348,7 +439,7 @@ def _has_unmeasured_session(db: DBSession, pedestal_id: int,
 @router.get("/berths")
 def marina_berths(db: DBSession = Depends(get_db),
                   user_db: DBSession = Depends(get_user_db),
-                  _: User = Depends(require_any_role)):
+                  user: User = Depends(require_any_role)):
     """The L1 dashboard in one call.
 
     `require_any_role` — this is operations. Marina staff answering "what is wrong at berth 3"
@@ -364,10 +455,10 @@ def marina_berths(db: DBSession = Depends(get_db),
         age = _heartbeat_age(pid)
         reachable = age is not None and age <= ms.COMM_LOSS_TIMEOUT_S
         smart = bool(cfg.smart_mode)
-        # Controls render only when the NUC can actually act. Both halves matter: an
-        # unreachable cabinet cannot be commanded, and in non-smart mode the Opta is
-        # switching for itself.
-        controllable = reachable and smart
+        # Controls render only when the NUC can actually act AND this viewer may act. An
+        # unreachable cabinet cannot be commanded; in non-smart mode the Opta is switching for
+        # itself; a read-only account cannot switch (the endpoints are require_control).
+        gate = Gate(reachable=reachable, smart=smart, can_control=_can_control(user))
 
         # Unresolved only. An alarm with `resolved_at` set has returned to normal on its
         # own and is history, not a condition.
@@ -401,7 +492,7 @@ def marina_berths(db: DBSession = Depends(get_db),
 
         berths = [
             _berth_payload(db, b, assignments.get(b.id),
-                           facts_base=facts_base, controllable=controllable)
+                           facts_base=facts_base, gate=gate)
             for b in _berths_for(user_db, pid)
         ]
 
@@ -414,13 +505,8 @@ def marina_berths(db: DBSession = Depends(get_db),
             "berths": berths,
             # Pedestal-level, not per berth: the valves are a pool of two, not piped to
             # specific berths. See the module docstring.
-            "water_outlets": _water_outlets(db, pid, controllable=controllable),
-            "light": {
-                "on": bool(getattr(cfg, "led_on", False)),
-                "scope": "pedestal",
-                "available": controllable,
-                "unavailable_reason": None if controllable else "standalone",
-            },
+            "water_outlets": _water_outlets(db, pid, gate=gate, cabinet_id=cfg.opta_client_id),
+            "light": _light_block(cfg, gate),
             "guard": _guard_block(db, pid),
             "alarm_count": len(alarms),
         })
@@ -432,7 +518,7 @@ def marina_berths(db: DBSession = Depends(get_db),
 def marina_berth_detail(berth_id: int,
                         db: DBSession = Depends(get_db),
                         user_db: DBSession = Depends(get_user_db),
-                        _: User = Depends(require_any_role)):
+                        user: User = Depends(require_any_role)):
     """One berth, with the detail L1 deliberately leaves out.
 
     Adds the socket's own facts from `opta/config/hardware` — rating and phase count, which
@@ -454,7 +540,7 @@ def marina_berth_detail(berth_id: int,
     age = _heartbeat_age(pid)
     reachable = age is not None and age <= ms.COMM_LOSS_TIMEOUT_S
     smart = bool(cfg.smart_mode)
-    controllable = reachable and smart
+    gate = Gate(reachable=reachable, smart=smart, can_control=_can_control(user))
 
     assignment = (
         db.query(BerthAssignment)
@@ -481,7 +567,7 @@ def marina_berth_detail(berth_id: int,
     facts_base.alarm_count = len(alarms)   # type: ignore[attr-defined]
 
     payload = _berth_payload(db, berth, assignment,
-                             facts_base=facts_base, controllable=controllable)
+                             facts_base=facts_base, gate=gate)
 
     socket_id = assignment.socket_id if assignment is not None else None
     sc = None

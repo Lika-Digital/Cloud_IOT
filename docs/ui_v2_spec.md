@@ -137,7 +137,7 @@ choice — which endpoints are allowed, which events are pushed.
 | **Storage** | `external_api_config.report_water_sessions INTEGER DEFAULT 1` — single-row table, ID always 1, same as every other setting on that screen. Default **1**, since both ERPs support it. |
 | **Endpoint** | the existing `PUT /api/admin/ext-api/config`. No new route. |
 | **Enforced at** | the three `erp_webhook` call sites in `mqtt_handlers.py`, via one predicate in `erp_webhook.py` so there is one place to read rather than three to keep in step. |
-| **Auth** | `require_api_config`, matching the rest of the page. |
+| **Auth** | `require_admin`, matching the rest of the page (D14, built 2026-10-14 — `require_api_config` no longer exists). |
 
 **One correction to the instruction, stated rather than silently applied:** you said "admin
 only, like everything else on that screen". **The screen is not admin-only today** — it is
@@ -836,7 +836,7 @@ Found during the foundation work. **Yours to prioritise; none of it is in the bu
 
 | | State | Evidence |
 |---|---|---|
-| D14 | NOT BUILT | `auth/dependencies.py:22` still admits `monitor_control_api` |
+| D14 | **BUILT+PROVEN 2026-10-14** | every `/api/admin/ext-api` route is `require_admin`; `require_api_config` and `_API_CONFIG_ROLES` deleted; route `adminOnly`, nav item in the admin group. `test_roles.py` TC-ROLE-06b reads the routes from the app (7) and failed on the code before (`monitor_control_api got 200`). Checked first: the ERP service account (`api_client`) never could reach these — it is not an operator role. `monitor_control_api` now acts as `monitor_control`; kept for existing accounts, no longer offered for new ones. **Cabinet fact not checked:** whether any account there holds `monitor_control_api` and used the page |
 | D15 | NOT BUILT — allowlisted and guarded | `test_fe_be_contract.py:112-120`; TC-FEBE-01/05/06 |
 | D16 | NOT BUILT — only skipped | `test.skip(true, …D16…)` at line 23 of four specs |
 | D17 | NOT BUILT — not reproduced off the cabinet | §13 check 17 measures it |

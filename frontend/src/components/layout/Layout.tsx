@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useStore } from '../../store'
-import { useAuthStore, canManageApi } from '../../store/authStore'
+import { useAuthStore } from '../../store/authStore'
 import { useThemeStore } from '../../store/themeStore'
 import logo from '../../assets/logo.png'
 import { useEffect, useState } from 'react'
@@ -15,9 +15,6 @@ export default function Layout() {
   const location = useLocation()
 
   const isAdmin = role === 'admin'
-  // v3.35 — API Gateway is visible to admin + monitor_control_api; System Health
-  // and Settings stay admin-only.
-  const canApi = canManageApi(role)
 
   // v3.33 — mobile: the sidebar collapses into a slide-in drawer behind a
   // hamburger. Close it on every route change so a nav tap doesn't leave the
@@ -52,11 +49,8 @@ export default function Layout() {
       { to: '/users', label: 'Customers', icon: '👥', badge: unreadChatCount },
       { to: '/contracts', label: 'Contracts', icon: '📝', badge: 0 },
       { to: '/system-health', label: 'System Health', icon: '🔧', badge: newErrorCount, hwAlarm: hwAlarmLevel },
-    ] : []),
-    ...(canApi ? [
+      // D14 (2026-10-14): ERP integration is installation work — admin only.
       { to: '/api-gateway', label: 'API Gateway', icon: '🔌', badge: 0 },
-    ] : []),
-    ...(isAdmin ? [
       { to: '/settings', label: 'Settings', icon: '⚙️', badge: 0 },
     ] : []),
   ]

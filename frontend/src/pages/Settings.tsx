@@ -813,7 +813,6 @@ function UserManagementPanel() {
             >
               <option value="monitor">Monitor — read only</option>
               <option value="monitor_control">Monitor &amp; Control — all but System Health / Settings / API Gateway</option>
-              <option value="monitor_control_api">Monitor, Control &amp; API — Monitor &amp; Control plus API Gateway</option>
               <option value="admin">Admin — full access</option>
               <option value="api_client">ERP User — external API access (no login / 2FA)</option>
             </select>
@@ -872,7 +871,7 @@ function UserManagementPanel() {
                   }`}
                 >
                   <option value="admin">admin</option>
-                  <option value="monitor_control_api">monitor, control &amp; api</option>
+                  <option value="monitor_control_api">monitor, control &amp; api (= monitor &amp; control since D14)</option>
                   <option value="monitor_control">monitor &amp; control</option>
                   <option value="monitor">monitor</option>
                 </select>

@@ -214,6 +214,27 @@ def test_tc_role_06_admin_sections_refuse_others(client, headers, method, path, 
     assert _call(client, method, path, body, headers["admin"]).status_code != 403
 
 
+def test_tc_role_06b_api_gateway_configurator_is_admin_only(client, headers):
+    """D14 (owner 2026-10-01): configuring the ERP integration is installation work.
+
+    Every route under /api/admin/ext-api, read from the app rather than listed here, so a new
+    sibling route is covered the day it is added. monitor_control_api was admitted before D14.
+    The ERP's own service account (api_client) never could reach these — it is not an operator.
+    """
+    from app.main import app
+    routes = [(m, r.path) for r in app.routes
+              if getattr(r, "path", "").startswith("/api/admin/ext-api")
+              for m in (getattr(r, "methods", None) or set()) - {"HEAD", "OPTIONS"}]
+    assert len(routes) >= 7, routes      # catalog, config GET/PUT, rotate-key, verify, (de)activate
+    for method, path in routes:
+        for role in NON_ADMIN_OPERATORS:
+            r = _call(client, method, path, {}, headers[role])
+            assert r.status_code == 403, f"{role} got {r.status_code} on {method} {path}"
+    # Admin passes. Only the reads: the writes rotate the key and call out over HTTP.
+    for path in ("/api/admin/ext-api/catalog", "/api/admin/ext-api/config"):
+        assert _call(client, "GET", path, None, headers["admin"]).status_code == 200, path
+
+
 # ═══ TC-ROLE-07 — the scan, and the real regression guard ═════════════════════
 
 def test_tc_role_07_no_installation_act_is_gated_by_require_control(client):
@@ -250,7 +271,7 @@ def test_tc_role_07_no_installation_act_is_gated_by_require_control(client):
             continue                      # a GET on the same shape is an observation
         found = gates(route)
         if "require_control" in found or (
-                "require_admin" not in found and "require_api_config" not in found):
+                "require_admin" not in found):
             offenders.append((sorted(methods), path, sorted(found) or ["(no gate)"]))
 
     assert not offenders, (

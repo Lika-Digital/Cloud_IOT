@@ -103,7 +103,7 @@ function AppInner() {
         <Route
           path="api-gateway"
           element={
-            <ProtectedRoute apiConfig>
+            <ProtectedRoute adminOnly>
               <ApiGateway />
             </ProtectedRoute>
           }

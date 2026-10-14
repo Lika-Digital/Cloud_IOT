@@ -27,7 +27,7 @@ import pytest
 # anonymous caller through by design.
 IDENTITY_DEPS = {
     "_get_current_user", "require_any_role", "require_admin", "require_control",
-    "require_api_config", "require_customer", "require_erp_api_key",
+    "require_customer", "require_erp_api_key",
 }
 
 # Routes that legitimately take no identity dependency — each with its reason. Matched by

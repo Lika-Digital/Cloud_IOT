@@ -64,6 +64,36 @@ fi
 
 # NOTE: no backend check. The specs mock their own API and Vite is started by
 # playwright.config.ts. A live backend is neither needed nor consulted.
+
+# ── Is the e2e port ours? ─────────────────────────────────────────────────────
+# 2026-10-14: another project's Vite on the port we used made every marina spec fail
+# against ITS login page, with "element not found" — a red that said nothing about our code.
+# The owner runs that project in parallel on this machine, so a collision is a standing
+# condition, not an incident. A check must know what it ran against, or its outcome means
+# nothing — green or red.
+#
+# The run never reuses a server (playwright.config.ts), so ANYTHING answering on the port
+# before we start is not this run's frontend. Stop before a single spec runs.
+# The port is defined in ONE place, playwright.config.ts; it is read from there, not copied.
+E2E_PORT=$(sed -n 's/^const E2E_PORT = \([0-9][0-9]*\).*/\1/p' frontend/playwright.config.ts)
+if [ -z "$E2E_PORT" ]; then
+    echo -e "${RED}[✘] E2E NOT RUN: could not read E2E_PORT from frontend/playwright.config.ts.${NC}"
+    exit 1
+fi
+if python - "$E2E_PORT" << 'PYEOF'
+import socket, sys
+s = socket.socket(); s.settimeout(1)
+sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)
+PYEOF
+then
+    echo -e "${RED}${BOLD}[✘] E2E NOT RUN: something else is answering on port ${E2E_PORT}.${NC}"
+    echo    "    It is not this run's frontend — the e2e server is never reused, so anything already"
+    echo    "    listening there belongs to someone else. NO spec was run; this is not a test result."
+    echo    "    Find it:  netstat -ano | grep ':${E2E_PORT} '   — then stop it, or change E2E_PORT"
+    echo    "    in frontend/playwright.config.ts (the only place it is defined)."
+    exit 1
+fi
+
 # ── Run Playwright ─────────────────────────────────────────────────────────────
 cd frontend
 # playwright.config.ts already configures both list + json reporters

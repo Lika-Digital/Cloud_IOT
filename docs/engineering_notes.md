@@ -403,6 +403,34 @@ To measure this one: check out the commit before `23dcf1d`, start two full gates
 from the same directory, three times; then the same on `23dcf1d`. It is a cause only if the first
 set fails and the second does not.
 
+## 17. A check must know what it ran against — otherwise its outcome means nothing, green or red
+
+*The owner's words (2026-10-14):*
+
+> provjera mora znati protiv čega je trčala, inače njen ishod ne znači ništa — ni zelen ni crven.
+
+*Translation by Claude:* a check must know what it ran against; otherwise its outcome means
+nothing — neither green nor red.
+
+Rule 16 with a port in place of a file. On 2026-10-14 the push gate failed all nine marina specs
+with "element not found": another project's Vite was on `:5173`, the e2e config reused any server
+there, and the specs ran against that project's login page. The red was as empty as a false green
+— it described someone else's code. The owner runs that project in parallel on this machine, so
+the collision is a standing condition, not an incident.
+
+Enforced: the e2e port is defined once (`E2E_PORT` in `frontend/playwright.config.ts`, 5199 —
+nobody's default), the server is never reused and `--strictPort`, Vite's `/api` proxy points at a
+closed port during e2e, and `tests/playwright_e2e.sh` refuses to run a single spec when anything
+already answers on the port. Negative control, 2026-10-14: a foreign HTTP server on 5199 — the
+runner stopped with "something else is answering on port 5199", exit 1, and the Playwright report
+was not rewritten (no spec ran); `npx playwright test` run directly refused with "already used".
+
+Backend tests, checked the same day: none connects to or listens on `:8000` — all HTTP is the
+in-process `TestClient`. **Not yet covered:** `test_guard_integration.py` and `test_simulator.py`
+use whatever broker answers on `localhost:1883`. A broker is a protocol peer, so a foreign one
+still exercises our code — unless it has authentication or ACLs, in which case the failure would
+again describe someone else's setup.
+
 ## Appendix — things that look like over-engineering and are not
 
 One line each on what they prevent, for whoever maintains this next. Each looks like needless

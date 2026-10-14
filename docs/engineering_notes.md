@@ -398,7 +398,7 @@ per-run test databases.
 **Hypothesis, NOT measured** (recorded at the owner's request): before that fix 223 tests wrote
 into `./pedestal.db`, a path relative to the working directory, so two concurrent runs from the
 same directory shared it — and may have contributed to the suite's intermittent failures. The
-only measured cause of those is the shared-path race (`tests/evidence/2026-10-11_shared_test_db_race/`).
+only measured cause of those is the shared-path race (`tests/evidence/2026-10-11_shared_test_db_race/` — run output, untracked since 2026-10-14; it was in git up to `4c8a5a4`, so `git show 4c8a5a4:tests/evidence/...` still reads it).
 To measure this one: check out the commit before `23dcf1d`, start two full gates at the same moment
 from the same directory, three times; then the same on `23dcf1d`. It is a cause only if the first
 set fails and the second does not.

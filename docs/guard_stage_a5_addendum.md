@@ -60,6 +60,16 @@ SP=$(ls -d ~/guard-staging/venv/lib/python3.14/site-packages)
 grep -rn "environ\|getenv\|OPT_OUT\|opt_out\|consent" "$SP"/openvino_telemetry/*.py | head -20
 ```
 
+> **Correction, 2026-10-15.** This layer was written as a plan and stayed written as if it had
+> been carried out: until 2026-10-15 nothing removed the package, and
+> `guard_worker/requirements.txt` said it "is NOT installed" while pip installed it as a
+> dependency of openvino (measured on cabinet 1, 2026-10-15: "Would install openvino-2026.4.1 openvino-telemetry-2025.2.0"). It is now carried out by
+> `install-guard.sh` step 9: remove, then a smoke test of the worker's own loading path
+> (`nuc_image/guard_smoke.py`); if openvino needs the package it is put back, loudly, and the
+> install continues. The claim below was measured on dev the same day (openvino 2026.4.1,
+> Windows, Python 3.11: inference runs with the package uninstalled); the cabinet run on
+> Python 3.14 is the one that decides (§13 G.8). Layer 3 is the guarantee either way.
+
 **2. Remove the package.** Telemetry serves the *tools* (`ovc`, model converter), not
 `Core().compile_model()` inference. Test that claim directly rather than assuming it:
 

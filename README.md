@@ -1679,7 +1679,7 @@ The production system runs at `/opt/cloud-iot/` on Ubuntu 24.04.
 > |---|---|---|
 > | `:8000` uvicorn | was: cabinet LAN + Tailnet | **bound to `127.0.0.1` from this release** — `upgrade.sh` rewrites the unit and checks `ss` on every run |
 > | `:80` nginx | LAN, Tailnet, and the internet via the Cloudflare tunnel (`marina2.lika.solutions`) | `client_max_body_size 10M`; proxies `/api` and `/ws` to `127.0.0.1:8000` |
-> | `:1883` Mosquitto (anonymous) | cabinet LAN | needs an attacker on the LAN — lower priority |
+> | `:1883` Mosquitto (anonymous) | cabinet LAN, **measured directly 2026-10-15** (was inferred from the iptables rules): `docker-proxy` publishes 1883 on `0.0.0.0` AND `::` (pids 2496, 2502 → `172.18.0.2:1883`), so the anonymous broker answers on every interface of the NUC | needs an attacker on the LAN, lower priority. Owner, 2026-10-15: no action now; the defence is the router, R4 comes after the package |
 > | camera, TME sensor (http) | **public**, through the Cloudflare tunnel | open item **R4** |
 >
 > Not yet measured: which local port the Cloudflare tunnel targets. If it is `:8000`, the

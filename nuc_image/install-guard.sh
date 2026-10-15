@@ -12,7 +12,8 @@
 # Exit codes — read by upgrade.sh and by a person:
 #   0  installed, and everything the worker needs to start is present
 #   3  installed, but NOT READY: the model is missing. NOT a success.
-#   1  error — something was not installed; nothing claims success
+#   1  error — something was not installed, or openvino cannot load and run the model;
+#      nothing claims success
 #
 # Idempotent: a second run changes nothing, and says "unchanged" for every step.
 #
@@ -208,6 +209,41 @@ else
   say "camera URL: set, but does NOT start with rtsp:// (value not shown)"
 fi
 unset URL_SET
+
+# ── 9. openvino-telemetry: removed only if openvino PROVABLY works without it ──
+# It IS installed — pip pulls it in as a dependency of openvino (measured on cabinet 1,
+# 2026-10-15: "Would install openvino-2026.4.1 openvino-telemetry-2025.2.0"). A constraint
+# cannot exclude a dependency, and --no-deps would mean listing openvino's other dependencies
+# by hand with pip no longer checking them. So: remove it, then the SMOKE TEST — the worker's
+# own loading path, one inference on an empty frame (guard_smoke.py). If openvino needs the
+# package after all, it goes back and the install continues: never leave openvino broken.
+# Either way the barrier is the kernel filter in the unit (§13 F.3); this only takes away
+# the thing it would have to stop. Which branch ran is printed as one TELEMETRY: line (§13).
+SMOKE="${SCRIPT_DIR}/guard_smoke.py"
+smoke() {
+  "${VENV}/bin/python" "$SMOKE" "$MODEL_DIR" "$APP_DIR" 2>&1 | tee -a "$LOG_FILE"
+  return "${PIPESTATUS[0]}"
+}
+TELE_VER="$("${VENV}/bin/python" -c "import importlib.metadata as m; print(m.version('openvino-telemetry'))" 2>/dev/null || true)"
+if ! $READY; then
+  say "TELEMETRY: NOT DECIDED — no model, so nothing proves openvino works without it; openvino-telemetry ${TELE_VER:-absent} left as it is. Run again once the model is in place."
+elif [ -z "$TELE_VER" ]; then
+  smoke || fail "SMOKE TEST FAILED (openvino-telemetry already absent) — this venv cannot load and run the model"
+  same "TELEMETRY: REMOVED — openvino-telemetry absent, and the smoke test passes without it"
+else
+  "${VENV}/bin/pip" uninstall -y -q openvino-telemetry >>"$LOG_FILE" 2>&1     || fail "pip uninstall openvino-telemetry FAILED"
+  if smoke; then
+    did "TELEMETRY: REMOVED — openvino-telemetry ${TELE_VER} uninstalled; the smoke test loads the model and runs one inference without it"
+  else
+    say "smoke test FAILED without openvino-telemetry — putting it back"
+    "${VENV}/bin/pip" install -q --only-binary=:all: "openvino-telemetry==${TELE_VER}" >>"$LOG_FILE" 2>&1       || fail "could not reinstall openvino-telemetry ${TELE_VER} — the guard venv now lacks a dependency openvino needs"
+    smoke || fail "SMOKE TEST FAILED with openvino-telemetry back in place — openvino cannot load and run the model; not a telemetry problem"
+    say "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    say "TELEMETRY: KEPT — openvino needs openvino-telemetry ${TELE_VER}: the smoke test failed without it and passed with it."
+    say "  Egress protection is now the kernel filter ALONE — §13 F.3 must show it blocks."
+    say "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+  fi
+fi
 
 echo ""
 if $READY; then

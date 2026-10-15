@@ -13,6 +13,12 @@ test can say what the script did and — the point of half of these — what it 
   TC-GINS-07  one instance id, the same in guard.env and the backend .env; a mismatch fails
   TC-GINS-08  a failing pip is a failure, not a warning
   TC-GINS-09  the unit: never enabled by the script, egress filter as measured, own venv
+  TC-GINS-10  openvino-telemetry (installed BY pip as openvino's dependency) is removed when
+              the smoke test passes without it — TELEMETRY: REMOVED
+  TC-GINS-11  ...and put back, loudly, when the smoke test needs it — TELEMETRY: KEPT, exit 0
+  TC-GINS-12  negative control — a smoke test that fails even with it back: exit 1, never
+              "installed", and the package is back (openvino is not left without it)
+  TC-GINS-13  no model: nothing can prove openvino works without it, so it is not touched
 
 What this cannot show, and §13 does: that the real openvino wheel installs on the NUC's
 Python, that useradd/chown behave, and that the worker really starts under the unit.
@@ -29,6 +35,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "nuc_image" / "install-guard.sh"
+SMOKE = REPO / "nuc_image" / "guard_smoke.py"
 UNIT = REPO / "nuc_image" / "cloud-iot-guard.service"
 SECRET_URL = "rtsp://admin:Pa55-word-9@192.168.1.191:554/profile1"
 
@@ -67,7 +74,8 @@ def _stub(path: Path, body: str) -> None:
 
 
 class Rig:
-    def __init__(self, tmp: Path, *, model=True, backend_openvino=False, pip_fails=False):
+    def __init__(self, tmp: Path, *, model=True, backend_openvino=False, pip_fails=False,
+                 smoke: str | None = None):
         self.tmp = tmp
         self.root = tmp / "root"
         self.calls = tmp / "calls.log"
@@ -75,7 +83,7 @@ class Rig:
         # The scripts as git stores them (LF): a CRLF checkout on Windows would break bash.
         nuc = tmp / "nuc_image"
         nuc.mkdir(parents=True)
-        for src in (SCRIPT, UNIT):
+        for src in (SCRIPT, UNIT, SMOKE):
             (nuc / src.name).write_bytes(src.read_bytes().replace(b"\r\n", b"\n"))
         self.script = nuc / SCRIPT.name
 
@@ -110,6 +118,27 @@ fi""")
         _stub(app / "backend" / ".venv" / "bin" / "python",
               f'{log}; exit {1 if backend_openvino else 0}')
         self.guard_env = app / "guard" / "guard.env"
+        self.tele = tmp / "telemetry_installed"
+        if smoke is not None:
+            # A venv whose pip behaves like the real one around openvino-telemetry: installing
+            # the requirements pulls it in (openvino depends on it), uninstall removes it.
+            # The smoke test passes always ("ok"), only with the package ("needs"), or never.
+            t = self.tele.as_posix()
+            ok_if = {"ok": "true", "needs": f'[ -f "{t}" ]', "broken": "false"}[smoke]
+            venv_bin = app / "guard" / ".venv" / "bin"
+            _stub(venv_bin / "python", f"""{log}
+case "$*" in
+  *importlib.metadata*) [ -f "{t}" ] && {{ echo 2025.2.0; exit 0; }}; exit 1 ;;
+  *guard_smoke.py*) if {ok_if}; then echo "SMOKE OK: stub"; exit 0; fi; echo "SMOKE FAIL: stub"; exit 1 ;;
+esac
+exit 0""")
+            _stub(venv_bin / "pip", f"""{log}
+case "$*" in
+  *uninstall*openvino-telemetry*) rm -f "{t}" ;;
+  *openvino-telemetry==*) touch "{t}" ;;
+  *-r*) touch "{t}" ;;
+esac
+exit 0""")
         if model:
             ir = app / "guard" / "models" / "yolov8n_openvino"
             ir.mkdir(parents=True)
@@ -260,3 +289,49 @@ def test_tc_gins_09_the_unit_file(tmp_path):
     for verb in ("enable", "start", "restart"):
         assert f"$SYSTEMCTL {verb}" not in script and f"systemctl {verb}" not in script.replace(
             "# ", "").split("set -euo pipefail", 1)[1], f"the install script can {verb} the unit"
+
+
+# ═══ TC-GINS-10..13 — openvino-telemetry, decided by the smoke test (2026-10-15) ═══════════
+
+def test_tc_gins_10_removed_when_openvino_works_without_it(tmp_path):
+    rig = Rig(tmp_path, smoke="ok")
+    r = rig.run()
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "TELEMETRY: REMOVED — openvino-telemetry 2025.2.0 uninstalled" in r.stdout, r.stdout
+    assert not rig.tele.exists(), "the package is still installed"
+    pip = rig.calls_of("pip")
+    assert any("uninstall -y -q openvino-telemetry" in c for c in pip), pip
+    assert not any("openvino-telemetry==" in c for c in pip), "reinstalled although not needed"
+    # Second run: already absent, the smoke test still runs and still passes.
+    r2 = rig.run()
+    assert r2.returncode == 0 and "TELEMETRY: REMOVED — openvino-telemetry absent" in r2.stdout, r2.stdout
+
+
+def test_tc_gins_11_put_back_loudly_when_openvino_needs_it(tmp_path):
+    rig = Rig(tmp_path, smoke="needs")
+    r = rig.run()
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "TELEMETRY: KEPT — openvino needs openvino-telemetry 2025.2.0" in r.stdout, r.stdout
+    assert "kernel filter ALONE" in r.stdout
+    assert rig.tele.exists(), "openvino was left without a dependency it needs"
+    pip = [c for c in rig.calls_of("pip") if "openvino-telemetry" in c]
+    assert [("uninstall" in c) for c in pip] == [True, False], pip   # removed, then put back
+
+
+def test_tc_gins_12_negative_control_a_smoke_test_that_fails_fails_the_install(tmp_path):
+    rig = Rig(tmp_path, smoke="broken")
+    r = rig.run()
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "SMOKE TEST FAILED with openvino-telemetry back in place" in r.stdout, r.stdout
+    assert "GUARD INSTALL FAILED" in r.stdout
+    assert "GUARD INSTALLED" not in r.stdout and "TELEMETRY: REMOVED" not in r.stdout
+    assert rig.tele.exists(), "the package was not put back"
+
+
+def test_tc_gins_13_no_model_nothing_decided_nothing_removed(tmp_path):
+    rig = Rig(tmp_path, model=False, smoke="ok")
+    r = rig.run()
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert "TELEMETRY: NOT DECIDED" in r.stdout, r.stdout
+    assert rig.tele.exists()
+    assert not any("uninstall" in c for c in rig.calls_of("pip"))

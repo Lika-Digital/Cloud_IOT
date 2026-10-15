@@ -49,13 +49,24 @@ IOSchedulingClass=idle
 #   172.18.0.0/16   — with userland-proxy=false the kernel DNATs 127.0.0.1:1883 to the
 #                     container (172.18.0.2 on cabinet 1) and the filter sees the address
 #                     AFTER the rewrite: without this entry the worker could not connect.
-#                     Which mode the NUC runs is a §13 check, as is the container's address.
+#                     izmjereno 15.10. na ormaru — userland-proxy je uključen, pa je
+#                     localhost dovoljan (no /etc/docker/daemon.json; docker-proxy pids 2496
+#                     and 2502 publish 1883).
+#                     172.18.0.0/16 ostaje da guard preživi promjenu docker konfiguracije na
+#                     userland-proxy=false.
+#                     opseg je privatan i unutar hosta, pa držanje ne širi izloženost ni
+#                     prema LAN-u ni prema vani.
+#                     (Owner, 2026-10-15: removing it would be narrower, but a daemon.json
+#                     change made for another reason would then silently cut the worker off
+#                     the broker, and that failure looks like a broken broker.)
 #   192.168.1.0/24  — the camera LAN (cabinet 1's camera: 192.168.1.191).
 # A blocked connection looks exactly like a dead camera or broker ("connection refused" /
 # timeout); §13 says how to tell the two apart before anyone goes looking for a fault.
 IPAddressDeny=any
 IPAddressAllow=localhost 172.18.0.0/16 192.168.1.0/24
 # A request, not a barrier: OpenVINO honours it by choice. The two lines above are the barrier.
+# openvino-telemetry IS installed with openvino (pip dependency, measured 2026-10-15);
+# install-guard.sh removes it only if openvino provably works without it (§13 G.8).
 Environment=OPENVINO_TELEMETRY_OPT_OUT=1
 
 # Filesystem: writes exactly one place.

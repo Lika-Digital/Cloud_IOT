@@ -68,7 +68,11 @@ for the component that runs a large C++ library and talks to the camera. Recordi
 > (ffmpeg, OpenVINO) open — a destination outside the list never leaves the box, whatever a
 > library decides to do. `OPENVINO_TELEMETRY_OPT_OUT=1` is a request that OpenVINO honours by
 > its own choice, in this version; it stays as a courtesy and to keep failed telemetry attempts
-> out of the journal, but nothing depends on it. If the filter is not in force (F.2 shows an
+> out of the journal, but nothing depends on it. **`openvino-telemetry` IS installed**: pip pulls
+> it in as a dependency of openvino (measured on cabinet 1, 2026-10-15: "Would install openvino-2026.4.1 openvino-telemetry-2025.2.0"). `install-guard.sh` step 9 removes it
+> only when a smoke test (`nuc_image/guard_smoke.py`, the worker's own loading path) proves
+> openvino loads and runs the model without it, and puts it back otherwise; which branch ran is
+> one `TELEMETRY:` line, recorded in §13 G.8. Either way the kernel filter is the barrier. If the filter is not in force (F.2 shows an
 > empty allow list), there is no egress protection — the opt-out does not stand in for it.
 
 ```ini

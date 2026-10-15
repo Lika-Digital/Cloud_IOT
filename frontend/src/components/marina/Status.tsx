@@ -60,6 +60,10 @@ export const TONE = {
   notice: 'text-amber-200 border-amber-700/50 bg-amber-900/20',
   /** Notice text without a box. */
   noticeText: 'text-amber-200',
+  /** Something that is on and working (guard armed), as text. */
+  okText: 'text-green-300',
+  /** A confirmation box: a change was saved. Needs `border` alongside. */
+  done: 'text-green-300 border-green-700/50 bg-green-900/20',
 } as const
 
 export function Status({

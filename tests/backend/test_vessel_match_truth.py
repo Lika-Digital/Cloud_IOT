@@ -44,9 +44,15 @@ def berth(client, auth_headers):
         db.close()
     udb = _US()
     try:
-        b = Berth(name="VMT 1", pedestal_id=pid, berth_number=1, reference_image="ref.jpg")
+        b = Berth(name="VMT 1", pedestal_id=pid, berth_number=1)
         udb.add(b)
         udb.commit()
+        # Matching is configured by a reference PHOTO the matcher can read (2026-10-15), not by
+        # the berths.reference_image column — see test_vessel_match_configured.py.
+        from app.services import berth_analyzer
+        refs = berth_analyzer.REFS_BASE / f"berth_{b.id}"
+        refs.mkdir(parents=True, exist_ok=True)
+        (refs / "ref.jpg").write_bytes(b"\xff\xd8\xff")
         return b.id
     finally:
         udb.close()

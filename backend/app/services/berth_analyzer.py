@@ -25,6 +25,7 @@ Reference images are stored under:
 import asyncio
 import io
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -32,7 +33,11 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Base directory for per-berth reference images  (backend/backgrounds/berth_{id}/)
-REFS_BASE = Path(__file__).parent.parent.parent / "backgrounds"
+# BERTH_REFS_DIR moves it (2026-10-15): the test suite points it into its per-run directory, so
+# no test writes photos or empty berth_N directories into the real one.
+REFS_BASE = Path(os.environ.get("BERTH_REFS_DIR")
+                 or Path(__file__).parent.parent.parent / "backgrounds")
+_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 # ─── Reference-image helpers ──────────────────────────────────────────────────
@@ -41,6 +46,18 @@ def _refs_dir(berth_id: int) -> Path:
     d = REFS_BASE / f"berth_{berth_id}"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def has_reference_images(berth_id: int) -> bool:
+    """Whether vessel matching is configured for this berth (2026-10-15).
+
+    The matcher (`compute_match_score`) compares against THESE files, so their presence is the
+    only true answer. `berths.reference_image` is not: nothing that uploads a photo writes it,
+    only the first-start seed does. Read-only: unlike `_refs_dir`, never creates the directory.
+    """
+    d = REFS_BASE / f"berth_{berth_id}"
+    return d.is_dir() and any(p.is_file() and p.suffix.lower() in _IMAGE_SUFFIXES
+                              for p in d.iterdir())
 
 
 def list_reference_images(berth_id: int) -> list[str]:

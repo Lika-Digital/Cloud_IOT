@@ -45,3 +45,14 @@ def test_tc_iso_02_app_pedestal_engine_is_the_test_database(client):
     assert _same(engine.url, TEST_DB_PATH), (
         f"the app's pedestal.db engine is {engine.url}, not the test database — code that "
         f"opens SessionLocal() by hand reads a real file")
+
+
+def test_tc_iso_03_berth_reference_photos_go_to_the_test_directory(client):
+    """2026-10-15 — listing a berth's photos created backend/backgrounds/berth_N (41 empty
+    directories on the dev box, one per test berth ever made); uploading wrote real files."""
+    from _test_paths import TEST_DIR
+    from app.services import berth_analyzer
+    base = os.path.normcase(os.path.abspath(berth_analyzer.REFS_BASE))
+    assert base.startswith(os.path.normcase(os.path.abspath(TEST_DIR))), (
+        f"berth reference photos go to {berth_analyzer.REFS_BASE}, not the per-run test "
+        f"directory — tests write into the real one")

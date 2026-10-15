@@ -38,6 +38,7 @@ from ..models.session import Session
 from ..models.socket_config import SocketConfig
 from ..models.valve_config import ValveConfig
 from ..services import marina_status as ms
+from ..services.berth_analyzer import has_reference_images
 from ..services.marina_status import BerthFacts
 from ..time_utils import iso_z
 
@@ -379,7 +380,10 @@ def _berth_payload(db: DBSession, berth, assignment, *, facts_base: BerthFacts,
             .first()
         )
 
-    match_configured = bool(getattr(berth, "reference_image", None))
+    # 2026-10-15 — the photos the matcher compares against, not `berths.reference_image`: no
+    # upload path (admin or ERP) writes that column, only the first-start seed, so it said
+    # "configured" for a berth with no photo and "not configured" for one with photos.
+    match_configured = has_reference_images(berth.id)
     facts = BerthFacts(
         heartbeat_age_s=facts_base.heartbeat_age_s,
         smart_mode=facts_base.smart_mode,

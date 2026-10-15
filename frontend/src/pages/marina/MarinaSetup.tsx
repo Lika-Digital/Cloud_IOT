@@ -5,6 +5,7 @@ import {
   type MarinaPedestal,
 } from '../../api/marina'
 import { listCabinetOutlets, type CabinetOutlet } from '../../api/nfc'
+import { SetupPhotos } from '../../components/marina/SetupPhotos'
 
 /**
  * Control panel — 3 steps, admin, re-runnable.
@@ -254,19 +255,23 @@ export default function MarinaSetup() {
       {/* ── Step 3 ─────────────────────────────────────────────────────────── */}
       {step === 3 && (
         <section className="border border-gray-700 rounded bg-gray-900/40 p-3">
-          <h2 className="text-sm font-semibold text-gray-100 mb-2">Check and save</h2>
-          <ul className="text-sm text-gray-200 flex flex-col gap-1">
+          <h2 className="text-sm font-semibold text-gray-100 mb-1">
+            Per berth: a photo of the boat that belongs there, then save
+          </h2>
+          <p className="text-xs text-gray-400 mb-2">
+            A boat at a berth with a photo is checked against it; a berth without one is not.
+            Photos are stored as soon as they are added.
+          </p>
+          <ul className="divide-y divide-gray-800">
             {rows.map((r) => (
-              <li key={r.berth_id} className="flex gap-3">
-                <span className="w-24 text-gray-400">
-                  Berth {r.berth_number ?? r.berth_id}
-                </span>
-                <span>{r.socket_id == null ? 'No socket' : `Q${r.socket_id}`}</span>
-              </li>
+              <SetupPhotos key={r.berth_id} berthId={r.berth_id}
+                label={`Berth ${r.berth_number ?? r.berth_id}`}
+                socket={r.socket_id == null ? 'No socket' : `Q${r.socket_id}`} />
             ))}
           </ul>
           <p className="text-xs text-gray-500 mt-3">
-            Saving replaces the whole mapping for this pedestal, and records who changed it.
+            Save stores the sockets from step 2. It replaces the whole mapping for this
+            pedestal, and records who changed it.
           </p>
           <button
             type="button"

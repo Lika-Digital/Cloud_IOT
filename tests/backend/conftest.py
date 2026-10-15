@@ -38,6 +38,10 @@ os.environ.setdefault("USER_DATABASE_URL", TEST_USER_DB)
 # 2026-10-13 — guard messages are accepted only from the backend's own worker instance; the
 # fake-worker tests speak as this one.
 os.environ.setdefault("GUARD_INSTANCE_ID", "test-guard-instance")
+# 2026-10-15 — berth reference photos go to the per-run directory, not backend/backgrounds.
+# Listing them used to create an empty berth_N directory there for every test berth (41 on the
+# dev box). Proof: test_test_isolation.py TC-ISO-03.
+os.environ.setdefault("BERTH_REFS_DIR", os.path.join(TEST_DIR, "backgrounds"))
 
 # ── Test DB URLs (file-based so cross-module fixtures share state) ────────────
 # Per-run, from _test_paths — see its docstring for the concurrent-run race this closes.

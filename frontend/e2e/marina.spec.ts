@@ -599,3 +599,59 @@ test('TC-UIH-04 a berth with no socket says so, and asks for no history', async 
   await expect(page.getByTestId('consumption-history')).toHaveCount(0)
   expect(asked).toBe(0)
 })
+
+// ═══ TC-UIW-01..02 — wizard step 3: per berth, the photo the boat is checked against ════════
+
+async function openStep3(page: Page, photos: Record<number, string[]>) {
+  await loginAs(page, 'admin')
+  await mockApi(page)
+  await mockCore(page, healthyCore())
+  await page.route('**/api/marina/berth-assignments/1', (r) => r.fulfill({ json: {
+    pedestal_id: 1,
+    assignments: [101, 102, 103, 104].map((b, i) => ({ berth_id: b, socket_id: i + 1 })),
+  } }))
+  await page.route('**/api/nfc/outlets/**', (r) => r.fulfill({ json: { reported: true, outlets: [] } }))
+  await page.route('**/api/admin/berths/*/reference-images', (r) => {
+    const id = Number(new URL(r.request().url()).pathname.split('/').at(-2))
+    if (r.request().method() === 'POST') {
+      photos[id] = [...(photos[id] ?? []), `boat_${id}.jpg`]
+      return r.fulfill({ json: { saved: [`boat_${id}.jpg`], count: 1 } })
+    }
+    return r.fulfill({ json: { images: photos[id] ?? [] } })
+  })
+  await page.goto('/marina/setup/1')
+  await page.getByRole('button', { name: 'Next' }).click()
+  await page.getByRole('button', { name: 'Next' }).click()
+  await expect(page.getByText('Step 3 of 3')).toBeVisible()
+}
+
+test('TC-UIW-01 step 3 says, per berth, whether its boat is checked — by the photos it has', async ({ page }) => {
+  await openStep3(page, { 101: ['ref_a.jpg', 'ref_b.jpg'] })
+  const b1 = page.getByTestId('setup-photos-101')
+  const b2 = page.getByTestId('setup-photos-102')
+  await expect(b1.getByTestId('setup-match')).toHaveText('2 photo(s): the boat here is checked against them')
+  await expect(b1).toContainText('Q1')
+  await expect(b1).toContainText('ref_b.jpg')
+  await expect(b2.getByTestId('setup-match')).toHaveText('No photo: the boat here is not checked')
+  // No switch that would store nothing: matching follows the photos (§5.6, 2026-10-15).
+  await expect(page.getByTestId('marina-setup').getByRole('checkbox')).toHaveCount(0)
+})
+
+test('TC-UIW-02 adding a photo uploads it to THAT berth and the berth then reads as checked', async ({ page }) => {
+  const photos: Record<number, string[]> = {}
+  await openStep3(page, photos)
+  const b2 = page.getByTestId('setup-photos-102')
+  await expect(b2.getByTestId('setup-match')).toHaveText('No photo: the boat here is not checked')
+  const posted = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith('/api/admin/berths/102/reference-images'))
+  await b2.getByLabel('Add a reference photo for Berth 2').setInputFiles(
+    { name: 'boat.jpg', mimeType: 'image/jpeg', buffer: Buffer.from([0xff, 0xd8, 0xff]) })
+  expect((await posted).headers()['content-type']).toContain('multipart/form-data')
+  await expect(b2.getByTestId('setup-match')).toHaveText('1 photo(s): the boat here is checked against them')
+  expect(photos[101]).toBeUndefined()        // nothing went to another berth
+  // The socket mapping is still saved by Save, as before.
+  const put = page.waitForRequest((r) => r.method() === 'PUT' && r.url().endsWith('/api/marina/berth-assignments/1'))
+  await page.route('**/api/marina/berth-assignments/1', (r) => r.request().method() === 'PUT'
+    ? r.fulfill({ json: { pedestal_id: 1, assignments: [] } }) : r.fallback())
+  await page.getByRole('button', { name: 'Save' }).click()
+  expect((await put).postDataJSON().assignments).toHaveLength(4)
+})

@@ -1,5 +1,6 @@
 """TC-UIR-01 — no raw status colour in the marina profile, outside the one component that owns it.
 TC-UIR-02 — no marina component over 250 lines (§9), added 2026-10-15 with the block 4 splits.
+TC-UIR-03 — the marina profile as a whole stays within 2 507 lines (§9, owner 2026-10-15).
 
 docs/ui_v2_spec.md §4: status is colour + icon + word, all three, always, and the enforcement is
 a TEST, not a lint rule (the gate's eslint never ran — D13). Until 2026-10-12 this test was
@@ -41,6 +42,10 @@ EXEMPT_UNTIL_BLOCK_4: dict[str, str] = {}
 
 # §9: no marina component over 250 lines (owner, 2026-10-12: "the limit stays").
 MAX_LINES = 250
+# §9, the whole profile (pages/marina + components/marina, .ts and .tsx). Owner, 2026-10-15: the
+# old target "under 1 200" is replaced by the measured size with block 4 complete. Raising it is
+# the owner's decision, made in the spec, not by editing this number to get a green gate.
+MAX_TOTAL_LINES = 2507
 
 
 def _files():
@@ -90,10 +95,20 @@ def test_tc_uir_02_no_marina_component_over_250_lines():
     """§9 — the limit existed only as a sentence in the spec until 2026-10-15.
 
     FAILS on the code before the splits (shown 2026-10-15): MarinaDashboard 402, MarinaSetup 307,
-    BerthDetail 264. The PROFILE TOTAL limit (under 1 200) is not asserted here: splitting
-    cannot meet it, and it is the owner's decision (§0.2 "§9 size limits")."""
+    BerthDetail 264. The profile total is TC-UIR-03."""
     seen = list(_files())
     assert len(seen) >= 8, f"the scan saw only {len(seen)} files — it is not looking"
     over = {p.relative_to(SRC).as_posix(): n for p in seen
             if (n := len(p.read_text(encoding="utf-8").splitlines())) > MAX_LINES}
     assert not over, f"over {MAX_LINES} lines (§9): {over}"
+
+
+def test_tc_uir_03_the_marina_profile_stays_within_its_total():
+    """§9 total, owner 2026-10-15: the size with block 4 complete, 2 507 lines. Counts .ts and .tsx, so a hook moved out of a
+    component still counts. The scan must see the files it is limiting (not a vacuous zero)."""
+    files = [p for d in SCOPE for p in sorted(d.rglob("*.ts*")) if p.suffix in (".ts", ".tsx")]
+    assert len(files) >= 20, f"the scan saw only {len(files)} files — it is not looking"
+    total = sum(len(p.read_text(encoding="utf-8").splitlines()) for p in files)
+    assert total <= MAX_TOTAL_LINES, (
+        f"the marina profile is {total} lines, over the §9 limit of {MAX_TOTAL_LINES} — "
+        f"the limit is the owner's to change (docs/ui_v2_spec.md §0.2), not this test's")

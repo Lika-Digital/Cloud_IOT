@@ -84,6 +84,9 @@ export async function mockApi(page: Page) {
   // Error logs
   await page.route('**/api/system/errors**', route => route.fulfill({ json: { items: [], total: 0 } }))
 
-  // WebSocket — intercept and do nothing (avoids connection errors)
-  await page.route('**/ws**', route => route.abort())
+  // The /ws endpoint over plain HTTP only. 2026-10-15: this was the glob '**/ws**', which also
+  // matched the MODULE /src/hooks/wsBus.ts and aborted it, so every admin page went blank.
+  // page.route never intercepts a WebSocket anyway (page.routeWebSocket does); a spec that
+  // needs the socket mocks it with routeWebSocket (marina.spec.ts TC-UIWS-*).
+  await page.route(/\/ws(\?.*)?$/, route => route.abort())
 }

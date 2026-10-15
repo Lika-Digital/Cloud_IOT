@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import type { AlarmRecord } from '../api/alarms'
 import { useAuthStore } from '../store/authStore'
+import { emitWsMessage } from './wsBus'
 
 const WS_URL = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`
 
@@ -80,6 +81,9 @@ export function useWebSocket() {
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data)
+          // Raw events for screens that need them (the marina dashboard's live figures) —
+          // first, so a store handler that throws cannot swallow them.
+          if (msg && typeof msg.event === 'string') emitWsMessage(msg)
           handleMessage(msg)
         } catch {
           // pong or unknown text

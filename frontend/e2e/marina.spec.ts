@@ -655,3 +655,134 @@ test('TC-UIW-02 adding a photo uploads it to THAT berth and the berth then reads
   await page.getByRole('button', { name: 'Save' }).click()
   expect((await put).postDataJSON().assignments).toHaveLength(4)
 })
+
+// ═══ TC-UIWS-01..03 — /marina on the websocket: live figures by WS, structure by REST ══════
+
+/** CORE as the server sends it: L/min is never in CORE (null by design, live over the WS). */
+function serverCore() {
+  const c = healthyCore()
+  c.pedestals[0].water_outlets = c.pedestals[0].water_outlets.map((w) => ({ ...w, litres_per_min: null as unknown as number }))
+  return c
+}
+
+/** A mocked /ws: the page's socket opens, and the test speaks for the server. */
+async function mockSocket(page: Page) {
+  const state: { ws: import('@playwright/test').WebSocketRoute | null; down: boolean } = { ws: null, down: false }
+  await page.routeWebSocket(/\/ws$/, (ws) => {
+    // Server down: hand the reconnect to the real address, which refuses it (the dev proxy
+    // points /ws at a closed port), so the page stays disconnected — not a 1 s blip.
+    if (state.down) { ws.connectToServer(); return }
+    state.ws = ws
+  })
+  return {
+    open: () => expect.poll(() => state.ws !== null).toBe(true),
+    send: (event: string, data: Record<string, unknown>) => state.ws!.send(JSON.stringify({ event, data })),
+    /** The server goes away: this connection closes and every reconnect is refused. */
+    down: () => { state.down = true; state.ws!.close() },
+  }
+}
+
+async function countCore(page: Page, body: unknown) {
+  const calls = { n: 0 }
+  await page.route('**/api/marina/berths', (r) => { calls.n += 1; return r.fulfill({ json: body }) })
+  return calls
+}
+
+/** The count once the page has finished loading. The dev build mounts twice (StrictMode), so the
+    first load is 1 or 2 fetches; every assertion below is relative to this, not to 1. */
+async function settled(page: Page, calls: { n: number }) {
+  await expect.poll(() => calls.n).toBeGreaterThan(0)
+  await expect(page.getByTestId('marina-dashboard')).toBeVisible()
+  await page.waitForTimeout(500)
+  return calls.n
+}
+
+test('TC-UIWS-01 amps and L/min arrive over the websocket, only where the outlet is in use, with no refetch', async ({ page }) => {
+  const sock = await mockSocket(page)
+  const core = await countCore(page, serverCore())
+  await gotoMarina(page)
+  await page.getByRole('button', { name: 'All (4)' }).click()
+  await sock.open()
+  await expect(page.getByTestId('power-101')).toContainText('9.5')
+  await expect(page.getByTestId('water-V1')).toContainText('—')       // CORE has no flow figure
+  const before = core.n
+
+  sock.send('meter_telemetry_received', { pedestal_id: 1, socket_id: 1, current_amps: 14.27 })
+  sock.send('meter_telemetry_received', { pedestal_id: 1, socket_id: 2, current_amps: 3.3 })   // idle socket
+  sock.send('water_reading', { pedestal_id: 1, valve_id: 1, lpm: 7.34 })
+  sock.send('water_reading', { pedestal_id: 1, valve_id: 2, lpm: 5 })                          // valve not in use
+
+  await expect(page.getByTestId('power-101')).toContainText('14.27')
+  await expect(page.getByTestId('water-V1')).toContainText('7.3')
+  await expect(page.getByTestId('power-102')).not.toContainText('3.3')   // idle: CORE's dash stays
+  await expect(page.getByTestId('water-V2')).not.toContainText('5 L/min')
+  await page.waitForTimeout(1_500)
+  expect(core.n, 'a telemetry tick must not re-fetch CORE').toBe(before)
+})
+
+test('TC-UIWS-02 a state event re-fetches CORE once per burst — status stays the server\'s', async ({ page }) => {
+  const sock = await mockSocket(page)
+  const core = await countCore(page, serverCore())
+  await gotoMarina(page)
+  await sock.open()
+  const base = await settled(page, core)
+  for (const n of [1, 2, 3]) sock.send('socket_state_changed', { pedestal_id: 1, socket_id: n, state: 'idle' })
+  sock.send('alarm_triggered', { pedestal_id: 1 })
+  await expect.poll(() => core.n).toBe(base + 1)
+  await page.waitForTimeout(1_500)
+  expect(core.n, 'four events in one burst, one re-fetch').toBe(base + 1)
+})
+
+test('TC-UIWS-03 no 15 s polling while the socket is up; polling resumes when it drops; a silent figure expires', async ({ page }) => {
+  await page.clock.install()
+  const sock = await mockSocket(page)
+  const core = await countCore(page, serverCore())
+  await gotoMarina(page)
+  await page.getByRole('button', { name: 'All (4)' }).click()
+  await sock.open()
+  await expect.poll(() => core.n).toBeGreaterThan(0)
+  await expect(page.getByTestId('power-101')).toContainText('9.5')
+  const base = core.n
+
+  sock.send('meter_telemetry_received', { pedestal_id: 1, socket_id: 1, current_amps: 14.27 })
+  await expect(page.getByTestId('power-101')).toContainText('14.27')
+  // 32 s connected: a 15 s poll fires at least once in that (measured with a mutant: a single
+  // 16 s step did NOT reliably cross its first tick, and the check passed vacuously); the 60 s
+  // safety re-fetch does not. Then real time for a fired poll's fetch to arrive before counting.
+  await page.clock.runFor(32_000)
+  await page.waitForTimeout(1_500)
+  expect(core.n, 'a 15 s poll ran while the websocket was up').toBe(base)
+
+  // 60 s after the last reading the live figure is no longer "now": back to CORE's value.
+  await page.clock.runFor(30_000)
+  await expect(page.getByTestId('power-101')).toContainText('9.5')
+  await expect(page.getByTestId('power-101')).not.toContainText('14.27')
+
+  // The socket drops: CORE is polled again every 15 s.
+  const n = core.n
+  sock.down()
+  await page.clock.runFor(16_000)
+  await expect.poll(() => core.n).toBeGreaterThan(n)
+})
+
+test('TC-UIWS-04 a state report re-fetches only when the state CHANGED — the cabinet repeats it every few seconds', async ({ page }) => {
+  // MEASURED in mqtt_handlers.py: socket_state_changed goes out on every socket status message,
+  // changed or not; opta_status and pedestal_health_updated on every heartbeat.
+  const sock = await mockSocket(page)
+  const core = await countCore(page, serverCore())
+  await gotoMarina(page)
+  await sock.open()
+  const base = await settled(page, core)
+  for (let i = 0; i < 5; i++) {
+    sock.send('socket_state_changed', { pedestal_id: 1, socket_id: 1, state: 'active' })   // as CORE says
+    sock.send('socket_state_changed', { pedestal_id: 1, socket_id: 2, state: 'idle' })
+    sock.send('opta_water_status', { pedestal_id: 1, valve_name: 'V1', state: 'active' })
+    sock.send('opta_socket_status', { pedestal_id: 1, socket_name: 'Q1', state: 'active' })
+    sock.send('opta_status', { pedestal_id: 1, seq: i })
+    sock.send('pedestal_health_updated', { pedestal_id: 1 })
+  }
+  await page.waitForTimeout(2_000)
+  expect(core.n, 'repeated, unchanged reports re-fetched CORE').toBe(base)
+  sock.send('socket_state_changed', { pedestal_id: 1, socket_id: 1, state: 'idle' })       // a real change
+  await expect.poll(() => core.n).toBe(base + 1)
+})

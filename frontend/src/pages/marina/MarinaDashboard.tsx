@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { getMarinaCore, type MarinaCore } from '../../api/marina'
 import { TONE } from '../../components/marina/Status'
 import { PedestalBlock } from '../../components/marina/PedestalBlock'
+import { useLiveCore, useMarinaLive } from '../../components/marina/useMarinaLive'
 
 /**
  * L1 — the marina dashboard. One row per berth, needs-attention first.
@@ -27,8 +28,6 @@ type LoadState =
    * marked stale beats no data.
    */
   | { kind: 'error'; message: string; stale: MarinaCore | null }
-
-const REFRESH_MS = 15_000
 
 function describeError(e: unknown): string {
   const err = e as { response?: { status?: number }; code?: string; message?: string }
@@ -58,13 +57,12 @@ export default function MarinaDashboard() {
     }
   }, [])
 
-  useEffect(() => {
-    load()
-    const t = setInterval(load, REFRESH_MS)
-    return () => clearInterval(t)
-  }, [load])
-
-  const core = state.kind === 'ready' ? state.core : state.kind === 'error' ? state.stale : null
+  // Structure once here; after that, live figures and re-fetches come from the websocket,
+  // with polling only as the fallback (useMarinaLive, block 4, 2026-10-15).
+  useEffect(() => { load() }, [load])
+  const fetched = state.kind === 'ready' ? state.core : state.kind === 'error' ? state.stale : null
+  const { live, now } = useMarinaLive(load, fetched)
+  const core = useLiveCore(fetched, live, now)
 
   const counts = useMemo(() => {
     // Counts what the filter SHOWS, including `unknown`. A button reading "Needs attention

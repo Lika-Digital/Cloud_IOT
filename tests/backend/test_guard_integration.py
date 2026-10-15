@@ -32,9 +32,19 @@ file replayed at wallclock rate). Nothing else.
               GUARD_INTEGRATION_REQUIRED=1 makes it fatal
   TC-GINT-09  a SECOND worker for the same camera on the same broker (another install) is
               neither armed by our command nor able to make us read ARMED (2026-10-13)
+  TC-GINT-10  the suite ran on the broker it was meant to: its OWN mosquitto, unless an
+              external one was named on purpose (2026-10-15)
 
-Running this on the NUC: the compose broker on :1883 is used automatically. See
-`docs/guard_deploy_runbook.md` §2.
+The broker (2026-10-15, owner's decision). By default the suite starts its OWN mosquitto on a
+free port and never borrows one already on the machine. Until 2026-10-15 it took whatever
+answered on localhost:1883 first, and on the dev box that is a Windows mosquitto service
+(installed 2026-02-09, configuration unknown to us): every gate before that date measured
+this suite against a broker we did not configure. Measured the day it changed: a subscriber
+on that service saw 69 of the suite's live messages under the old fixture, and 0 under this.
+
+Running this on the NUC, against the compose broker on purpose (a private broker would not
+prove the real one works): GUARD_TEST_BROKER=127.0.0.1:1883. See
+`docs/guard_deploy_runbook.md` §2. The gate clears that variable, so it can never do this.
 """
 from __future__ import annotations
 
@@ -136,43 +146,78 @@ def _mosquitto_bin() -> str | None:
     return None
 
 
-@pytest.fixture(scope="module")
-def broker(tmp_path_factory) -> dict:
-    """A real broker.
+def _external_broker() -> tuple[str, int] | None:
+    """The broker named on purpose by GUARD_TEST_BROKER=host:port, or None for our own.
 
-    Preference order, and the reason for it:
-
-    1. **An already-running broker** at GUARD_TEST_BROKER_HOST/PORT, default localhost:1883.
-       That is the NUC case — compose already runs `eclipse-mosquitto:2.0` there, and the
-       whole point of this suite is that it runs where it matters.
-    2. **A private mosquitto** on an ephemeral port. That is the dev-box case, and it keeps
-       the suite from touching a broker that carries real cabinet traffic.
-
-    Skipping is the last resort and is reported, never silent: a skipped integration test is
-    the unanswered question this file was written to answer.
+    Never inferred from what happens to be listening: a broker that is merely there is not
+    one we chose. The two variables this replaced are refused rather than ignored, so a
+    runbook still setting them cannot quietly measure something else.
     """
-    host = os.environ.get("GUARD_TEST_BROKER_HOST", "localhost")
-    port = int(os.environ.get("GUARD_TEST_BROKER_PORT", "1883"))
+    for old in ("GUARD_TEST_BROKER_HOST", "GUARD_TEST_BROKER_PORT"):
+        if os.environ.get(old):
+            pytest.fail(f"{old} is no longer read (2026-10-15). To run against an external "
+                        "broker on purpose, set GUARD_TEST_BROKER=host:port.")
+    raw = os.environ.get("GUARD_TEST_BROKER", "").strip()
+    if not raw:
+        return None
+    host, _, port = raw.rpartition(":")
+    if not host or not port.isdigit():
+        pytest.fail(f"GUARD_TEST_BROKER={raw!r} is not host:port")
+    return host, int(port)
 
-    if _reachable(host, port):
+
+def _announce(request, text: str) -> None:
+    """One line in the run's output naming the broker, so the log says what it ran against."""
+    line = f"GUARD-INTEGRATION BROKER: {text}"
+    reporter = request.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None:
+        reporter.write_line(line)
+    else:
+        print(line, file=sys.stderr)
+
+
+@pytest.fixture(scope="module")
+def broker(tmp_path_factory, request) -> dict:
+    """A real broker, and by default OUR OWN.
+
+    1. **A private mosquitto** on a free port, bound to 127.0.0.1. Always, unless (2) — even
+       when something already answers on :1883. On the dev box that something is a Windows
+       service we never configured; on the NUC it is the production broker. Neither is ours.
+    2. **An external broker, named on purpose** by GUARD_TEST_BROKER=host:port. That is the
+       NUC runbook's case: it runs the suite against the compose broker because a private one
+       would not prove the real one works.
+
+    No fallback from one to the other. If our own broker cannot start, the suite does not
+    borrow one: it fails, or (no binary) refuses through `_unanswered`, which the gate makes
+    fatal. Either way the broker it used is announced in the run's output.
+    """
+    target = _external_broker()
+    if target is not None:
+        host, port = target
+        if not _reachable(host, port):
+            _unanswered(
+                f"GUARD_TEST_BROKER={host}:{port} was named and nothing is listening there",
+                "start the compose broker with `sudo docker compose up -d mosquitto`",
+            )
+        _announce(request, f"EXTERNAL {host}:{port}, named by GUARD_TEST_BROKER")
         yield {"host": host, "port": port, "own": False}
         return
 
     exe = _mosquitto_bin()
     if exe is None:
         _unanswered(
-            f"no broker: nothing is listening on {host}:{port} and no mosquitto binary "
-            f"was found",
-            "start the compose broker with `sudo docker compose up -d mosquitto`, "
-            "or set MOSQUITTO_BIN to a mosquitto executable",
+            "no mosquitto binary: this suite runs its own broker and never borrows one",
+            "install mosquitto or set MOSQUITTO_BIN to a mosquitto executable; on the NUC, "
+            "name the compose broker with GUARD_TEST_BROKER=127.0.0.1:1883",
         )
 
     tmp = tmp_path_factory.mktemp("mosquitto")
     own_port = _free_port()
+    assert own_port != 1883, "the free port came back as 1883 — not our own broker"
     conf = tmp / "mosquitto.conf"
     # allow_anonymous matches the production broker's configuration; this suite is not the
     # place to test broker auth, and pretending otherwise would test the fixture.
-    conf.write_text(f"listener {own_port}\nallow_anonymous true\n")
+    conf.write_text(f"listener {own_port} 127.0.0.1\nallow_anonymous true\n")
     log = open(tmp / "mosquitto.log", "w")
     proc = subprocess.Popen([exe, "-c", str(conf), "-v"], stdout=log, stderr=log)
 
@@ -189,7 +234,8 @@ def broker(tmp_path_factory) -> dict:
         log.close()
         pytest.fail("mosquitto did not start within 15s")
 
-    yield {"host": "127.0.0.1", "port": own_port, "own": True}
+    _announce(request, f"PRIVATE mosquitto 127.0.0.1:{own_port} (pid {proc.pid}, {exe})")
+    yield {"host": "127.0.0.1", "port": own_port, "own": True, "pid": proc.pid}
 
     proc.terminate()
     try:
@@ -224,8 +270,9 @@ async def backend(broker):
 
     from app.services import mqtt_client as _mc
 
-    # 2026-10-11 — a PER-RUN marina namespace on the broker. The broker on :1883 is shared
-    # (deliberately: on the NUC this suite runs on the real one), and two concurrent pytest
+    # 2026-10-11 — a PER-RUN marina namespace on the broker. The broker on :1883 was shared
+    # (deliberately on the NUC, where this suite runs on the real one; by accident on the dev
+    # box until 2026-10-15, see the module docstring), and two concurrent pytest
     # runs used the same marina, camera and worker client id. The broker disconnects a
     # client when another connects with its id, so each run's worker kicked the other's —
     # every "worker went down / ack never came / last will" test then failed for a reason
@@ -968,3 +1015,28 @@ async def test_unanswered_refuses_loudly_and_fatally_when_required(monkeypatch):
     with pytest.raises(pytest.fail.Exception) as failed:
         _unanswered("no broker", "start compose")
     assert "INTEGRATION NOT RUN" in str(failed.value)
+
+
+# ═══ TC-GINT-10 ══════════════════════════════════════════════════════════════
+
+async def test_the_suite_ran_on_the_broker_it_was_meant_to(broker):
+    """2026-10-15 — every other test here is only as good as the broker it ran against.
+
+    Without GUARD_TEST_BROKER the broker must be OUR OWN mosquitto, a process this module
+    started, on a port that is not 1883 — even (the point) when something IS listening on
+    1883. Under the old fixture, on the dev box where a Windows mosquitto service holds 1883,
+    this fails: that fixture took the service. With GUARD_TEST_BROKER set (the NUC runbook),
+    it must be exactly the broker that was named, nothing else.
+    """
+    named = os.environ.get("GUARD_TEST_BROKER", "").strip()
+    if named:
+        assert broker["own"] is False and f"{broker['host']}:{broker['port']}" == named, \
+            f"GUARD_TEST_BROKER named {named}, the suite ran on {broker}"
+        return
+    assert broker["own"] is True, \
+        f"no broker was named, yet the suite ran on one it did not start: {broker}"
+    assert broker["port"] != 1883, f"our own broker must not be on 1883: {broker}"
+    # It is the process we started, still alive, and it is the one answering on that port.
+    assert broker.get("pid"), f"no pid recorded for our own broker: {broker}"
+    assert _reachable("127.0.0.1", broker["port"]), \
+        f"nothing answers on our broker's port {broker['port']}"

@@ -120,6 +120,16 @@ if [ -z "${GUARD_FFMPEG:-}" ] && ! command -v ffmpeg &>/dev/null; then
     echo -e "      worker smoke tests that exercise capture -> alarm -> clip.${NC}"
 fi
 
+# ── the guard integration suite's broker: our own, never one already on the machine ──
+# 2026-10-15 (owner's decision). The suite used to take whatever answered on localhost:1883,
+# and on this dev box that is a Windows mosquitto service nobody here configured: every gate
+# until this date measured it against that. The fixture now starts its own mosquitto on a
+# free port; an external broker only when GUARD_TEST_BROKER names one, which the gate never
+# does, so it is cleared here. REQUIRED=1: if our broker cannot be had, the gate stops rather
+# than skipping. The broker the run used is printed after pytest.
+unset GUARD_TEST_BROKER GUARD_TEST_BROKER_HOST GUARD_TEST_BROKER_PORT
+export GUARD_INTEGRATION_REQUIRED=1
+
 # 2026-10-11 — every path this stage writes is PER RUN.
 #
 # The test DBs, the reports dir and this log used to be fixed paths shared by every run on
@@ -162,7 +172,9 @@ cp "$PYTEST_LOG" "${LOG_DIR}/pytest_last.log" 2>/dev/null || true
 ls -1t "${LOG_DIR}"/pytest_2*.log 2>/dev/null | tail -n +21 | while IFS= read -r _old; do rm -f "$_old"; done
 ls -1t "${LOG_DIR}"/_failing_2*.txt 2>/dev/null | tail -n +21 | while IFS= read -r _old; do rm -f "$_old"; done
 
+_BROKER_LINE=$(sed 's/\x1b\[[0-9;]*m//g' "$PYTEST_LOG" | grep -aoE "GUARD-INTEGRATION BROKER: .*" | tail -1)
 echo ""
+echo "  ${_BROKER_LINE:-GUARD-INTEGRATION BROKER: none announced (the integration suite did not reach its broker)}"
 if [ $PYTEST_EXIT -eq 0 ]; then
     echo -e "${GREEN}[✔] pytest passed${NC}"
 else

@@ -80,12 +80,23 @@ Python is 3.14.
 
 ### 2.1 The broker — yes, it needs docker compose
 
-The suite needs a **real MQTT broker**. It finds one in this order:
+The suite needs a **real MQTT broker**, and it never picks one up just because it is there
+(2026-10-15, owner's decision):
 
-1. anything already listening on `localhost:1883` — **on the NUC this is the compose broker,
-   and it is what you want**;
-2. otherwise a private `mosquitto` binary on an ephemeral port (the dev-box path);
-3. otherwise it **skips and says so**.
+1. **By default it starts its OWN mosquitto** on a free port, bound to 127.0.0.1. That is what
+   the dev gate does, always; it never borrows a broker already listening on :1883.
+2. **Here, on the NUC, you name the compose broker on purpose:**
+   `GUARD_TEST_BROKER=127.0.0.1:1883` (the command in 2.2 sets it). A private broker would not
+   prove the real one works, and the real one is the point of running it here.
+3. If the named broker does not answer, or no broker can be had, it **refuses**, and with
+   `GUARD_INTEGRATION_REQUIRED=1` that refusal is a failure.
+
+The run prints one line saying which broker it used — read it:
+`GUARD-INTEGRATION BROKER: EXTERNAL 127.0.0.1:1883, named by GUARD_TEST_BROKER`. Anything
+else (`PRIVATE ...`) means this run did NOT test the compose broker.
+
+`GUARD_TEST_BROKER_HOST` / `GUARD_TEST_BROKER_PORT` are no longer read; set, they fail the run
+so an old command cannot silently measure something else.
 
 So confirm compose is up first:
 
@@ -109,7 +120,7 @@ cd ~/Cloud_IOT && sudo docker compose up -d mosquitto
 
 ```bash
 cd ~/Cloud_IOT
-GUARD_INTEGRATION_REQUIRED=1 GUARD_FFMPEG=$(command -v ffmpeg) \
+GUARD_INTEGRATION_REQUIRED=1 GUARD_TEST_BROKER=127.0.0.1:1883 GUARD_FFMPEG=$(command -v ffmpeg) \
   ./backend/.venv/bin/python -m pytest tests/backend/test_guard_integration.py -v -rs
 ```
 
@@ -122,7 +133,7 @@ not be skippable here.
 
 **STOP if anything fails.**
 
-Expect **7 passed**:
+Expect **10 passed**, and the `GUARD-INTEGRATION BROKER: EXTERNAL 127.0.0.1:1883` line:
 
 | Test | Proves |
 |---|---|
@@ -133,6 +144,9 @@ Expect **7 passed**:
 | TC-GINT-05 | a killed worker becomes UNAVAILABLE via the broker's Last Will |
 | TC-GINT-06 | a command sent while the worker is down goes overdue |
 | TC-GINT-07 | an unacked command leaves no false ARMED |
+| TC-GINT-08 | a refusal says it is not a pass, and is fatal under `GUARD_INTEGRATION_REQUIRED=1` |
+| TC-GINT-09 | a second worker for the same camera is neither armed by us nor read as ours |
+| TC-GINT-10 | the run used exactly the broker named by `GUARD_TEST_BROKER` |
 
 ### 2.3 And the rest of the suite
 

@@ -28,6 +28,12 @@ export interface UsageRow {
   customer_name: string | null
   nfc_user_id: string | null
   end_reason: string | null
+  /** 'register' | 'integrated_legacy' | 'unknown' | null. A figure without one is not shown
+   *  as measured (the report's rule, 2026-10-14). */
+  consumption_source: string | null
+  /** The two register readings the figure is the difference of (kWh or L), or null. */
+  register_start: number | null
+  register_end: number | null
 }
 
 export interface ReportMeta {

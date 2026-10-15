@@ -19,6 +19,8 @@ import MarinaWater from './pages/marina/MarinaWater'
 import MarinaAlarms from './pages/marina/MarinaAlarms'
 import MarinaGuard from './pages/marina/MarinaGuard'
 import MarinaSetup from './pages/marina/MarinaSetup'
+import BerthHistory from './pages/marina/BerthHistory'
+import WaterHistory from './pages/marina/WaterHistory'
 import LoginPage from './pages/LoginPage'
 import Register from './pages/Register'
 import ProtectedRoute from './components/auth/ProtectedRoute'
@@ -69,7 +71,9 @@ function AppInner() {
         {/* Marina profile. Three levels, no more, and back is always visible. */}
         <Route path="marina" element={<MarinaDashboard />} />
         <Route path="marina/berth/:berthId" element={<BerthDetail />} />
+        <Route path="marina/berth/:berthId/history" element={<BerthHistory />} />
         <Route path="marina/water" element={<MarinaWater />} />
+        <Route path="marina/water/:pedestalId/:outlet/history" element={<WaterHistory />} />
         <Route path="marina/alarms" element={<MarinaAlarms />} />
         <Route path="marina/guard" element={<MarinaGuard />} />
         {/* Installation — admin only, in the route and not just the menu (2026-10-15). The

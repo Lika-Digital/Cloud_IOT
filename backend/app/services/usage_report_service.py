@@ -160,6 +160,14 @@ def usage_rows(
             "water_liters": s.water_liters,
             "customer_id": s.customer_id,
             "end_reason": s.end_reason,
+            # 2026-10-15 (L3 history): the figure travels with its provenance and the two
+            # register readings it is the difference of — the same as the monthly report, so
+            # the screen and the file say the same thing about the same session.
+            "consumption_source": getattr(s, "consumption_source", None),
+            "register_start": (s.meter_water_start_l if s.type == "water"
+                               else s.meter_energy_start_kwh),
+            "register_end": (s.meter_water_end_l if s.type == "water"
+                             else s.meter_energy_end_kwh),
         }
         if include_identity:
             row["customer_name"] = names.get(s.customer_id)

@@ -484,3 +484,118 @@ test('TC-UIRC-04 every reason has its own sentence; out of contact is not "switc
   await expect(page.getByText('No contact with the pedestal, so it cannot be switched from here').first()).toBeVisible()
   await expect(page.getByText('The pedestal is switching this itself')).toHaveCount(0)
 })
+
+// ═══ TC-UIH-01..04 — L3 history (block 4) ══════════════════════════════════════════════
+
+function berthDetailBody(power: Record<string, unknown> = {}) {
+  const berth = healthyCore().pedestals[0].berths[0]
+  return {
+    ...berth,
+    power: { ...berth.power, phase_amps: null, ...power },
+    pedestal_id: 1,
+    cabinet_id: 'MAR_KRK_ORM_01',
+    outlet_spec: { outlet: 'Q1', rated_amps: 32, phases: 3, meter_type: null },
+    consumption: { kwh: 3.5, source: 'register', note: '' },
+    reference_image: null,
+    guard: { state: 'on', sentence: 'Guard on', scope: 'pedestal' },
+    guard_scope_note: 'One camera per pedestal.',
+  }
+}
+
+function usageRow(id: number, over: Record<string, unknown>) {
+  return {
+    session_id: id, socket_id: 1, type: 'electricity',
+    started_at: `2026-10-0${id}T09:00:00Z`, ended_at: `2026-10-0${id}T10:30:00Z`,
+    energy_kwh: null, water_liters: null, end_reason: null,
+    consumption_source: null, register_start: null, register_end: null, ...over,
+  }
+}
+
+test('TC-UIH-01 berth history: provenance on every figure, a dash for unmeasured, no partial total', async ({ page }) => {
+  await mockCore(page, healthyCore())
+  await page.route('**/api/marina/berths/101', (r) => r.fulfill({ json: berthDetailBody() }))
+  const asked: URL[] = []
+  let rows = [
+    usageRow(1, { energy_kwh: 1.25, consumption_source: 'register', register_start: 100, register_end: 101.25 }),
+    usageRow(2, { energy_kwh: 0.5, consumption_source: 'integrated_legacy' }),
+  ]
+  await page.route('**/api/pedestals/1/usage/history**', (r) => {
+    asked.push(new URL(r.request().url()))
+    return r.fulfill({ json: rows })
+  })
+
+  await page.goto('/marina/berth/101')
+  await page.getByRole('link', { name: 'History ›', exact: true }).click()
+  await expect(page).toHaveURL(/\/marina\/berth\/101\/history$/)
+  const h = page.getByTestId('consumption-history')
+  await expect(h.getByTestId('history-rows').locator('li')).toHaveCount(2)
+  // Asked for THIS socket, electricity, this month — not the whole pedestal.
+  const q = asked[0].searchParams
+  expect([q.get('resource'), q.get('socket_id'), q.get('month')])
+    .toEqual(['electricity', '1', new Date().toISOString().slice(0, 7)])
+  await expect(h).toContainText('1.250 kWh')
+  await expect(h).toContainText('meter reading')
+  await expect(h).toContainText('register 100 → 101.25 kWh')
+  await expect(h).toContainText('estimated, meter unavailable')
+  await expect(h.getByTestId('history-total')).toHaveText(
+    'Total: 1.750 kWh across 2 session(s) (of which 0.500 kWh estimated)')
+  await expect(page.getByTestId('berth-history')).toContainText('Sessions on socket Q1, which serves this berth now')
+
+  // One session not measured, one with a figure but NO provenance: both "—", and no total.
+  rows = [rows[0],
+    usageRow(3, { energy_kwh: null, consumption_source: 'unknown' }),
+    usageRow(4, { energy_kwh: 7.5, consumption_source: null })]
+  await page.reload()
+  await expect(h.getByTestId('history-rows').locator('li')).toHaveCount(3)
+  await expect(h.getByTestId('history-total')).toHaveText('Total not shown: 2 of 3 session(s) were not measured.')
+  await expect(h).not.toContainText('7.500')
+  await expect(h).toContainText('not measured (no provenance recorded)')
+  await expect(h.getByTestId('history-total')).not.toContainText('kWh')
+})
+
+test('TC-UIH-02 months: no "Later" on the current month; Earlier asks for the previous one', async ({ page }) => {
+  await mockCore(page, healthyCore())
+  await page.route('**/api/marina/berths/101', (r) => r.fulfill({ json: berthDetailBody() }))
+  const months: (string | null)[] = []
+  await page.route('**/api/pedestals/1/usage/history**', (r) => {
+    months.push(new URL(r.request().url()).searchParams.get('month'))
+    return r.fulfill({ json: [] })
+  })
+  await page.goto('/marina/berth/101/history')
+  const h = page.getByTestId('consumption-history')
+  await expect(h).toContainText('No completed sessions on Q1 in')
+  await expect(h.getByRole('button', { name: 'Later ›' })).toHaveCount(0)
+  await h.getByRole('button', { name: '‹ Earlier' }).click()
+  const now = new Date()
+  const prev = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)).toISOString().slice(0, 7)
+  await expect.poll(() => months.at(-1)).toBe(prev)
+  await expect(h.getByRole('button', { name: 'Later ›' })).toBeVisible()
+})
+
+test('TC-UIH-03 a valve has its own history, named V1, reached from the water page', async ({ page }) => {
+  await mockCore(page, healthyCore())
+  const asked: URL[] = []
+  await page.route('**/api/pedestals/1/usage/history**', (r) => {
+    asked.push(new URL(r.request().url()))
+    return r.fulfill({ json: [usageRow(1, { type: 'water', water_liters: 42, consumption_source: 'register',
+      register_start: 1000, register_end: 1042 })] })
+  })
+  await page.goto('/marina/water')
+  await page.getByRole('link', { name: 'History ›', exact: true }).first().click()
+  await expect(page).toHaveURL(/\/marina\/water\/1\/V1\/history$/)
+  await expect(page.getByTestId('water-history')).toContainText('Water outlet V1: history')
+  await expect(page.getByTestId('consumption-history')).toContainText('42.0 L')
+  await expect(page.getByTestId('consumption-history')).toContainText('register 1000 → 1042 L')
+  expect([asked[0].searchParams.get('resource'), asked[0].searchParams.get('socket_id')]).toEqual(['water', '1'])
+})
+
+test('TC-UIH-04 a berth with no socket says so, and asks for no history', async ({ page }) => {
+  await mockCore(page, healthyCore())
+  await page.route('**/api/marina/berths/101', (r) => r.fulfill({ json: berthDetailBody({ outlet: null }) }))
+  let asked = 0
+  await page.route('**/api/pedestals/**/usage/history**', (r) => { asked += 1; return r.fulfill({ json: [] }) })
+  await page.goto('/marina/berth/101/history')
+  await expect(page.getByTestId('berth-history')).toContainText('This berth has no electricity socket')
+  await expect(page.getByTestId('consumption-history')).toHaveCount(0)
+  expect(asked).toBe(0)
+})

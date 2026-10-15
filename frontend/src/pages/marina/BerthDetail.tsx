@@ -167,6 +167,13 @@ export default function BerthDetail() {
           !== sourceLabel(c.source).replace(/[.\s]/g, '').toLowerCase() && (
           <p className="text-xs text-gray-500 mt-1">{c.note}</p>
         )}
+        {/* L3 history: the sessions behind the figure above, month by month. */}
+        <Link
+          to={`/marina/berth/${d.berth_id}/history`}
+          className="text-xs text-blue-300 hover:underline mr-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400"
+        >
+          History ›
+        </Link>
         {/* Analytics is L3 (block 4, nav): reached from here, not from the nav. */}
         <Link
           to={`/analytics?pedestal=${d.pedestal_id}`}

@@ -146,6 +146,12 @@ export default function MarinaWater() {
                           <span className="text-base font-semibold text-gray-50 font-mono w-10">
                             {w.outlet}
                           </span>
+                          <Link
+                            to={`/marina/water/${p.pedestal_id}/${w.outlet}/history`}
+                            className="text-xs text-blue-300 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400"
+                          >
+                            History ›
+                          </Link>
                           <span
                             className={`text-xs px-2 py-0.5 rounded border font-medium whitespace-nowrap ${s.cls}`}
                           >

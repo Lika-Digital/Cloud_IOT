@@ -104,8 +104,10 @@ test.describe('Navigation — monitor role', () => {
   })
 
   test('sidebar shows read-only nav items for monitor role', async ({ page }) => {
-    await expect(page.getByRole('link', { name: /Dashboard/ })).toBeVisible()
+    // Block 4, nav (owner, 2026-10-15): staff get Marina, Water, Alarms, Guard — no Dashboard,
+    // no History. Enforced, not skipped, in marina.spec.ts TC-UIN-03.
+    await expect(page.getByRole('link', { name: /Water/ })).toBeVisible()
     await expect(page.getByRole('link', { name: /Analytics/ })).toHaveCount(0)   // block 4, nav: L3
-    await expect(page.getByRole('link', { name: /History/ })).toBeVisible()
+    await expect(page.getByRole('link', { name: /History/ })).toHaveCount(0)
   })
 })

@@ -321,7 +321,8 @@ test('TC-UIN-01 Analytics is not in the nav; berth detail opens it for its pedes
   await expect(page.getByTestId('marina-dashboard')).toBeVisible()
   // The accessible name is "📊 Analytics" — an anchored /^Analytics/ never matched and passed
   // on the old code; so first prove the nav is there at all.
-  await expect(page.getByRole('link', { name: /History/ }).first()).toBeVisible()
+  // (2026-10-15: proved by the Water item — History left the staff nav, TC-UIN-03.)
+  await expect(page.getByRole('navigation').getByRole('link', { name: /Water/ })).toBeVisible()
   await expect(page.getByRole('link', { name: /Analytics/ })).toHaveCount(0)
 
   await page.goto('/marina/berth/101')
@@ -785,4 +786,47 @@ test('TC-UIWS-04 a state report re-fetches only when the state CHANGED — the c
   expect(core.n, 'repeated, unchanged reports re-fetched CORE').toBe(base)
   sock.send('socket_state_changed', { pedestal_id: 1, socket_id: 1, state: 'idle' })       // a real change
   await expect.poll(() => core.n).toBe(base + 1)
+})
+
+
+// ═══ TC-UIN-03..04 — block 4, nav LAST: staff Marina, Water, Alarms, Guard; admin + Setup ══
+
+const navLabels = async (page: Page) =>
+  (await page.getByRole('navigation').getByRole('link').allInnerTexts())
+    .map((t) => t.replace(/[^A-Za-z ]/g, '').trim())
+
+test('TC-UIN-03 staff nav is exactly Marina, Water, Alarms, Guard — and each opens its screen', async ({ page }) => {
+  // Owner, 2026-10-15: "Navigacija osoblja: MARINA, WATER, ALARMS, GUARD. Čarobnjak je admin only."
+  await mockCore(page, healthyCore())
+  await gotoMarina(page)
+  await expect(page.getByTestId('marina-dashboard')).toBeVisible()
+  expect(await navLabels(page)).toEqual(['Marina', 'Water', 'Alarms', 'Guard'])
+  const nav = page.getByRole('navigation')
+  for (const [label, url] of [['Water', /\/marina\/water$/], ['Alarms', /\/marina\/alarms$/],
+                              ['Guard', /\/marina\/guard$/], ['Marina', /\/marina$/]] as const) {
+    await nav.getByRole('link', { name: new RegExp(label) }).click()
+    await expect(page).toHaveURL(url)
+    // Exactly one item is marked current: "Marina" must not stay lit on /marina/water.
+    await expect(nav.locator('a.text-blue-400')).toHaveCount(1)
+    await expect(nav.locator('a.text-blue-400')).toContainText(label)
+  }
+})
+
+test('TC-UIN-04 admin nav keeps what it had, plus Setup, which opens the wizard of the one pedestal', async ({ page }) => {
+  await loginAs(page, 'admin')
+  await mockApi(page)
+  await mockCore(page, healthyCore())
+  await page.route('**/api/marina/berth-assignments/1', (r) => r.fulfill({ json: { pedestal_id: 1, assignments: [] } }))
+  await page.route('**/api/nfc/outlets/**', (r) => r.fulfill({ json: { reported: true, outlets: [] } }))
+  await page.goto('/marina')
+  await expect(page.getByTestId('marina-dashboard')).toBeVisible()
+  const labels = await navLabels(page)
+  for (const kept of ['Marina', 'Dashboard', 'History', 'Berth Occupancy', 'Billing', 'Customers',
+                      'Contracts', 'System Health', 'API Gateway', 'Settings']) {
+    expect(labels, `admin lost "${kept}"`).toContain(kept)
+  }
+  expect(labels.at(-1)).toBe('Setup')
+  await page.getByRole('navigation').getByRole('link', { name: /Setup/ }).click()
+  await expect(page).toHaveURL(/\/marina\/setup\/1$/)
+  await expect(page.getByTestId('marina-setup')).toBeVisible()
 })

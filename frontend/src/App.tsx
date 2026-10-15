@@ -19,6 +19,7 @@ import MarinaWater from './pages/marina/MarinaWater'
 import MarinaAlarms from './pages/marina/MarinaAlarms'
 import MarinaGuard from './pages/marina/MarinaGuard'
 import MarinaSetup from './pages/marina/MarinaSetup'
+import SetupIndex from './pages/marina/SetupIndex'
 import BerthHistory from './pages/marina/BerthHistory'
 import WaterHistory from './pages/marina/WaterHistory'
 import LoginPage from './pages/LoginPage'
@@ -83,6 +84,8 @@ function AppInner() {
           path="marina/setup/:pedestalId"
           element={<ProtectedRoute adminOnly><MarinaSetup /></ProtectedRoute>}
         />
+        {/* The admin nav's "Setup" (2026-10-15): one pedestal → its wizard; several → a list. */}
+        <Route path="marina/setup" element={<ProtectedRoute adminOnly><SetupIndex /></ProtectedRoute>} />
         <Route path="analytics" element={<Analytics />} />
         <Route path="history" element={<History />} />
         <Route

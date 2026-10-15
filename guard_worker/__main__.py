@@ -139,7 +139,9 @@ class WorkerConfig:
     broker_host: str = "localhost"
     broker_port: int = 1883
     storage_path: str = "/var/lib/marina-guard/recordings"
-    model_dir: str = "/opt/cloud-iot/guard/models"
+    # The backend's models directory, where scripts/guard_export_model.sh writes the IR. One
+    # copy, one path (owner, 2026-10-15): the worker reads it there rather than from a copy.
+    model_dir: str = "/opt/cloud-iot/backend/models"
     num_threads: int = 1
     segment_seconds: int = 10
     segment_ring: int = 6
@@ -169,7 +171,7 @@ class WorkerConfig:
             broker_host=_env("MQTT_BROKER_HOST", "localhost"),
             broker_port=_env_i("MQTT_BROKER_PORT", 1883),
             storage_path=_env("GUARD_STORAGE_PATH", "/var/lib/marina-guard/recordings"),
-            model_dir=_env("GUARD_MODEL_DIR", "/opt/cloud-iot/guard/models"),
+            model_dir=_env("GUARD_MODEL_DIR", "/opt/cloud-iot/backend/models"),
             num_threads=_env_i("GUARD_NUM_THREADS", 1),
             segment_seconds=_env_i("GUARD_SEGMENT_SECONDS", 10),
             segment_ring=_env_i("GUARD_SEGMENT_RING", 6),

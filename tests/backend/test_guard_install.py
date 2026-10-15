@@ -19,6 +19,11 @@ test can say what the script did and — the point of half of these — what it 
   TC-GINS-12  negative control — a smoke test that fails even with it back: exit 1, never
               "installed", and the package is back (openvino is not left without it)
   TC-GINS-13  no model: nothing can prove openvino works without it, so it is not touched
+  TC-GINS-14  one copy, one path (owner, 2026-10-15): the exporter, guard.env and the worker's
+              default all name /opt/cloud-iot/backend/models; no guard/models is made
+  TC-GINS-15  readiness looks where the WORKER will: a kept guard.env pointing elsewhere is
+              MODEL MISSING and says so, and correcting that one line makes it ready
+  TC-GINS-16  negative control — a model the guard account cannot read is NOT ready (exit 3)
 
 What this cannot show, and §13 does: that the real openvino wheel installs on the NUC's
 Python, that useradd/chown behave, and that the worker really starts under the unit.
@@ -75,7 +80,7 @@ def _stub(path: Path, body: str) -> None:
 
 class Rig:
     def __init__(self, tmp: Path, *, model=True, backend_openvino=False, pip_fails=False,
-                 smoke: str | None = None):
+                 smoke: str | None = None, readable=True):
         self.tmp = tmp
         self.root = tmp / "root"
         self.calls = tmp / "calls.log"
@@ -93,6 +98,9 @@ class Rig:
         _stub(stubs / "chown", f'{log}; for a; do :; done; [ -d "$a" ] && touch "$a/.owned_by_guard"; exit 0')
         _stub(stubs / "owner_of", '[ -f "$1/.owned_by_guard" ] && echo guard || echo root')
         _stub(stubs / "systemctl", log)
+        # `runuser -u guard -- <cmd>`: runs the command, or (readable=False) is refused, as a
+        # file the guard account may not open would be.
+        _stub(stubs / "runas", 'exec "$@"' if readable else 'exit 1')
         venv_py = f'{log}; exit 0'
         venv_pip = f'{log}; exit {1 if pip_fails else 0}'
         _stub(stubs / "python3", f"""{log}
@@ -109,7 +117,8 @@ fi""")
                     "GUARD_USERADD": (stubs / "useradd").as_posix(),
                     "GUARD_CHOWN": (stubs / "chown").as_posix(),
                     "GUARD_OWNER_OF": (stubs / "owner_of").as_posix(),
-                    "GUARD_ID": (stubs / "id").as_posix()}
+                    "GUARD_ID": (stubs / "id").as_posix(),
+                    "GUARD_RUNAS": (stubs / "runas").as_posix()}
 
         app = self.root / "opt" / "cloud-iot"
         (app / "backend" / "app" / "guard").mkdir(parents=True)      # upgrade.sh deployed it
@@ -140,7 +149,9 @@ case "$*" in
 esac
 exit 0""")
         if model:
-            ir = app / "guard" / "models" / "yolov8n_openvino"
+            # Where scripts/guard_export_model.sh writes it, and where it is on cabinet 1
+            # (measured 2026-10-15) — the backend's directory.
+            ir = app / "backend" / "models" / "yolov8n_openvino"
             ir.mkdir(parents=True)
             (ir / "yolov8n.xml").write_text("<net/>")
             (ir / "yolov8n.bin").write_bytes(b"\0" * 64)
@@ -215,7 +226,7 @@ def test_tc_gins_04_model_missing_is_not_a_success(tmp_path):
     assert "MODEL MISSING" in r.stdout and "NOT a success" in r.stdout
     assert "GUARD INSTALLED" not in r.stdout, "a missing model was reported as installed"
     # and the model's arrival is what makes it ready — nothing else changes the verdict
-    ir = rig.root / "opt/cloud-iot/guard/models/yolov8n_openvino"
+    ir = rig.root / "opt/cloud-iot/backend/models/yolov8n_openvino"
     ir.mkdir(parents=True)
     (ir / "m.xml").write_text("<net/>")
     assert rig.run().returncode == 3, "an .xml without its .bin is not a model"
@@ -335,3 +346,48 @@ def test_tc_gins_13_no_model_nothing_decided_nothing_removed(tmp_path):
     assert "TELEMETRY: NOT DECIDED" in r.stdout, r.stdout
     assert rig.tele.exists()
     assert not any("uninstall" in c for c in rig.calls_of("pip"))
+
+
+# ═══ TC-GINS-14..16 — the model: one copy, one path (owner, 2026-10-15) ═════════════════
+
+BACKEND_MODELS = "/opt/cloud-iot/backend/models"
+
+
+def test_tc_gins_14_one_copy_one_path(tmp_path):
+    exporter = (REPO / "scripts" / "guard_export_model.sh").read_text(encoding="utf-8")
+    assert f'MODELS_DIR="${{MODELS_DIR:-{BACKEND_MODELS}}}"' in exporter, \
+        "the exporter no longer writes where the worker reads"
+    worker = (REPO / "guard_worker" / "__main__.py").read_text(encoding="utf-8")
+    assert f'model_dir: str = "{BACKEND_MODELS}"' in worker, "the worker's default model_dir"
+    assert f'_env("GUARD_MODEL_DIR", "{BACKEND_MODELS}")' in worker, "the worker's env default"
+    rig = Rig(tmp_path)
+    r = rig.run()
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _env_value(rig.guard_env, "GUARD_MODEL_DIR") == BACKEND_MODELS
+    assert f"GUARD_MODEL_DIR={BACKEND_MODELS} points at it" in r.stdout, r.stdout
+    assert not (rig.root / "opt/cloud-iot/guard/models").exists(), \
+        "a second model directory was made: two places a model can be, one of them stale"
+
+
+def test_tc_gins_15_readiness_looks_where_the_worker_will(tmp_path):
+    rig = Rig(tmp_path)
+    assert rig.run().returncode == 0
+    # A guard.env kept from an install before 2026-10-15 still names the old directory.
+    text = rig.guard_env.read_text(encoding="utf-8")
+    rig.guard_env.write_text(text.replace(f"GUARD_MODEL_DIR={BACKEND_MODELS}",
+                                          "GUARD_MODEL_DIR=/opt/cloud-iot/guard/models"),
+                             encoding="utf-8")
+    r = rig.run()
+    assert r.returncode == 3, "the worker would not find the model, yet the install said ready"
+    assert "MODEL MISSING" in r.stdout and "guard.env points away from" in r.stdout, r.stdout
+    assert "GUARD INSTALLED" not in r.stdout
+    rig.guard_env.write_text(text, encoding="utf-8")
+    assert rig.run().returncode == 0, "correcting GUARD_MODEL_DIR alone must make it ready"
+
+
+def test_tc_gins_16_negative_control_unreadable_model_is_not_ready(tmp_path):
+    rig = Rig(tmp_path, readable=False)
+    r = rig.run()
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert "MODEL NOT READABLE by 'guard'" in r.stdout, r.stdout
+    assert "GUARD INSTALLED" not in r.stdout

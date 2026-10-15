@@ -11,7 +11,8 @@
 #
 # Exit codes — read by upgrade.sh and by a person:
 #   0  installed, and everything the worker needs to start is present
-#   3  installed, but NOT READY: the model is missing. NOT a success.
+#   3  installed, but NOT READY: the model is missing, or the guard account cannot read it.
+#      NOT a success.
 #   1  error — something was not installed, or openvino cannot load and run the model;
 #      nothing claims success
 #
@@ -26,7 +27,15 @@
 #
 # Every absolute path sits under GUARD_INSTALL_ROOT (empty on the NUC) so the test suite can
 # run the real script in a temp dir. GUARD_PYTHON / GUARD_SYSTEMCTL / GUARD_USERADD /
-# GUARD_CHOWN / GUARD_OWNER_OF / GUARD_ID replace the commands it calls, for the same reason.
+# GUARD_CHOWN / GUARD_OWNER_OF / GUARD_ID / GUARD_RUNAS replace the commands it calls, for the
+# same reason.
+#
+# The model (owner, 2026-10-15): ONE copy, ONE path. The IR lives where
+# scripts/guard_export_model.sh writes it, /opt/cloud-iot/backend/models/yolov8n_openvino/,
+# and the worker reads it from there. It is not copied into the guard's tree: two copies can
+# drift apart and nobody would notice which one guard really loads. Process and venv isolation
+# are untouched by this; reading a file is not sharing a venv. upgrade.sh copies backend/app
+# only, so backend/models survives an upgrade.
 # ============================================================================
 set -euo pipefail
 
@@ -37,7 +46,7 @@ APP_DIR="${R}/opt/cloud-iot"
 GUARD_DIR="${APP_DIR}/guard"
 VENV="${GUARD_DIR}/.venv"
 ENV_FILE="${GUARD_DIR}/guard.env"
-MODEL_DIR="${GUARD_DIR}/models"
+MODEL_DIR_DEFAULT="/opt/cloud-iot/backend/models"   # the backend's directory, NOT copied
 DATA_DIR="${R}/var/lib/marina-guard"
 UNIT_DST="${R}/etc/systemd/system/cloud-iot-guard.service"
 BACKEND_ENV="${APP_DIR}/backend/.env"
@@ -51,6 +60,8 @@ USERADD="${GUARD_USERADD:-useradd}"
 CHOWN="${GUARD_CHOWN:-chown}"
 OWNER_OF="${GUARD_OWNER_OF:-stat -c %U}"
 ID="${GUARD_ID:-id}"
+# Runs a command AS the guard account: the worker reads the model as that user, not as root.
+RUNAS="${GUARD_RUNAS-runuser -u guard --}"
 GUARD_USER="guard"
 
 mkdir -p "$LOG_DIR"
@@ -73,7 +84,8 @@ else
 fi
 
 # ── 2. directories ───────────────────────────────────────────────────────────
-for d in "$GUARD_DIR" "$MODEL_DIR" "${DATA_DIR}/recordings"; do
+# No model directory is made here: the model lives in the backend's tree (see the header).
+for d in "$GUARD_DIR" "${DATA_DIR}/recordings"; do
   if [ -d "$d" ]; then same "directory ${d#$R}"; else mkdir -p "$d"; did "created ${d#$R}"; fi
 done
 if [ "$($OWNER_OF "$DATA_DIR")" = "$GUARD_USER" ]; then
@@ -163,7 +175,7 @@ GUARD_PEDESTAL_ID=1
 GUARD_STREAM_URL=
 MQTT_BROKER_HOST=127.0.0.1
 MQTT_BROKER_PORT=1883
-GUARD_MODEL_DIR=/opt/cloud-iot/guard/models
+GUARD_MODEL_DIR=${MODEL_DIR_DEFAULT}
 GUARD_STORAGE_PATH=/var/lib/marina-guard/recordings
 GUARD_NUM_THREADS=1
 EOF
@@ -191,12 +203,26 @@ fi
 
 # ── 8. readiness — what the first start will need ────────────────────────────
 READY=true
+# The model is looked for where the WORKER will look: GUARD_MODEL_DIR in guard.env (a guard.env
+# kept from an earlier install may say something else), else the worker's own default.
+MODEL_DIR_SET="$(env_get "$ENV_FILE" GUARD_MODEL_DIR)"
+MODEL_DIR="${R}${MODEL_DIR_SET:-$MODEL_DIR_DEFAULT}"
 XML="$(ls "${MODEL_DIR}/yolov8n_openvino/"*.xml 2>/dev/null | head -n1 || true)"
 if [ -n "$XML" ] && [ -s "${XML%.xml}.bin" ]; then
-  say "model: present (${XML#$R})"
+  if $RUNAS test -r "$XML" && $RUNAS test -r "${XML%.xml}.bin"; then
+    say "model: present (${XML#$R}) — guard.env GUARD_MODEL_DIR=${MODEL_DIR#$R} points at it, readable by '${GUARD_USER}'"
+  else
+    say "MODEL NOT READABLE by '${GUARD_USER}': ${XML#$R} exists, but the worker runs as '${GUARD_USER}' and could not open it"
+    say "  check the permissions on ${MODEL_DIR#$R} and the directories above it (§13 G.6)"
+    READY=false
+  fi
 else
-  say "MODEL MISSING: no yolov8n_openvino/*.xml with its .bin under ${MODEL_DIR#$R}"
-  say "  export it with scripts/guard_export_model.sh and copy the IR there (§13)"
+  say "MODEL MISSING: no yolov8n_openvino/*.xml with its .bin under ${MODEL_DIR#$R} (guard.env GUARD_MODEL_DIR)"
+  if [ "${MODEL_DIR#$R}" != "$MODEL_DIR_DEFAULT" ]; then
+    say "  guard.env points away from ${MODEL_DIR_DEFAULT}, where scripts/guard_export_model.sh writes it — correct GUARD_MODEL_DIR (§13 G.6)"
+  else
+    say "  export it with scripts/guard_export_model.sh — it writes there (§13 G.6). Do not copy it anywhere else."
+  fi
   READY=false
 fi
 # Presence and format only. The value is never printed: it holds the camera password.
@@ -250,5 +276,5 @@ if $READY; then
   echo "GUARD INSTALLED — not enabled, not started. Start it as the separate §13 step." | tee -a "$LOG_FILE"
   exit 0
 fi
-echo "GUARD NOT READY — installed, but the model is missing. This is NOT a success." | tee -a "$LOG_FILE"
+echo "GUARD NOT READY — installed, but the model is missing or unreadable. This is NOT a success." | tee -a "$LOG_FILE"
 exit 3

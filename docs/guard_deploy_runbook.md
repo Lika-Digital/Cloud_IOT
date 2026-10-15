@@ -234,11 +234,14 @@ cd /opt/cloud-iot && sudo -u guard /opt/cloud-iot/guard/.venv/bin/python -c \
 ### 3.4 Model + storage + unit (reversible)
 
 ```bash
-sudo mkdir -p /opt/cloud-iot/guard/models /var/lib/marina-guard/recordings
-sudo chown -R guard:cloud-iot /opt/cloud-iot/guard/models /var/lib/marina-guard
+sudo mkdir -p /var/lib/marina-guard/recordings
+sudo chown -R guard:cloud-iot /var/lib/marina-guard
 sudo chmod 2750 /var/lib/marina-guard/recordings
-# copy the exported OpenVINO IR (see scripts/guard_export_model.sh) into models/
-sudo -u guard ls -la /opt/cloud-iot/guard/models
+# The model is NOT copied (owner, 2026-10-15: one copy, one path). It stays where
+# scripts/guard_export_model.sh writes it, and guard.env's GUARD_MODEL_DIR points there.
+# Check that the guard account can read it, where guard.env says it is:
+sudo grep '^GUARD_MODEL_DIR=' /opt/cloud-iot/guard/guard.env      # /opt/cloud-iot/backend/models
+sudo -u guard ls -la /opt/cloud-iot/backend/models/yolov8n_openvino/
 ```
 
 Install `guard.env` and the unit from `docs/guard_b1_design.md §2`, then:
@@ -467,7 +470,7 @@ deployment:
 
 | Symptom | Check |
 |---|---|
-| `UNAVAILABLE` right after §3.4 | `journalctl -u cloud-iot-guard -n 50`. Most likely the model is missing from `/opt/cloud-iot/guard/models`, which is acked as a refusal, not a crash |
+| `UNAVAILABLE` right after §3.4 | `journalctl -u cloud-iot-guard -n 50`. Most likely the model is missing from, or unreadable in, the directory `GUARD_MODEL_DIR` in guard.env names (`/opt/cloud-iot/backend/models` since 2026-10-15), which is acked as a refusal, not a crash |
 | service restarts in a loop | `systemctl status`; after 5 starts in 300 s it stays down **on purpose** and shows as UNAVAILABLE rather than hammering the box |
 | ffmpeg errors about timestamps | run `scripts/guard_diagnose_timestamps.py --url ... --verify`; exit 0 means capture still works. A future ffmpeg enforcing the accepted deprecation is the known risk here |
 

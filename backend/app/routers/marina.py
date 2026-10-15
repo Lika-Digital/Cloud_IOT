@@ -211,9 +211,12 @@ def _power_block(db: DBSession, pedestal_id: int, socket_id: Optional[int],
     # and how hard", which is the question a row has to answer.
     #
     # None when the detector found the reported power impossible, or when no session is
-    # running — a leftover figure on an idle socket reads as "something is drawing here".
+    # running — a leftover figure on an idle socket reads as "something is drawing here" —
+    # or when the telemetry is older than the outlet window: a cabinet silent for minutes
+    # showed its last current as now (2026-10-15; the same rule as <PhaseBlock>, TC-AMP-01).
     amps = None
-    if active is not None and cfg is not None and cfg.meter_current_amps is not None:
+    if (active is not None and cfg is not None and cfg.meter_current_amps is not None
+            and not ms.outlet_state_is_stale(cfg.meter_load_updated_at)):
         amps = round(float(cfg.meter_current_amps), 2)
 
     # Turn off whenever a session runs. Turn on only for a plug waiting to be switched on

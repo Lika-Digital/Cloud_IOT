@@ -137,3 +137,38 @@ def test_tc_phb_05_missing_phase_is_none_not_zero(client, auth_headers, setup):
     _meter(pid, l1=10.0, l2=None, l3=11.0, total=21.0, at=datetime.utcnow(), phases=3)
     _session(pid, running=True)
     assert _phases(client, auth_headers, bid) == [10.0, None, 11.0]
+
+
+# ═══ TC-AMP-01 — the ROW's amps follow the same rule (block 4, row controls, 2026-10-15) ═══
+
+def _power(client, auth_headers, bid):
+    from app.services.mqtt_handlers import last_heartbeat
+    from app.auth.berth_models import Berth
+    udb = _US()
+    try:
+        pid = udb.get(Berth, bid).pedestal_id
+    finally:
+        udb.close()
+    last_heartbeat[pid] = datetime.utcnow()
+    try:
+        r = client.get(f"/api/marina/berths/{bid}", headers=auth_headers)
+    finally:
+        last_heartbeat.pop(pid, None)
+    assert r.status_code == 200, r.text
+    return r.json()["power"]
+
+
+def test_tc_amp_01_stale_amps_are_a_dash_not_now(client, auth_headers, setup):
+    """A session open on a socket whose telemetry stopped: the last current is not "now".
+
+    It was: `_power_block` showed `meter_current_amps` whenever a session was active, however
+    old, so a cabinet silent for minutes kept showing "ON 30.5 A". Same window as PhaseBlock.
+    """
+    pid, bid = setup
+    _session(pid, running=True)
+    _meter(pid, l1=None, l2=None, l3=None, total=7.25,
+           at=datetime.utcnow() - timedelta(seconds=120), phases=1)
+    assert _power(client, auth_headers, bid)["amps"] is None
+    # Control: the same reading, fresh, is shown — so the None above is the age, not the setup.
+    _meter(pid, l1=None, l2=None, l3=None, total=7.25, at=datetime.utcnow(), phases=1)
+    assert _power(client, auth_headers, bid)["amps"] == 7.25

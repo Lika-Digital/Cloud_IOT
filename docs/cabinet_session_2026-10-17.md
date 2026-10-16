@@ -11,7 +11,116 @@ Rules for the whole session:
 - `R=~/Cloud_IOT` below = the clone you upgrade from (the one `upgrade.sh` lives in).
 - `B=/root/rollback-20261017` = where every rollback copy goes (step 2).
 
+**STEP 0 — the very first thing:** open BOTH ways into the cabinet — SSH over **Tailscale**
+and SSH over **Cloudflare** (`ssh2.lika.solutions`) — and keep both open to the end, so losing one
+never closes access.
+
 ---
+
+## P1. What is where (2026-10-16 work)
+
+| Item | In `main` `1554bcf` (goes to the cabinet) | Only on `develop` (does not go) | Only in the spec — no code |
+|---|---|---|---|
+| Guard UI: S1–S5, row on the worker's announce, re-arm after restart, missed ack, admin only (API + page), the alarm from guard events, "Not measured", playback and labels | ✔ `3ab0cc6` | | |
+| S6 "Guard recording although switched off" + Q4b | ✔ `5ec542e` | | |
+| Worker: the automatic resume really resumes; the budget in health | ✔ `e6b207a` — reaches the cabinet only with the guard install (§12) | | |
+| The camera ban (`camera.*` refused to the ERP) | ✔ `36228c2` | | |
+| `scripts/fix_gateway_allowed_endpoints.py` (17d) | ✔ | | |
+| The /api/ext filter: camera password and `customer_name` | ✔ `69fa715` | | |
+| Smart mode: diagnostics out of the gate; TC-SM-01..05 | ✔ `78bcc62` | | |
+| The live camera route demands a login | ✔ `1554bcf` | | |
+| The marina line limit 2 758; the vite proxy fix; the flaky-test fix | ✔ | | |
+| Spec through D32 plan + continued, D32-Q1, R4 closed, latency | ✔ (docs) | | |
+| Spec: rule H, E.13–E.15, the measured A1 table | | ✔ `f9571f0` (docs) | |
+| This session file; F; K | | ✔ (docs, today) | |
+| D32 live view (TC-LV-01..12), masks, blur M11, viewing log | | | ✔ |
+| Rule H in code (TC-MC-TUN-01..03), the 403 through the tunnel | | | ✔ |
+| `ERP_API_KEY` per cabinet, rotation | | | ✔ (E.15 only EMPTIES it today) |
+| Closing `/api/customer/*`, `/api/mobile/*`, QR | | | ✔ |
+| SM-Q6: no command "Sent" until the Opta confirms | | | ✔ |
+| K (a live health creates the row; "Not measured" after a restart) | | | ✔ |
+| F (one reference photo per berth, replaced) | | | ✔ |
+| R22–R26 (webhook, R26 upload) · R27–R30 (wait for the ERP) | | | ✔ |
+| Findings A and B, the analyze 500 | | | ✔ |
+| The weekly PDF | | | ✔ |
+
+**"Described but not built" — the spec check of 2026-10-16, by name** (spec §0.2):
+1. §5.4 alarms filterable **by pedestal and by berth** (the page filters active / all only);
+2. §5.3 the **reference photo and "camera now" as pictures** on berth detail (it shows sentences);
+3. §3 **TC-UIR-02** — "every rendered condition has a string-table entry" (no test carries it);
+4. §9 **TC-UIS-01** — a stale cabinet reads grey (never written);
+5. §9 **TC-UIR-05, TC-UIR-06, TC-UIR-07** (never written);
+6. §9 **the tap count** (not measured);
+7. §1 **BLOCK-1** — the real berths at Krk (open);
+8. §1.3 **Card 5** — the water toggle.
+
+## P2. The order of execution — final
+
+| # | Step | Who | Section |
+|---|---|---|---|
+| 0 | Both SSH paths open (Tailscale + Cloudflare) | owner, cabinet | top |
+| 1 | E.11 before | owner, cabinet | §1 |
+| 2 | C — the rollback copies | owner, cabinet | §2 |
+| 3 | Readings 0.6, 0.7, 0.8, E.14, E.12 (G.0 done 2026-10-17) | owner, cabinet | §3, §6 |
+| 4 | Manual `git pull` | owner, cabinet | §4 |
+| 5 | U.0 `pip --dry-run` | owner, cabinet | §5 |
+| 6 | `upgrade.sh` | owner, cabinet | §7 |
+| 7 | 13.3 access, E.1, E.11 after | owner, cabinet | §8 |
+| 8 | E.15 — `ERP_API_KEY` emptied | owner, cabinet | §8 |
+| 9 | 17b → 17d dry → 17d `--apply` → 17b | owner, cabinet | §9 |
+| 10 | A.1 the ERP account, then 17e with its token | owner, cabinet | §10, §9 |
+| 11 | A.2 both webhooks off; E.13 the switch tried off and on | owner, cabinet | §10 |
+| 12 | E.2–E.10, S.1, S.2; M6, M10 (read-only) | owner, cabinet | §11 |
+| 13 | **Guard — last** | owner, cabinet | §12 |
+| 14 | Read every output, record it in spec §13, report | me, repo | — |
+
+## P3. When I stop
+
+| Condition | The command that shows it | What I do |
+|---|---|---|
+| `pip --dry-run` fails | §5 — an error in the last 15 lines | STOP before `upgrade.sh`; nothing is deployed; send the lines |
+| `git pull` fails or leaves a dirty tree | §4 — not fast-forward, or `git -C $R status --short` not empty, or HEAD ≠ `1554bcf…` | STOP; nothing is deployed |
+| No loopback-check line in the log | `sudo grep -c "Checking the backend listens on loopback only" /var/log/cloud-iot/upgrade.log` (0 new) | ROLLBACK §13 |
+| pip fails inside `upgrade.sh` | "pip install FAILED — upgrade stopped before any code was copied" | ROLLBACK §13 now (the new frontend is already in) |
+| The backend does not come up | `systemctl is-active cloud-iot-backend`; `sudo journalctl -u cloud-iot-backend -n 50 --no-pager` | **ONE repair attempt, then ROLLBACK §13** (rule below) |
+| :8000 on `0.0.0.0` or `[::]` | `ss -ltn 'sport = :8000'` | ROLLBACK §13 |
+| 17b after the script is not 17, or the camera line not `[]` | §9 17b | Do NOT enable the ERP; restore from 17d's `--backup` (§13 D); report |
+| Any 17e line not 403 | §9 17e | E.13 switch OFF at once (`active=0`); report; the ERP gets nothing |
+| E.11 after the upgrade not 401/403 | §8 E.11 | STOP; check E.1 (the old code may be running); report |
+| The guard install exits 1 or 3 | `echo "exit $?"` after `install-guard.sh` | Do not enable guard; record the install log; nothing else rolled back (§12) |
+
+**THE RULE (owner, 2026-10-17): if the backend does not come up, I get ONE attempt at a repair,
+then I roll back. No debugging on a live cabinet alone on a Saturday.**
+
+## P4. What we do NOT do in this session
+
+Key rotation (a NEW key — E.15 only empties the old one) · closing the customer routes · the 403
+through the tunnel · any limit on the service token · D32 code · findings A and B · R22–R26.
+**The session is: the upgrade, the gateway list, the measurements, then guard.**
+
+## P5. What we go in NOT knowing
+
+| Unknown | Measured by |
+|---|---|
+| does `reportlab 4.2.5` install on Python 3.14 | §5 U.0 |
+| does the NEW or the OLD copy of `upgrade.sh` run | settled by §4 (pulled first = the new copy runs); proven by the loopback line in §7 |
+| does the Opta ignore commands with smart mode off | S.2 (§11) |
+| `JWT_EXPIRE_MINUTES` | E.14 (§3) |
+| is there a lower camera sub-stream | M6 (§11) |
+| is there an iGPU | M10 (§11) |
+| does nginx set the source address | E.12 (§3) |
+| will guard install on this Python, will OpenVINO load the model | §12 — the install's own SMOKE line (G.8) and its exit code |
+
+## P6. What you send me back, in the order you get it
+
+1. E.11 before (code, bytes) · 2. the `ls -la` / `du` of the copies and `['ok','ok']` · 3. 0.6,
+0.7, 0.8, E.14, E.12 · 4. `git rev-parse HEAD` after the pull · 5. the last 15 lines of
+`pip --dry-run` · 6. the `upgrade.sh` output (or `tail -60 /var/log/cloud-iot/upgrade.log`) ·
+7. 13.3, E.1, E.11 after · 8. E.15 (`503`) · 9. 17b before, the 17d dry run, the 17d `--apply`
+output, 17b after · 10. A.1 (`api_client`), 17e's three lines · 11. A.2, E.13 · 12. E.2–E.10,
+S.1, S.2, M6, M10 · 13. guard: the `ls` of G.1, the install's exit code and its last 20 log
+lines, G.8, F.5.
+
 
 ## 0. Before anything
 
@@ -64,7 +173,7 @@ Both databases use the SQLite backup API — never `cp` on a live WAL database.
 | 0.8 | `sudo grep -c '^ERP_API_KEY=.\+' /opt/cloud-iot/backend/.env` | RECORD (`1` = set; E.15 empties it later) |
 | E.14 | `sudo grep -E '^JWT_EXPIRE_MINUTES=' /opt/cloud-iot/backend/.env \|\| echo "not set — the default, 120 min (config.py:21)"` | RECORD — how long a leaked token lives |
 | E.12 | `grep -n "X-Real-IP\|proxy_pass\|listen" /etc/nginx/sites-enabled/*; sudo grep -n "service:\|hostname:" /etc/cloudflared/*.yml 2>/dev/null` | RECORD: `X-Real-IP $remote_addr` in the `/api/` location; the local port each tunnel hostname targets |
-| G.0 | §6 below, "before" | RECORD |
+| G.0 | done by the owner on 2026-10-17 — §6 | not installed (recorded) |
 
 ## 4. The manual `git pull` — BEFORE `upgrade.sh` (owner's order) — and why it is safe
 
@@ -98,29 +207,107 @@ Expect a resolution with no error ("Would install …" or nothing to install). *
 Python 3.14 — the cabinet's venv may need it built from source. **An error here → STOP; do not
 run `upgrade.sh`.** Nothing is deployed yet; report the last 15 lines.
 
-## 6. G — is the guard worker running? (measure, do not assume)
+## 6. G.0 — the guard worker: MEASURED by the owner on 2026-10-17
 
-**Before the upgrade (G.0):**
-```
-systemctl list-unit-files 'cloud-iot-guard*' --no-legend; systemctl is-active cloud-iot-guard 2>&1
-ls -ld /opt/cloud-iot/guard /opt/cloud-iot/guard_worker /var/lib/marina-guard 2>&1
-sudo journalctl -u cloud-iot-guard -n 5 --no-pager 2>&1 | tail -5
-sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;c=sqlite3.connect('file:/opt/cloud-iot/backend/pedestal.db?mode=ro',uri=True);print([ (t, c.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]) for t in ('guard_config','guard_events','guard_detections','guard_recordings')])"
-```
-The LAST publication of a worker — the broker keeps the last `state` retained, `health` comes
-every 5 s only from a LIVE worker:
-```
-B_SUB="mosquitto_sub"; command -v mosquitto_sub >/dev/null || B_SUB="docker exec pedestal-mqtt-broker mosquitto_sub"
-timeout 6  $B_SUB -h 127.0.0.1 -t 'marina/+/camera/+/guard/state'  -v -W 5      # the last state (retained, may be old)
-timeout 12 $B_SUB -h 127.0.0.1 -t 'marina/+/camera/+/guard/health' -v -C 1 -W 11 # a live heartbeat, or nothing
-```
-| Reading | Means |
+| Reading | Result |
 |---|---|
-| no unit, no directories, tables 0, no `state`, no `health` | **not installed** — what was confirmed on 2026-10-11 (below) |
-| a unit, `active`, `health` within 11 s | running |
-| a unit, not active / no `health`, a retained `state` | installed, not running now |
+| `systemctl list-unit-files \| grep -i guard` | nothing |
+| `systemctl is-active cloud-iot-guard` | `inactive` |
+| `/opt/cloud-iot/guard/` | does not exist |
+| `ps -ef \| grep guard` | no process |
+| `guard_config`, `guard_events`, `guard_detections`, `guard_recordings` in `pedestal.db` | exist, all empty |
+| guard tables in `users.db` | none (correct: they belong in `pedestal.db`) |
 
-**After the upgrade, on `/marina/guard`, the sentence you should see:**
+**Guard is not installed — confirmed.** **The schema is already there, so the guard INSTALL
+adds only the worker** (its venv, unit, directories, `guard.env`, `/opt/cloud-iot/guard_worker`)
+and **touches no database** — the worker never opens one; the backend is the only writer
+(`backend/app/guard/models.py:4-9`). One table is new with this upgrade, and the BACKEND creates
+it, not the guard install: `guard_state_events` (pauses and automatic resumes, §5.5.1), created by
+`Base.metadata.create_all` when the new backend starts (`backend/app/database.py:85, 95`) — empty,
+nothing migrated, ignored by the old code if it is ever rolled back.
+
+## 7. The upgrade
+
+```
+sudo bash $R/nuc_image/upgrade.sh
+```
+Answer `y` to "Apply upgrade?". Expect, in this order:
+`Git repo is up to date but /opt/cloud-iot/ is out of sync — will re-deploy.` →
+"Rebuilding frontend" → "Binding the backend to loopback" → "Installing backend dependencies" →
+"Copying backend/app" → "Backend is up" → **"Checking the backend listens on loopback only" →
+"Backend bound to loopback only: 127.0.0.1:8000"** → `Upgrade complete.`
+
+| Seen | Do |
+|---|---|
+| `pip install FAILED — upgrade stopped before any code was copied` | the NEW frontend is already in place on the OLD backend → **ROLLBACK, §13, now** |
+| the loopback line missing, or "listens on a non-loopback address" | STOP, ROLLBACK |
+| "Backend taking longer than expected" | `sudo journalctl -u cloud-iot-backend -n 50 --no-pager`; not up within 2 min → ROLLBACK |
+
+## 8. Right after
+
+| # | Command | Expect | If not |
+|---|---|---|---|
+| 13.3 | both sessions of 0.1 still work; open a NEW ssh session each way | all four work | ROLLBACK |
+| E.1 | `git -C $R rev-parse --short HEAD origin/main; ss -ltn 'sport = :8000'; curl -s -o /dev/null -w '%{http_code}\n' http://localhost/api/sessions` | `1554bcf` twice; `127.0.0.1:8000`; `401` or `403` | `200` = the old code runs: STOP |
+| E.11 | the command of step 1 again | `401` or `403`, `0` bytes | STOP, report |
+| E.15 | `sudoedit /opt/cloud-iot/backend/.env` → `ERP_API_KEY=` (empty); `sudo systemctl restart cloud-iot-backend`; `curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost/api/nfc/scan -H 'X-API-Key: x'` | `503`. The admin UI's NFC screens keep working (measured on dev: the four operator routes do not use the key) | not 503: STOP |
+
+## 9. The gateway: 17b → 17d → 17b → 17e
+
+| # | Command | Expect |
+|---|---|---|
+| 17b | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3,json;c=sqlite3.connect('file:/opt/cloud-iot/backend/pedestal.db?mode=ro',uri=True);r=c.execute('SELECT allowed_endpoints FROM external_api_config WHERE id=1').fetchone();ids=sorted(e['id'] for e in json.loads(r[0] or '[]')) if r else [];print(len(ids));print(ids);print([i for i in ids if i.startswith('camera.')])"` | RECORD (23 measured on 2026-10-16, four `camera.*`) |
+| 17d dry | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 $R/scripts/fix_gateway_allowed_endpoints.py --db /opt/cloud-iot/backend/pedestal.db` | NOW 23, the diff, "DRY RUN — nothing written" |
+| 17d | the same with `--apply --backup /opt/cloud-iot/backend/pedestal.db.pre-gateway-$(date -u +%Y%m%dT%H%M%SZ)` | ends with `17b: 17`, the 17 ids, `17b: []` |
+| 17b | again | `17`, the 17, `[]` |
+| 17e | `read -s EXT_KEY` (the ERP's service token, once the account of §10 exists — else skip and do it after §10); `for p in pedestals/1/camera/frame pedestals/1/camera/stream camera/1/snapshot; do echo "$p $(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $EXT_KEY" http://localhost/api/ext/$p)"; done` | every line `403` |
+
+17d's own `--backup` is a third database copy; exit 4 from it = restore that copy (§13 D).
+**Before the ERP gets anything: compare the ERP's list with these 17 — do not assume they match.**
+
+## 10. A — the ERP's read access (configuration)
+
+| # | Step | Check |
+|---|---|---|
+| A.1 | Admin screen → Settings → "ERP User": `erp@lika.solutions`, role `api_client` (not the script — it takes the password on its command line) | `read -s P; printf '{"email":"erp@lika.solutions","password":"%s"}' "$P" \| curl -s -X POST http://localhost/api/auth/service-token -H 'Content-Type: application/json' -d @- \| python3 -c "import sys,json;print(json.load(sys.stdin).get('role'))"` → `api_client` |
+| A.2 | The webhook to the ERP OFF — both of them | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;print(sqlite3.connect('file:/opt/cloud-iot/backend/pedestal.db?mode=ro',uri=True).execute('SELECT webhook_url, allowed_events, active FROM external_api_config WHERE id=1').fetchone())"` → `(None or '', '[]', 1)`; `sudo grep -c '^ERP_WEBHOOK_URL=.\+' /opt/cloud-iot/backend/.env` → `0` |
+| E.13 | The one-step switch, tried once: OFF `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;c=sqlite3.connect('/opt/cloud-iot/backend/pedestal.db');c.execute('UPDATE external_api_config SET active=0 WHERE id=1');c.commit();print(c.execute('SELECT active FROM external_api_config WHERE id=1').fetchone())"`, a call with the ERP token, then the same with `active=1` | `(0,)` → 403/503; `(1,)` → 200. Disabling the account or changing its password is NOT the switch (spec §13.14) |
+
+## 11. The rest of the readings
+
+E.2–E.10, then S.1 and S.2 — the commands are rows E.2–E.10, S.1, S.2 in spec §13.14.
+Then two read-only D32 measurements (spec §16.5):
+- **M10 — an iGPU:** `ls -l /dev/dri/; ffmpeg -hide_banner -hwaccels; vainfo 2>&1 | grep -E "Driver|H264"` → RECORD.
+- **M6 — sub-streams** (guard is not installed yet, so the camera URL is typed into a hidden
+  variable, never shown): `read -s CAMURL` (e.g. `rtsp://user:pass@192.168.1.191:554`, no profile),
+  then `for p in profile1 profile2 profile3; do echo "== $p"; timeout 15 ffprobe -v error -rtsp_transport tcp -select_streams v:0 -show_entries stream=codec_name,profile,width,height,r_frame_rate,bit_rate -of default=nw=1 "$CAMURL/$p" 2>&1 | sed -E "s#rtsp://[^ ]*#<url>#g" | head -8; done; unset CAMURL`
+  → RECORD per profile.
+**R1 (§13.10) and §13.7 rows 13/13a do NOT run today** — they need `ERP_API_KEY`, which E.15
+emptied; they run in the NFC e2e session with the new per-cabinet key.
+
+## 12. GUARD — the LAST step of the session (owner, 2026-10-17)
+
+**Only after everything above, 17e included.** If guard blocks, it must not spoil the upgrade's
+checks or the gateway list: those are done and recorded before this section starts. Guard is its
+own service — a failure here stops GUARD ONLY and never rolls back the cabinet.
+
+**G.1 — the model, BEFORE installing.** The installer looks for
+`${GUARD_MODEL_DIR}/yolov8n_openvino/*.xml` with its `.bin`, `GUARD_MODEL_DIR` defaulting to
+`/opt/cloud-iot/backend/models` (`nuc_image/install-guard.sh:49, 206-213`). So the exact path is
+**`/opt/cloud-iot/backend/models/yolov8n_openvino/yolov8n.xml`** and **`…/yolov8n.bin`**. The files
+measured on 2026-10-11 ARE these: spec §13.6c G.6 records them in that directory, measured
+2026-10-15 — `yolov8n.xml` 228 077 B, `yolov8n.bin` 12 708 664 B, dated 2026-10-11 17:56. No
+inconsistency: `yolov8n.xml/.bin` are the file names, `yolov8n_openvino/` is their directory.
+Check:
+```
+ls -la /opt/cloud-iot/backend/models/yolov8n_openvino/
+```
+Expect both files with those sizes. **If they are somewhere else:** `sudo find / -xdev -name 'yolov8n*.xml' 2>/dev/null`
+→ RECORD where, and tell me before moving anything (the owner's rule of 2026-10-15: one copy, one
+path — G.6 then points `GUARD_MODEL_DIR` at the directory that CONTAINS `yolov8n_openvino/`).
+Without the model the install ends with exit 3 = NOT READY.
+
+**On `/marina/guard`, the sentence you should see:**
 - not installed → **"No guard on this pedestal"** (S1 — no row, the worker never announced itself).
 - running → after `sudo systemctl restart cloud-iot-guard` (a worker that was ALREADY connected
   announced itself before the new backend started; the row is created only from a LIVE state
@@ -159,60 +346,13 @@ then stop the service.
 `guard_detections`, `guard_events`, `guard_recordings` had zero rows. Nothing measured since;
 G.0 re-measures it.
 
-## 7. The upgrade
 
-```
-sudo bash $R/nuc_image/upgrade.sh
-```
-Answer `y` to "Apply upgrade?". Expect, in this order:
-`Git repo is up to date but /opt/cloud-iot/ is out of sync — will re-deploy.` →
-"Rebuilding frontend" → "Binding the backend to loopback" → "Installing backend dependencies" →
-"Copying backend/app" → "Backend is up" → **"Checking the backend listens on loopback only" →
-"Backend bound to loopback only: 127.0.0.1:8000"** → `Upgrade complete.`
+**Stop rule for this section:** install exit **1** (something not installed, or openvino cannot
+load and run the model — the line is in `/var/log/cloud-iot/guard-install.log`) or exit **3**
+(the model missing) → do NOT enable the service; RECORD the last 20 lines of the install log;
+nothing else is rolled back. The install never starts the worker by itself.
 
-| Seen | Do |
-|---|---|
-| `pip install FAILED — upgrade stopped before any code was copied` | the NEW frontend is already in place on the OLD backend → **ROLLBACK, §11, now** |
-| the loopback line missing, or "listens on a non-loopback address" | STOP, ROLLBACK |
-| "Backend taking longer than expected" | `sudo journalctl -u cloud-iot-backend -n 50 --no-pager`; not up within 2 min → ROLLBACK |
-
-## 8. Right after
-
-| # | Command | Expect | If not |
-|---|---|---|---|
-| 13.3 | both sessions of 0.1 still work; open a NEW ssh session each way | all four work | ROLLBACK |
-| E.1 | `git -C $R rev-parse --short HEAD origin/main; ss -ltn 'sport = :8000'; curl -s -o /dev/null -w '%{http_code}\n' http://localhost/api/sessions` | `1554bcf` twice; `127.0.0.1:8000`; `401` or `403` | `200` = the old code runs: STOP |
-| E.11 | the command of step 1 again | `401` or `403`, `0` bytes | STOP, report |
-| E.15 | `sudoedit /opt/cloud-iot/backend/.env` → `ERP_API_KEY=` (empty); `sudo systemctl restart cloud-iot-backend`; `curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost/api/nfc/scan -H 'X-API-Key: x'` | `503`. The admin UI's NFC screens keep working (measured on dev: the four operator routes do not use the key) | not 503: STOP |
-
-## 9. The gateway: 17b → 17d → 17b → 17e
-
-| # | Command | Expect |
-|---|---|---|
-| 17b | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3,json;c=sqlite3.connect('file:/opt/cloud-iot/backend/pedestal.db?mode=ro',uri=True);r=c.execute('SELECT allowed_endpoints FROM external_api_config WHERE id=1').fetchone();ids=sorted(e['id'] for e in json.loads(r[0] or '[]')) if r else [];print(len(ids));print(ids);print([i for i in ids if i.startswith('camera.')])"` | RECORD (23 measured on 2026-10-16, four `camera.*`) |
-| 17d dry | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 $R/scripts/fix_gateway_allowed_endpoints.py --db /opt/cloud-iot/backend/pedestal.db` | NOW 23, the diff, "DRY RUN — nothing written" |
-| 17d | the same with `--apply --backup /opt/cloud-iot/backend/pedestal.db.pre-gateway-$(date -u +%Y%m%dT%H%M%SZ)` | ends with `17b: 17`, the 17 ids, `17b: []` |
-| 17b | again | `17`, the 17, `[]` |
-| 17e | `read -s EXT_KEY` (the ERP's service token, once the account of §10 exists — else skip and do it after §10); `for p in pedestals/1/camera/frame pedestals/1/camera/stream camera/1/snapshot; do echo "$p $(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $EXT_KEY" http://localhost/api/ext/$p)"; done` | every line `403` |
-
-17d's own `--backup` is a third database copy; exit 4 from it = restore that copy (§11 D).
-**Before the ERP gets anything: compare the ERP's list with these 17 — do not assume they match.**
-
-## 10. A — the ERP's read access (configuration)
-
-| # | Step | Check |
-|---|---|---|
-| A.1 | Admin screen → Settings → "ERP User": `erp@lika.solutions`, role `api_client` (not the script — it takes the password on its command line) | `read -s P; printf '{"email":"erp@lika.solutions","password":"%s"}' "$P" \| curl -s -X POST http://localhost/api/auth/service-token -H 'Content-Type: application/json' -d @- \| python3 -c "import sys,json;print(json.load(sys.stdin).get('role'))"` → `api_client` |
-| A.2 | The webhook to the ERP OFF — both of them | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;print(sqlite3.connect('file:/opt/cloud-iot/backend/pedestal.db?mode=ro',uri=True).execute('SELECT webhook_url, allowed_events, active FROM external_api_config WHERE id=1').fetchone())"` → `(None or '', '[]', 1)`; `sudo grep -c '^ERP_WEBHOOK_URL=.\+' /opt/cloud-iot/backend/.env` → `0` |
-| E.13 | The one-step switch, tried once: OFF `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;c=sqlite3.connect('/opt/cloud-iot/backend/pedestal.db');c.execute('UPDATE external_api_config SET active=0 WHERE id=1');c.commit();print(c.execute('SELECT active FROM external_api_config WHERE id=1').fetchone())"`, a call with the ERP token, then the same with `active=1` | `(0,)` → 403/503; `(1,)` → 200. Disabling the account or changing its password is NOT the switch (spec §13.14) |
-
-## 11. The rest of the readings
-
-E.2–E.10, then S.1 and S.2 — the commands are rows E.2–E.10, S.1, S.2 in spec §13.14.
-**R1 (§13.10) and §13.7 rows 13/13a do NOT run today** — they need `ERP_API_KEY`, which E.15
-emptied; they run in the NFC e2e session with the new per-cabinet key.
-
-## 12. ROLLBACK — from the copies of step 2 only
+## 13. ROLLBACK — from the copies of step 2 only
 
 Run as a block; every line names its path. `B=/root/rollback-20261017`.
 ```

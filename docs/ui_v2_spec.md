@@ -917,6 +917,24 @@ purpose (`guard/service.py:120`, the v3.40 lesson).
 its own `GUARD_STYLE` table keyed by state (`MarinaGuard.tsx:36`) — it keeps colour and help text
 only.
 
+**K — DECIDED (owner, 2026-10-17), spec only now, the code after:** "not installed" is a claim
+about the world, and after a backend restart we do not know it. So:
+- **a LIVE `health` message creates the row too** — only a running worker sends one; a RETAINED
+  message still never creates a row. (The gap this closes, found 2026-10-16: a worker already
+  running when the backend restarts publishes `state` only on connect or on a change, so it never
+  created its row and the page said "No guard on this pedestal" while it ran.)
+- **from the backend's start until the first live guard message: "Not measured"** — never "No
+  guard on this pedestal".
+- **Test (TC-GU-19), must fail on the code before:** backend restarted, the worker running
+  (a live `health`, no `state`) → never "No guard on this pedestal"; before its first health
+  → "Not measured"; after it → the row exists and the sentence is S4 (it reports OFF).
+- **OPEN — K-Q1, read literally the rule never ends on a cabinet with NO worker:** no live
+  message ever comes, so the page would say "Not measured" forever and S1 could never be shown
+  again after any restart. *Proposal, not decided:* "Not measured" until one heartbeat boundary
+  (15 s, §5.5.1) has passed since the backend started with no live guard message; after that, no
+  row → S1. A worker that runs sends `health` every 5 s, so it is always heard inside that window
+  — TC-GU-19 still holds. The owner decides.
+
 **The row is created when the worker first announces itself** (owner, 2026-10-16, repeated in the
 second order: "Dok reda nema, stoji prva rečenica"), desired OFF, from a LIVE state message only —
 a retained replay never creates a row (the v3.40 lesson, `guard/service.py:22-31`). **The state
@@ -2699,6 +2717,18 @@ three attempts (at once, +5 s, +30 s), identical bytes. 408 and 429 count as tra
   — only locally (`GET`/`DELETE /api/admin/berths/{id}/reference-images`). R26 adds both; the
   missing image check and size limit are fixed with it (a body over 5 MB or not a JPEG/PNG/WebP is
   refused). *Proposal: 5 MB.*
+  **F — DECIDED (owner, 2026-10-17): the reference photo is REPLACED, one per berth — never added.**
+  Today every upload adds a photo forever, without a limit (above). The match compares with the
+  boat that is there NOW; a pile of old photos makes the result ambiguous and grows without
+  bound. So: **one reference photo per berth; the old one is deleted only once the new one is
+  stored successfully** (written, read back as an image, then the old file removed — a failed
+  upload leaves the old photo in place, never none). Goes with R26; **spec only now, not built.**
+  Tests when built (each must fail on the code before): two uploads → one photo, the second;
+  an upload that fails (not an image, over the limit, a write error) → the first photo still there
+  and still used by the match; the local admin upload (`POST /api/admin/berths/{id}/reference-
+  images`) follows the same rule. *Open for the build, not decided here: what happens to a berth
+  that has several photos today (keep the newest, or the owner chooses) — measured on the cabinet
+  first: how many berths have more than one.*
 - **A5 — is the match result separate from occupancy?** **No.** `GET /api/ext/pedestals/{id}/berths/
   occupancy` returns `occupied` and `last_analyzed` only (`ext_pedestal_endpoints.py:189-206`). The
   match exists only in `GET /api/ext/berths` (`berths.list`) as `match_ok_bit`, `state_code` (0

@@ -76,6 +76,7 @@ def rig(client, auth_headers):
             db.add(cfg)
         # A camera that "is there", so the analyze route gets past its own checks and a
         # smart-mode check placed anywhere before the analysis would be reached.
+        cfg.opta_client_id = "MAR_SM_ORM_01"     # commands are addressed to a cabinet
         cfg.camera_stream_url = "rtsp://camera.invalid/profile1"
         cfg.camera_reachable = True
         db.commit()
@@ -175,3 +176,134 @@ def test_tc_sm_02_socket_and_valve_commands_still_409_through_the_gateway(client
     finally:
         _smart(pid, True)
         _store([])
+
+
+# ── TC-SM-03..05 (owner's fourth answers, 2026-10-16) ─────────────────────────
+
+def _prepare(pid: int) -> dict:
+    """Real state for every local command, so each one is ACCEPTED (not 404/400 before any
+    smart-mode check could be reached): a tripped, remotely resettable breaker on socket 1, a
+    plug waiting on sockets 2 and 3, two pending sessions and an active water one (one open
+    session per outlet and type)."""
+    from app.models.pedestal_config import SocketState
+    from app.models.session import Session
+    from app.models.socket_config import SocketConfig
+    db = _S()
+    try:
+        for sid in (1, 2, 3, 4):
+            sc = db.query(SocketConfig).filter(SocketConfig.pedestal_id == pid,
+                                               SocketConfig.socket_id == sid).first()
+            if sc is None:
+                sc = SocketConfig(pedestal_id=pid, socket_id=sid, auto_activate=False)
+                db.add(sc)
+        db.flush()
+        b = db.query(SocketConfig).filter(SocketConfig.pedestal_id == pid,
+                                          SocketConfig.socket_id == 1).one()
+        b.breaker_remote_reset, b.breaker_state = "motorised", "tripped"
+        db.query(Session).filter(Session.pedestal_id == pid).delete()
+        for sid in (2, 3):
+            st = db.query(SocketState).filter(SocketState.pedestal_id == pid,
+                                              SocketState.socket_id == sid).first()
+            if st is None:
+                st = SocketState(pedestal_id=pid, socket_id=sid)
+                db.add(st)
+            st.connected, st.operator_status = True, "pending"
+            st.operator_status_at = datetime.utcnow()
+        ids = {}
+        for name, sid, kind, status in (("allow", 4, "electricity", "pending"),
+                                        ("deny", 1, "electricity", "pending"),
+                                        ("stop", 1, "water", "active")):
+            s = Session(pedestal_id=pid, socket_id=sid, type=kind, status=status,
+                        started_at=datetime.utcnow())
+            db.add(s)
+            db.flush()
+            ids[name] = s.id
+        db.commit()
+        return ids
+    finally:
+        db.close()
+
+
+def _local_calls(client, auth_headers, pid: int) -> dict:
+    """The commands the owner named in SM-Q3 — staff at the cabinet, not the ERP."""
+    out = {}
+    with patch("app.services.mqtt_client.mqtt_service.publish"),          patch("app.routers.controls.mqtt_service.publish", create=True):
+        ids = _prepare(pid)
+        calls = [
+            ("/api/controls/pedestal/{pid}/led", {"color": "green", "state": "on"}),
+            ("/api/controls/pedestal/{pid}/reset", None),
+            ("/api/controls/sockets/{pid}/2/approve", None),
+            ("/api/controls/sockets/{pid}/3/reject", None),
+            (f"/api/controls/{ids['allow']}/allow", None),
+            (f"/api/controls/{ids['deny']}/deny", None),
+            (f"/api/controls/{ids['stop']}/stop", None),
+            ("/api/pedestals/{pid}/sockets/1/breaker/reset", None),
+        ]
+        for path, body in calls:
+            p = path.format(pid=pid)
+            r = client.post(p, headers=auth_headers, **({"json": body} if body else {}))
+            out[p.split("/")[-1] if "controls/" in p and p.split("/")[-2].isdigit() else p] = r.status_code
+    return out
+
+
+def test_tc_sm_03_local_commands_are_not_refused_for_smart_mode(client, auth_headers, rig):
+    """Smart mode governs the ERP and the automation, not staff at the cabinet (§4.11): with it
+    off the cabinet must stay usable. Same answer ON and OFF, never 409."""
+    pid, _bid = rig
+    try:
+        _smart(pid, True)
+        on = _local_calls(client, auth_headers, pid)
+        _smart(pid, False)
+        off = _local_calls(client, auth_headers, pid)
+    finally:
+        _smart(pid, True)
+    assert 409 not in off.values(), off
+    assert off == on, {"smart ON": on, "smart OFF": off}
+    assert set(off.values()) <= {200, 202}, f"a command was not accepted — the check saw nothing: {off}"
+
+
+def test_tc_sm_04_diagnostics_through_the_gateway_is_not_gated(client, rig, monkeypatch):
+    """§4.11 SM-Q4: diagnostics reads and measures — the ERP may run it whatever smart mode says.
+    Its one valve step keeps its own smart-mode check (test_valve_auto_activate.py)."""
+    import httpx
+    from app.main import app
+    from app.routers import external_api_gateway as gw
+    real = httpx.AsyncClient
+
+    class InProcess(real):
+        def __init__(self, *a, **k):
+            k["transport"] = httpx.ASGITransport(app=app)
+            super().__init__(*a, **k)
+
+    async def no_answer(event, timeout=12.0):
+        raise asyncio.TimeoutError
+
+    import asyncio
+    monkeypatch.setattr(gw.httpx, "AsyncClient", InProcess)
+    monkeypatch.setattr("app.routers.diagnostics._await_diag_event", no_answer)
+    pid, _bid = rig
+    _store([("diagnostics.run", "bidirectional")])
+    _smart(pid, False)
+    try:
+        with patch("app.services.mqtt_client.mqtt_service.publish"):
+            r = client.post(f"/api/ext/pedestals/{pid}/diagnostics/run", headers=_ext_headers())
+        assert r.status_code != 409, r.text
+        assert r.status_code == 200, r.status_code
+    finally:
+        _smart(pid, True)
+        _store([])
+
+
+def test_tc_sm_05_only_admin_switches_smart_mode_and_the_erp_only_reads_it(client, rig):
+    from app.services.api_catalog import ENDPOINT_CATALOG
+    from test_guard_ui_phase1 import _headers
+    pid, _bid = rig
+    for role in ("monitor_control", "monitor"):
+        r = client.post("/api/pedestals/MAR_X/smartmode", json={"value": True},
+                        headers=_headers(role))
+        assert r.status_code == 403, (role, r.status_code)
+    assert not [e["id"] for e in ENDPOINT_CATALOG if "smartmode" in e["path"].lower()], \
+        "a catalogue id reaches the smart-mode switch"
+    # Read: pedestals.health through the gateway only when it is listed (D3 + §16.3).
+    _store([])
+    assert client.get("/api/ext/pedestals/health", headers=_ext_headers()).status_code == 403

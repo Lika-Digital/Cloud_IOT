@@ -518,7 +518,12 @@ changed — §4.11 Q):
   Fails on the old gate.
 - **TC-SM-05** — the switch: `POST /api/pedestals/{cabinet}/smartmode` 403 for `monitor_control`
   and `monitor`; no catalogue path reaches it; `pedestals.health` carries `smart_mode` through the
-  gateway only when listed.
+  gateway only when listed. **TC-SM-03..05 BUILT 2026-10-16.** TC-SM-04 failed on the old gate (409); TC-SM-03 and -05
+  pass on the code by design and are what fail if someone adds a check: TC-SM-03 caught the mutant
+  with a smart-mode check on the light. TC-SM-03 sets up real state (a tripped, remotely
+  resettable breaker, plugs waiting, pending and active sessions, a cabinet id) so that every
+  command is ACCEPTED (200) with smart mode ON and OFF — a first version answered 404/400/409 for
+  missing state and would have hidden a check placed after those lookups.
 
 **The definition (owner, 2026-10-16, fourth message) — written because we did not have it:**
 smart mode decides whether **the ERP and the automation** may manage consumption — power, water,

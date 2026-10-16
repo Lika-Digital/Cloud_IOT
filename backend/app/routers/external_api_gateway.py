@@ -133,7 +133,9 @@ _CONTROL_PEDESTAL_RESOLVER: dict[str, tuple[str, str]] = {
     "controls.water_cmd":      ("path", "pedestal_id"),
     "controls.reset":          ("path", "id"),          # {id} is a pedestal_id
     "controls.led":            ("path", "id"),
-    "diagnostics.run":         ("path", "id"),
+    # "diagnostics.run" is NOT here (owner, 2026-10-16, spec §4.11 SM-Q4): it reads and
+    # measures, so the ERP may run it whatever smart mode says. Its one step that could open a
+    # valve (`_maybe_auto_open_valve`) keeps its own smart-mode check.
     "sockets.config_patch":    ("path", "pedestal_id"),
     "valves.config_patch":     ("path", "pedestal_id"),
     "led_schedule.upsert":     ("path", "pedestal_id"),

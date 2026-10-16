@@ -279,15 +279,21 @@ What the cabinet will send; until the release that builds it, the webhook is as 
 (flat body, no signature) and, in practice, not received (cabinet spec `ui_v2_spec.md` §18.2).
 
 - **One sender, one URL, one key.** The URL is the one set on the cabinet's API gateway screen.
-- **Envelope:** `{ "event", "event_id", "data", "timestamp" }`. `data` is the 16-key payload —
+- **Envelope:** `{ "event", "event_id", "cabinet_id", "timestamp", "data" }` (R22). `data` is the 16-key payload —
   byte-for-byte what `GET /api/nfc/session/{id}` returns for the same state.
 - **`event_id`** is unique per event and STABLE on resend — deduplicate on it:
   `{cabinet_id}:session_activated:{session_id}`, `{cabinet_id}:session_ended:{session_id}`,
   `{cabinet_id}:telemetry:{session_id}:{epoch second of the reading}`.
 - **`timestamp`** is when the event happened (UTC, ISO-8601 `Z`), not when it was sent; a resend
   repeats it.
-- **Signature:** `X-Signature: sha256=<hex>` — HMAC-SHA256 of the exact raw body bytes with the
-  cabinet's key. Verify over the bytes you received, before parsing.
+- **Signature:** `X-Webhook-Signature: sha256=<hex>` — HMAC-SHA256 of the exact raw body bytes with
+  the cabinet's webhook signing secret — a SEPARATE secret, not the `X-API-Key` you send us; the
+  owner sets it on both sides (your `webhook_key_enc`). Verify over the bytes you received, before
+  parsing. `X-API-Key` still travels in the first release that signs, and is dropped in the next.
+- **`session_ended` on every end path** (R23) — unplug, the cabinet's own end, your stop, the
+  operator's stop, comm loss, idle timeout. Telemetry is always `telemetry`.
+- **Your 4xx is final** — the cabinet does not retry a 4xx (except 408 and 429); it retries a 5xx, a
+  timeout or a network error, three times with identical bytes.
 - **`session_ended`** is sent the moment the session completes; each event is attempted up to 3
   times (at once, +5 s, +30 s) with identical bytes. If none arrives, pull: the session is in
   `GET /api/nfc/sessions?ended_from=…` — pull is the truth, the webhook is the trigger.

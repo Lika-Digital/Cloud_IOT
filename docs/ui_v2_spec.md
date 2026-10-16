@@ -59,7 +59,7 @@ Evidence is a test, a commit or a path, never a claim.
 | CORE `/api/marina/berths`, berth detail, status sentences and precedence | BUILT+PROVEN | `test_marina_core.py` TC-MC-01..14, `test_marina_core_shape.py` |
 | `outlet_silent` (rank 2.5) | BUILT+PROVEN on dev, cabinet fact pending | block 3, 2026-10-12: a socket is silent when the fresher of its meter telemetry (`meter_load_updated_at`, every 5 s) and its status message (`socket_states.updated_at`) is missing or older than 60 s; the power state is then `unknown`, not `idle`. `test_outlet_silent.py` TC-OS-01..05 (02/03 failed on the code before). That idle sockets really report every 5 s is checked on the cabinet: §13.6b 11i |
 | Guard on `/marina` | BUILT+PROVEN on dev; **owner's decision pending** | block 3, 2026-10-12: `services/guard_state.py` reads `guard.service.effective_state` per pedestal (worst camera wins; desired ARMED + silent worker stays UNAVAILABLE). `test_marina_guard_state.py` TC-MGS-01..06 (01/02/04/05 failed on the code before — every pedestal said "unavailable"). **Decided 2026-10-16 (owner):** "No guard on this pedestal" with no row — superseded by the "Guard UI" row below |
-| **Guard UI — four sentences, arm, a visible alarm, playback** (owner, 2026-10-16) | **NOT BUILT** — spec §5.5 | §5.5.1 sentences, the row created on the worker's announce, re-arm after a worker restart, a missed ack as "not answering"; §5.5.2 Arm / Switch off, admin only (button and API); §5.5.3 rank 7 and `/marina/alarms` from guard events, the legacy `unauthorized_entry` separated; §5.5.4 playback, admin only (button and API). **Open (§5.5.5):** who sees the list and frame, who labels. When the button lands, `guard_operator_runbook.md:3-6` ("no screen, curl") is corrected in the same commit |
+| **Guard UI — four sentences, arm, a visible alarm, playback** (owner, 2026-10-16) | **NOT BUILT** — spec §5.5 | §5.5.1 sentences, the row created on the worker's announce, re-arm after a worker restart, a missed ack as "not answering"; §5.5.2 Arm / Switch off, admin only (button and API); §5.5.3 rank 7 and `/marina/alarms` from guard events, the legacy `unauthorized_entry` separated; §5.5.4 playback, admin only (button and API). **Decided (§5.5.5, 2026-10-16):** the event list, frame, recording and labels are admin only, in the page and in the API. When the button lands, `guard_operator_runbook.md:3-6` ("no screen, curl") is corrected in the same commit |
 | Row controls (power, water, light) | BUILT+PROVEN on dev 2026-10-15; cabinet 11l | The server decides: each facility carries `action` (on/off/null) and ONE `unavailable_reason` — `no_socket`, `no_contact`, `standalone`, `read_only`, `state_unknown`, `nothing_plugged`, `needs_scan` (`routers/marina.py`, `Gate`/`_offer`). A control is offered only when its endpoint will accept it: "Turn on" power only for a plug waiting (`pending`; with nothing plugged the endpoint 409s), water only with a live NFC reservation (§15), read by a query that does not write. `ControlledLine.tsx`: one sentence per reason, no control element in its place; a confirm before anything that ends a session or switches the shared light ("This light covers berths 1, 2, 3 and 4…"); after a tap it says "Sent" — not "done" — and a refusal shows the server's sentence, a missing answer says it is not known whether it switched. **Two defects fixed by it:** a smart-mode pedestal out of contact said "The pedestal is switching this itself" (`unavailable_reason` was always `standalone`), and a read-only `monitor` got `available: true` for endpoints that 403 it — both shown on the old code. Proof: `test_row_controls.py` TC-RC-01..07 all failed on the old code; TC-RC-06 taps every offered action against its real endpoint (accepted) and both facility refusals (refused), so the offer cannot drift from the endpoint; mutants caught — the reservation read via `get_live_pending`, which writes (TC-RC-04); "Turn on" offered on an idle socket (TC-RC-03, TC-RC-06). `marina.spec.ts` TC-UIRC-01..04 failed on the old pages; TC-UIR-03 is no longer vacuous (TC-UIRC-01 is its positive control). The water 409 now reads as a sentence first (`controls.py`; TC-RC-07). **Open, not fixed here:** `mqtt_client.publish` drops a command when the broker is disconnected and returns nothing, so the endpoint still answers `sent` — and a `stop` completes the DB session while the socket stays on. Changing it changes what the ERP receives: the owner's decision |
 | TC-UIR-01 (no raw colour classes) | BUILT+PROVEN, with exemptions | `test_ui_rule_colours.py` (block 3, 2026-10-12): no status hue (red/green/amber/yellow/orange/emerald/lime/rose on a colour utility) in `pages/marina/**`, `components/marina/**` outside `Status.tsx`, whose exported `TONE` is the only palette. Measured with that pattern: 29 lines, 2 of them in `Status.tsx` (the earlier "32" used a pattern that was not recorded). Fixed now: MarinaGuard, MarinaAlarms, MarinaWater. Exempt per file until block 4: MarinaDashboard, BerthDetail, MarinaSetup — the gate fails when block 4 is marked DONE below while any is still exempt |
 | Block 4 — UI v2 remainder | DONE on dev 2026-10-15; cabinet checks 11k–11p | Row controls, L3 history, nav of 4 (Analytics already out — see the "Block 4 (part)" row below; do not redo), `<PhaseBlock>`, wizard step 3, §9 splits, `/marina` on the websocket — each has its own row. `EXEMPT_UNTIL_BLOCK_4` is empty, so TC-UIR-01c holds. **This row is the deadline of TC-UIR-01's exemptions** — `test_ui_rule_colours.py` reads it; setting it to DONE with exemptions left fails the gate |
@@ -746,15 +746,27 @@ so directories 755 and files 644 — readable by others. **Read from the code, n
 guard docs say otherwise (`guard:cloud-iot`, mode 2750 — corrected in the docs commit). The same
 §13.6c check reads it as `cloud-iot`.
 
-### 5.5.5 OPEN — the owner's decision, nothing of it built until answered
+### 5.5.5 DECIDED (owner, 2026-10-16) — the event list, the frame and the labels are ADMIN ONLY
 
-1. **Who sees the event list and the annotated frame?** The frame (`/events/{id}/frame`) is a
-   picture of a person — the same class of personal data as the recording. Proposal: staff see
-   the list (time, "Person seen", label state) and no picture; frame and clip admin only.
-2. **Who labels correct / false alarm?** Today any role (`guard/router.py:329-349`,
-   `guard_b1_design.md:443-446`, "whoever is watching the screen"). With the recording admin
-   only, staff would label without seeing what was seen. Proposal: admin only, like the
-   recording. Consequence: an unlabelled event keeps its pedestal at rank 7 until an admin looks.
+The frame is a picture of a person — personal data; the owner's rule that staff do not see
+customer data applies all the more to a recording of a human being. So **everything that shows
+or judges what guard saw is admin only, in the page AND in the API:**
+`GET /api/guard/events`, `/events/{id}/frame`, `/events/{id}/video`, `/detections`,
+`/detections/{id}/frame` and `POST /events/{id}/label` become `require_admin` (today
+`require_any_role`, `guard/router.py:262-405`). `GET /api/guard/status` stays any role: it holds no
+picture, and staff see guard's state only as the sentence on `/marina` and `/marina/guard`.
+
+**What staff see:** the pedestal's guard sentence, and — on `/marina` and in `/marina/alarms` —
+"Someone was seen — needs checking" while an event is unlabelled (a status sentence, no picture,
+no time of a person). **What admin sees on `/marina/guard`:** the sentence, Arm / Switch off, the
+event list (time, "Person seen", label state), the annotated frame, the recording, and
+**Correct / False alarm**. Consequence, accepted: an unlabelled event keeps its pedestal at rank 7
+until an admin looks.
+
+**Guard events never become `active_alarms` rows** — rank 7 and `/marina/alarms` read
+`guard_events` directly (§5.5.3). So `GET /api/alarms/active` (catalogue id `alarms.active`, the
+ERP's alarm read) carries no guard event in Phase 1: guard is the cabinet's own security function
+and goes to the ERP in Phase 2 at the earliest (§17.6).
 
 **DECIDED — notifications stay off.** Your standing instruction: off until you have watched a
 week. **There is no built-and-disabled notification path** that could be switched on by
@@ -1267,7 +1279,7 @@ fails with the `.xml` moved away and with it corrupted, and the real script on a
 | # | Check | Command / step | Expected | If it fails | Outcome |
 |---|---|---|---|---|---|
 | 17 | Reproduce the `/api/ext/*` 401 — seen so far only on the cabinet | `read -s EXT_KEY` (the gateway key), then `curl -s -w '\n%{http_code}\n' -H "Authorization: Bearer $EXT_KEY" http://localhost/api/ext/pedestals/1/status` | A MEASUREMENT, not pass/fail: record the code and the body. `401` confirms D17; `200` means it does not reproduce after the upgrade | RECORD | ☐ |
-| 17b | **Phase 1: no camera endpoint is allowed to the ERP** (§16.3, owner 2026-10-16 — GDPR) | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3,json;c=sqlite3.connect('file:/opt/cloud-iot/backend/pedestal.db?mode=ro',uri=True);r=c.execute('SELECT allowed_endpoints FROM external_api_config WHERE id=1').fetchone();ids=sorted(e['id'] for e in json.loads(r[0] or '[]')) if r else [];print(len(ids));print(ids);print([i for i in ids if i.startswith('camera.')])"` | RECORD the count and the list (the owner states 17 on 2026-10-15). The last line `[]` | A `camera.*` id in the list = an image path to the ERP is open against the Phase 1 decision: tell the owner; it is removed on `/api-gateway` by the owner's decision, not on the pier | ☐ |
+| 17b | **Phase 1: no camera endpoint is allowed to the ERP** (§16.3, owner 2026-10-16 — GDPR) | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3,json;c=sqlite3.connect('file:/opt/cloud-iot/backend/pedestal.db?mode=ro',uri=True);r=c.execute('SELECT allowed_endpoints FROM external_api_config WHERE id=1').fetchone();ids=sorted(e['id'] for e in json.loads(r[0] or '[]')) if r else [];print(len(ids));print(ids);print([i for i in ids if i.startswith('camera.')])"` . **Then the ERP's calls (2026-10-16 it reports calling `camera.frame_ext` and `camera.stream_ext`):** `journalctl -u cloud-iot-backend --since "14 days ago" -o cat \| grep -E 'GET /api/ext/pedestals/[^ ]+/camera/(frame\|stream)' \| grep -oE '" [0-9]{3}' \| sort \| uniq -c` | RECORD the count and the list (the owner states 17 on 2026-10-15). The last line `[]`. The ERP's camera calls: every one `503` (dead calls). **No access lines at all = the access log is off: RECORD as unproven, not as a pass** | A `camera.*` id in the list = an image path to the ERP is open against the Phase 1 decision: tell the owner; it is removed on `/api-gateway` by the owner's decision, not on the pier | ☐ |
 | 17c | **What occupancy says on the cabinet today** (§17.5 A — before the fix) | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;c=sqlite3.connect('file:/opt/cloud-iot/backend/data/users.db?mode=ro',uri=True);print([r[1] for r in c.execute('PRAGMA table_info(berths)')]);print(c.execute('SELECT * FROM berths').fetchall())"`; `/opt/cloud-iot/backend/.venv/bin/pip list 2>/dev/null \| grep -ci openvino` | RECORD every berth's occupancy fields and the last analysis time, and the openvino count (`0` expected, G.4). Occupied on a berth seen EMPTY at the time = finding A on the cabinet | RECORD — the fix is §17.5 A, not on the pier | ☐ |
 
 ## 13.9 Migration — the four populations
@@ -1343,13 +1355,18 @@ is NOT done until these rows pass.
 |---|---|---|---|---|---|
 | DOC.1 | **ERP specification v4, under a NEW name** | `generate_erp_integration_doc.py` with `OUTPUT_PATH` → `Cloud_IOT_ERP_Integration_Guide_v4.pdf` (today it writes `_v3.pdf`, `:18`), its content corrected to the code first: event names, the §18 envelope and signature, `berth_id` int or null, authentication (§18.5) | `Cloud_IOT_ERP_Integration_Guide_v4.pdf` in the project folder; its events, envelope and auth match `erp_session_payload_contract.md` | The release is not done | ☐ |
 | DOC.2 | **v3 untouched** — it is the record of what the ERP was given | `git diff --stat <release> -- Cloud_IOT_ERP_Integration_Guide_v3.pdf` | No change | Restore it from git; v3 is never regenerated | ☐ |
-| DOC.3 | **The user guide** — **OPEN: which file** (below) | the generator, after its text is checked against the screens of this release (§5, §5.5, nav) | The guide in the project folder describes this release's screens | The release is not done | ☐ |
+| DOC.3 | **The user guide** — `docs/User Guide.pdf`, from `scripts/generate_user_guide.py` (owner, 2026-10-16: the existing name; see below) | the generator, after its text is checked against the screens of this release (§5, §5.5, nav) | The guide in the project folder describes this release's screens | The release is not done | ☐ |
 
-**OPEN — the owner: which is "the user guide"?** Two generators exist:
-`scripts/generate_pedestal_user_guide.py` → `Pedestal_User_Guide.pdf` (project folder, a PDF),
-and `scripts/generate_user_guide.py` → `docs/User Guide.docx` (a .docx, kept as the record of
-v3.34 and never regenerated over, `docs/generated_documents.md`). The first matches "PDF in the
-project folder"; whether it, a new file, or both is meant is the owner's call.
+**DECIDED (owner, 2026-10-16): existing names, nothing invented.** The user guide is
+`docs/User Guide.docx` from `scripts/generate_user_guide.py`; the PDF obligation means a PDF from
+the SAME source with the same base name, `docs/User Guide.pdf`. The only new name is the ERP guide
+v4, because v3 contains errors and must not be overwritten.
+
+**OPEN — one conflict to resolve before DOC.3 runs:** `docs/generated_documents.md` keeps
+`docs/User Guide.docx` tracked as the RECORD of v3.34, never regenerated over; the generator writes
+exactly that path (`generate_user_guide.py:16`). A guide that describes this release regenerates
+it. Either the record is superseded (it stays in git history at `6ae28fd`) or the generator writes
+the new .docx beside it. Proposal: supersede it — git history keeps v3.34 byte for byte.
 
 ## 13.13 Not yet on this list
 
@@ -1446,11 +1463,38 @@ catalogue id is not in `external_api_config.allowed_endpoints` (`external_api_ga
 So a catalogued camera endpoint gives the ERP nothing unless the cabinet's list names it.
 **Confirmed by both sides, 2026-10-16: the ERP does not call the camera endpoints in Phase 1.**
 
-**What the cabinet's list holds is a cabinet fact and is NOT measured from here.** The owner states
-that the configuration of 2026-10-15 enabled 17 endpoints and no `camera.*` among them. §13 check
-17b reads it. **Not enforced in code:** an admin on `/api-gateway` can still tick a `camera.*`
-endpoint — the block is a decision, not a mechanism. **Open — owner:** should the code refuse
-`camera.*` in `allowed_endpoints` while Phase 1 holds? (One check in `PUT /api/admin/ext-api/config`.)
+**What the cabinet's list holds is a cabinet fact and is NOT measured from here.** The owner stated
+that the configuration of 2026-10-15 enabled 17 endpoints and no `camera.*` among them. **The ERP
+reports (2026-10-16) that it calls `camera.frame_ext` and `camera.stream_ext` TODAY** (it removes
+them, its decision D30). On the code the cabinet runs (`main` = `e80a4c1`) a camera endpoint NOT in
+the list answers **503** "Feature not available / Not enabled" (`ext_pedestal_endpoints.py:394-398,
+473-477`), so either the ERP's calls get 503 and are dead, or the list does contain them and the
+image path to the ERP is OPEN. Only the cabinet answers which: §13 check 17b, with the journal's
+status codes for those calls. **If they are allowed, it is a live hole in Phase 1 and comes first.**
+
+**DECIDED (owner, 2026-10-16): the CODE refuses `camera.*` while Phase 1 holds** — "a configuration
+that can be set by hand is not a rule but a memory". Built as:
+
+- one constant, `PHASE1_NO_IMAGES_TO_ERP = True`, in `services/api_catalog.py`, beside the
+  catalogue; a catalogue entry carries `"image": True` for every endpoint that returns a frame, a
+  stream or a stream address (`camera.snapshot`, `camera.stream`, `camera.frame_ext`,
+  `camera.stream_ext`);
+- `PUT /api/admin/ext-api/config` refuses (422, with the sentence "Camera endpoints are not allowed
+  to the ERP in Phase 1 — owner's decision, GDPR") any `allowed_endpoints` entry whose catalogue
+  entry has `image`;
+- AT REQUEST TIME the gateway and the direct `/api/ext/...` routes refuse an `image` endpoint
+  whatever the stored list says (403) — a list saved before this commit, possibly on the cabinet
+  now, must not keep the path open;
+- `/api-gateway` shows those endpoints greyed with the same sentence, not as a tickbox;
+- a test that fails if any catalogue entry returning `image/*` or a stream URL lacks `image`, and
+  one that a stored list containing `camera.frame_ext` still gets 403.
+
+**How it is lifted, exactly — only when Phase 2 AND the owner's GDPR decision are both recorded:**
+(1) the owner's decision is written in this section with its date; (2) ONE commit sets
+`PHASE1_NO_IMAGES_TO_ERP = False` and changes the test that guards it in the same commit, citing
+that decision — the same way the §9 limit is changed (TC-UIR-10); (3) the release that carries it
+says so in its notes, and an admin then enables the endpoints on `/api-gateway`. Never an `.env`
+value, never a flag on the screen: lifting it is a reviewed code change, like any other rule.
 
 ## 16.4 Phase 2 — a DIRECTION, NOT a decided architecture; the measurement decides
 
@@ -1470,26 +1514,25 @@ deployed, with all four functions running as they will in service (occupancy at 
 interval, guard armed at 1 frame/s), for **7 consecutive days**, plus a 7-day control period with
 the functions off for M2.
 
-| # | What is measured | How | Why it matters |
+| # | What is measured | Unit, and how | What the outcome would mean |
 |---|---|---|---|
-| M1 | **Cabinet cost of each function**: CPU % (its process, and the whole machine), memory, inference time p50 / p95 | guard: its health message (CPU, inference time); occupancy and match: timed per run in the backend log; machine: a 1-minute `/proc/stat` + `/proc/meminfo` sampler | the reason Phase 2 exists is to unload the cabinet; if the load is small there is nothing to unload |
-| M2 | **Harm to the cabinet's core work** while the functions run: backend request time p95, MQTT message-to-database delay p95, time from a control tap to the cabinet's ack | the same metrics from the backend log, functions ON (M1's week) against OFF (control week), same hours of day | load only matters if it slows what the cabinet is for |
-| M3 | **Cost of moving images**: bytes per evaluation image (the sector crop, JPEG), images per day at the configured interval, upload success rate and time over the real uplink | a test upload of the real crop to an ERP test endpoint every interval, for the week | Phase 2 trades CPU for the uplink |
-| M4 | **Time to a result at the ERP**: frame → result on the cabinet + push, against frame → upload → ERP evaluation → result | timestamps at each step | the ERP must not learn later than today |
-| M5 | **Evaluation lost when the uplink is down**: hours in the week the cabinet could not reach the ERP | the uplink log (failed pushes, tunnel down) | in Phase 1 the evaluation continues offline; in Phase 2 it stops |
+| M1 | **What the functions cost the cabinet** | **% of one CPU core**, as a 7-day mean and a p95 of 1-minute samples, per function (guard process; occupancy + match runs) and for the whole machine; **MB** of resident memory; **ms** per inference, p50 and p95 (the owner measured one inference at 274 ms on this CPU). From guard's health message, the backend's per-run timing, and a 1-minute `/proc/stat` + `/proc/meminfo` sampler | High = there is load to take off the cabinet; low = moving the functions unloads nothing |
+| M2 | **Whether that cost harms the cabinet's own work** | **ms**, p95: backend request time; MQTT message → database delay; control tap → cabinet ack. Functions ON (M1's week) against OFF (control week), same hours of the day; reported as the **difference in ms and in %** | A real difference = the functions slow what the cabinet is for; none = their cost is harmless where they are |
+| M3 | **What moving images would cost the uplink** | **kB** per evaluation image (the sector crop, JPEG); **images per day** at the configured interval; **MB per day**; upload **success %**; upload **time in s**, p50 / p95 — a test upload of the real crop to an ERP test endpoint every interval for the week | Small, reliable and fast = Phase 2 is affordable; otherwise it trades a small CPU cost for an uplink dependency |
+| M4 | **How late the ERP learns a result** | **s** from frame to result at the ERP, both ways: on the cabinet + push (Phase 1) against upload + ERP evaluation (Phase 2); p50 / p95 | Phase 2 later than Phase 1 = the ERP learns occupancy later than today |
+| M5 | **Evaluation lost while the uplink is down** | **hours per week** the cabinet could not reach the ERP (failed deliveries, tunnel down), and the **longest single outage in hours** | Every such hour is an hour of no evaluation in Phase 2 (in Phase 1 the cabinet keeps evaluating offline) |
 
-**Proposed outcome rule** — numbers for the owner to set; the shape is the proposal:
+**The outcome rule — the shape is proposed, the numbers are the owner's, set AFTER seeing what
+is measured** (the owner, 2026-10-16: "I do not set thresholds before I know what is measured"):
 
-- **Moving makes sense** when BOTH hold: (a) the cabinet is under real pressure — M1 machine CPU
-  above **X %** on average over the week, or M2 core latency p95 more than **Y %** worse with the
-  functions on than off; AND (b) the uplink can carry it — M3 upload success at least **99.5 %**
-  within **Z s**, M4 no slower than today by more than **W s**, M5 below **V hours** a week.
-- **Stay in Phase 1** when the cabinet has headroom (M1 and M2 under their thresholds): moving
-  would add a dependency on the uplink and buy nothing.
-- **Guard is decided separately** with the same measures: its own M1 share, and for control on
-  the ERP, M4 for arm → acknowledgement and M5 (a guard that cannot be armed while the uplink is
-  down).
-
+- **Moving makes sense** when BOTH hold: (a) the cabinet is under pressure — M1 above a share of a
+  core the owner sets, or M2 worse by more than a margin the owner sets; AND (b) the uplink can
+  carry it — M3, M4 and M5 inside limits the owner sets.
+- **Stay in Phase 1** when the cabinet has headroom (M1 and M2 inside their limits): moving adds a
+  dependency on the uplink and buys nothing.
+- **Guard is decided separately** with the same measures: its own M1 share, and for control on the
+  ERP, M4 for arm → acknowledgement and M5 (a guard that cannot be armed while the uplink is down).
+  Guard events to the ERP are Phase 2 (§17.6).
 
 ---
 
@@ -1516,8 +1559,8 @@ the functions off for M2.
 |---|---|---|---|---|
 | 1 | Occupancy | `/berths` "Analyze" → `POST /api/admin/berths/{id}/analyze` (`require_control`, exists); **and periodically** (§17.3) | `POST /api/ext/pedestals/{id}/berths/{bid}/analyze` → runs now, answers `{occupied: 1|0|null, match, analysed_at}`; `GET /api/ext/pedestals/{id}/berths/occupancy` (exists) | `berth_occupancy_updated` (exists; today only after a manual click) — on a CHANGE of the result, from either trigger |
 | 2 | Match (histogram, §17.4) | the same analysis | the same `POST …/analyze`; the result in `GET …/berths/occupancy` (added: `match: true|false|null`); reference photos: `POST …/reference-image` (exists), plus `GET …/reference-images` (count and names only — no bytes) and `DELETE …/reference-images/{name}` | **new** `vessel_match_updated` `{pedestal_id, berth_id, match: true|false|null}` on a change. Today the match fields are stripped from the occupancy event (`webhook_service.py:50-60`) |
-| 3 | Sector | `/berths` → sector drawn on the frame → `PUT /api/admin/berths/{id}/config` (exists) | `GET` the sector as numbers (in `GET /api/ext/berths`, exists); **setting it: OPEN, §17.6 Q1** | — |
-| 4 | Guard | `/marina/guard` Arm / Switch off, admin (§5.5.2) | `POST /api/ext/pedestals/{id}/guard/enable`, `…/guard/disable`; `GET /api/ext/pedestals/{id}/guard/status` (the §5.5.1 state and sentence); `GET /api/ext/pedestals/{id}/guard/events` (time, label, has-recording — never the frame or the clip) | **OPEN, §17.6 Q2** — the owner named occupancy and match for push |
+| 3 | Sector | `/berths` → sector drawn on the frame → `PUT /api/admin/berths/{id}/config` (exists) | `GET` the sector as numbers (in `GET /api/ext/berths`, exists); setting it: yes, as numbers (§17.6.1 — the shape today is a rectangle); **the API shape is the ERP's proposal, R27–R30** | — |
+| 4 | Guard | `/marina/guard` Arm / Switch off, admin (§5.5.2) | `POST /api/ext/pedestals/{id}/guard/enable`, `…/guard/disable`; `GET /api/ext/pedestals/{id}/guard/status` (the §5.5.1 state and sentence); `GET /api/ext/pedestals/{id}/guard/events` (time, label, has-recording — never the frame or the clip) | **not in Phase 1** — guard stays local; to the ERP in Phase 2 (§17.6.2). The ERP endpoints in this row wait for the R30 shape |
 
 ## 17.3 Occupancy runs periodically AND on request (owner, 2026-10-16)
 
@@ -1574,23 +1617,40 @@ session-completion path calls `create_invoice_for_session` (`controls.py:307`,
 `mqtt_handlers.py:1427, 3786`, `customer_sessions.py:282`); it writes an invoice whenever the
 session has a `customer_id` (`invoice_service.py:18`), and the still-registered legacy customer
 routes set one (`customer_sessions.py:159, 183`, `mobile.py:292`; `main.py:880-882`). §1.4 said
-"`invoice_service` is not on a live path" — wrong. **OPEN — owner (§17.6 Q3).**
+"`invoice_service` is not on a live path" — wrong. **Decided 2026-10-16: the cabinet stops writing invoices (§17.6.3).**
 
-## 17.6 OPEN — the owner's decisions, nothing of it built until answered
+## 17.6 DECIDED (owner, 2026-10-16)
 
-1. **Setting the sector from the ERP.** Defining a sector means looking at the frame; in Phase 1
-   the frame never leaves the cabinet. Either the ERP sets it blind, as four numbers
-   (`PUT …/berths/{bid}/sector {x1,y1,x2,y2}`, validated 0 ≤ x1 < x2 ≤ 1), or "startable from
-   the API" for function 3 means reading it only and it is drawn on the cabinet (today's design,
-   `ext_pedestal_endpoints.py:216-217`). Proposal: the four numbers, because the condition says
-   all four.
-2. **Guard to the ERP: pushed too?** Proposal: `guard_alarm` (time, pedestal, no image) and
-   `guard_state_changed` as webhook events — an alarm learned only by polling is late.
-3. **Invoices (finding C):** switch the four calls off (the cabinet stops writing invoices; the
-   invoice table and its legacy routes stay for history), or leave them as they are.
-4. **Smart mode and these functions.** The gateway refuses ERP writes on a pedestal in standalone
-   (`external_api_gateway.py:317-341`). Smart mode governs the outlets; the camera functions are
-   the cabinet's own. Proposal: analysis, schedule and guard are NOT blocked by smart mode off.
+1. **The sector, from the ERP without an image — yes; that is Phase 1** (the ERP never sees the
+   frame). **What the sector IS today, measured:** an axis-aligned RECTANGLE, not a polygon — four
+   fractions of the frame, `zone_x1`, `zone_y1`, `zone_x2`, `zone_y2` (0.0–1.0, top-left and
+   bottom-right), plus `use_detection_zone` (1/0), per berth, in `users.db` table `berths`
+   (`auth/berth_models.py:35-39`, defaults 0.2 / 0.2 / 0.8 / 0.8). Drawn by mouse-drag as one
+   rectangle (`components/berths/SectorConfigModal.tsx:88, 295-297`), saved by
+   `PUT /api/admin/berths/{id}/config` (`SectorConfigModal.tsx:200-204` → `routers/berths.py:112-122,
+   755-764`). No polygon, point list or vertex exists anywhere in the code (searched). One berth has
+   one sector; the berths of a pedestal share one camera, so one frame holds several sectors.
+   Today the values are NOT validated (any float, x1 ≥ x2 accepted) and the modal's fallback is 0.1
+   where the model's default is 0.2. Guard's zone is a separate rectangle per camera
+   (`guard_config.zone_*`). **The API shape is the ERP's proposal (R27–R30, §18.8) — not built
+   before it is agreed.**
+2. **Guard events to the ERP — NOT in Phase 1.** Guard is the cabinet's own security function and
+   the ERP does not bill it. It stays local; it is Phase 2 (§16.4).
+3. **Invoices (finding C) — the cabinet STOPS WRITING them.** `create_invoice_for_session` returns
+   without writing, and logs once per call: `invoice not written for session N — invoice writing
+   is off by the owner's decision of 2026-10-16: the ERP bills`. One place (`invoice_service.py`),
+   not the four call sites, so no path can miss it. Existing invoice rows and every read path stay —
+   history is not deleted. Test: completing a session with a `customer_id` on each of the four paths
+   writes no invoice (fails on today's code) and the log line appears.
+4. **Smart mode off does NOT block the camera functions** — occupancy and match are independent of
+   smart mode, and blocking them would blind the cabinet in exactly the state it is in today.
+5. **Occupancy interval: 15 minutes, configurable** (owner). One inference measured at 274 ms on
+   this CPU (owner), so every 15 minutes is negligible.
+6. **Found answering the ERP (A4/A5), added to finding A's fix:** a FAILED analysis (snapshot
+   failed, thermal suspension) is stored as `occupied_bit = 0` and the berth set to "free"
+   (`routers/berths.py:524-534`, `berth_analyzer.py:243-260`) — a failure reported as "empty",
+   pushed to the ERP as `occupied: false`. Rule 8: unknown is not zero. Fixed with A: a failed
+   analysis leaves the last result and its time untouched, records the error, and pushes nothing.
 
 ## 17.7 Build order (owner, 2026-10-16, second message)
 
@@ -1648,7 +1708,7 @@ broadcast, so which websocket channel a message travels on can never decide what
 choices live on that screen, not in `.env`); `ERP_WEBHOOK_URL` is removed. Session events go to
 that URL for every session with an `erp_ref` (the contract's rule, unchanged), without being
 listed in `allowed_events`; the catalogued events go only when listed, as today.
-**Which key: OPEN — §18.7 Q1.**
+**The key: a SEPARATE signing secret (owner, 2026-10-16), §18.7.**
 
 **The envelope (#5):**
 
@@ -1656,6 +1716,7 @@ listed in `allowed_events`; the catalogued events go only when listed, as today.
 {
   "event":     "session_ended",                         // the contract's names (ERP #4)
   "event_id":  "MAR_KRK_ORM_01:session_ended:847",       // unique per event, STABLE on resend
+  "cabinet_id": "MAR_KRK_ORM_01",                        // R22
   "data":      { /* the 16-key session payload, unchanged */ },
   "timestamp": "2026-10-16T21:14:03Z"                    // when the EVENT happened, UTC
 }
@@ -1672,7 +1733,7 @@ listed in `allowed_events`; the catalogued events go only when listed, as today.
 - **`data`** for session events is `nfc_service.build_session_payload` — the same function as
   `GET /api/nfc/session/{id}`, so push and pull cannot disagree (pull is the truth).
 
-**The signature (#8):** `X-Signature: sha256=<hex>`, HMAC-SHA256 over the exact raw body bytes
+**The signature (#8, R25):** `X-Webhook-Signature: sha256=<hex>`, HMAC-SHA256 over the exact raw body bytes
 with the cabinet's key (Q1). The ERP recomputes it over the bytes it received; any change to the
 body fails it.
 
@@ -1717,13 +1778,79 @@ Its shape (content, grouping, the source of every figure, one page; the source i
 with `consumption_source` and both register readings) is proposed in this spec before anything is
 built.
 
-## 18.7 OPEN — the owner's (and the ERP's) decision
+## 18.7 DECIDED (owner, 2026-10-16) — the signing secret
 
-1. **Which key is "the cabinet's key" the ERP holds?** Today sender A sends `ERP_API_KEY` and
-   sender B the gateway key; one of them gets 401, and from here we cannot see which. Proposal:
-   `ERP_API_KEY` — the key the ERP already uses for this cabinet's session channel — as the
-   HMAC key. Whichever it is, the other sender's key stops being sent.
-2. **Does the key itself keep travelling in `X-API-Key` once the body is signed?** Sending the
-   secret in a header is what HMAC replaces (`docs/erp_key_rotation.md` already flags the
-   outbound copy). Proposal: send both in the release that introduces the signature; drop
-   `X-API-Key` from outbound in the next, once the ERP confirms the signature is mandatory.
+**Not `ERP_API_KEY`.** One secret for two purposes in two directions means that if the ERP's copy
+leaks, both fall. The ERP already keeps a separate webhook key per cabinet (`webhook_key_enc`).
+
+- **`ERP_API_KEY`** stays what it is: the key the ERP sends to `/api/nfc/*` (inbound only).
+- **The webhook signing secret** is new and separate: `external_api_config.webhook_signing_secret`,
+  set by the owner on `/api-gateway` beside the webhook URL — the screen where per-deployment
+  integration settings live (§1.3) — and entered on the ERP's side as that cabinet's webhook key.
+  At least 32 characters. **Write-only:** the API never returns it (it answers "set" or "not set",
+  as the gateway key's `***`), and it is never logged. With no secret set, nothing is sent — an
+  unsigned webhook is not sent at all, and the screen says so.
+- **`X-API-Key` on outbound:** kept in THIS release, dropped in the NEXT (owner), so the ERP can
+  accept both while it switches. **Which value it carries in the transition is the ERP's answer:**
+  today sender A sends `ERP_API_KEY` and sender B the gateway key, and one of them gets 401 — the
+  one sender sends the value the ERP's receiver accepts today (§18.8 Q-ERP).
+
+## 18.8 The ERP's requests to the cabinet (2026-10-16) and the retry rule
+
+| | Request | Status |
+|---|---|---|
+| R22 | envelope `{event, event_id, cabinet_id, timestamp, data}` | specified §18.3 (with `cabinet_id`) — build |
+| R23 | `session_ended` on EVERY end path — the ERP's stop and the operator's included; telemetry under ONE fixed name | specified below — build |
+| R24 | one sender, one key; URL from `/api-gateway`; `ERP_WEBHOOK_URL` deleted | §18.3 — build |
+| R25 | HMAC on every webhook, `X-Webhook-Signature: sha256=…`, the separate secret | §18.3, §18.7 — build |
+| R26 | the upload honours the gateway mode; plus listing and deleting reference photos through `/api/ext` | §17.1, §17.2 — build |
+| R27–R30 | start occupancy; start a match with its result SEPARATE from occupancy; read and set the sector; guard state and alarms without an image | **the ERP sends its proposal of the exact shape — NOT built before it is agreed.** (Guard alarms to the ERP: Phase 2, §17.6.) |
+
+**R23 — `session_ended` from every end path, measured.** Twelve places complete a session
+(`session_service.complete`): `main.py:418` (comm loss), `controls.py:276` (operator stop), `:736`,
+`:832`, `customer_sessions.py:264`, `nfc.py:1003` (ERP stop), `mqtt_handlers.py:1316, 1326, 1382`,
+`:1919` (unplug), `:2177` (SessionEnded), `:3770`. **Only two send `session_ended`: unplug and the
+Opta's SessionEnded.** Built: `session_ended` is emitted from inside `session_service.complete`
+itself — one place every path passes — de-duplicated by the existing `mark_ended`, so no future end
+path can forget it. Telemetry keeps the one name `telemetry` (the ERP adopted our names, #4).
+
+**The retry rule (ERP, 2026-10-16).** Until the ERP has R22 it refuses webhooks of an unknown
+shape with 422 and relies on pull. **A 4xx is PERMANENT** — 400, 401, 403, 404, 409, 410, 413, 422
+mean the contract or the key does not match, and repeating cannot succeed: not retried, logged once
+with the event, `event_id` and status. **Retried only on a 5xx, a timeout or a network error** —
+three attempts (at once, +5 s, +30 s), identical bytes. 408 and 429 count as transient (retried).
+
+## 18.9 The ERP's questions, answered from the code (2026-10-16)
+
+- **A1 — after an operator or ERP stop, does a SessionEnded arrive and `session_ended` go out?**
+  **No — nothing goes out.** The operator stop (`controls.py:260-319`) and the ERP stop
+  (`nfc.py:978-1012`) complete the session and publish `stop`, with no webhook. The Opta's
+  SessionEnded that follows finds no active session and returns with a warning, "SessionEnded …
+  but no active session found" (`mqtt_handlers.py:2163-2165`), before the webhook (`:2193-2196`).
+  The same holds for comm loss, idle timeout and the other completion paths above. Fixed by R23.
+- **A3 — `event_id`?** **None today**, in either sender (`erp_webhook.py:63-87` adds only `event`;
+  `webhook_service.py:94-98` sends `event, data, timestamp`). Proposed (R22): deterministic, stable
+  on resend — `{cabinet_id}:session_activated:{session_id}`, `{cabinet_id}:session_ended:{session_id}`,
+  `{cabinet_id}:telemetry:{session_id}:{epoch second of the reading}`.
+- **A4 — the reference-photo upload.** `POST /api/ext/pedestals/{pid}/berths/{bid}/reference-image`
+  takes the RAW request body (no multipart, no content type checked); the bytes are written as
+  given, with no check that they are an image, under `erp_<UTC time>_<epoch>.jpg`
+  (`ext_pedestal_endpoints.py:245-256`, `berth_analyzer.py:84-92`). **No size limit** on this route
+  (the 1 MB limit is the gateway proxy's, `external_api_gateway.py:30`, and this route does not pass
+  through it). It **ADDS** a photo; it never replaces. **No listing or deleting through `/api/ext`**
+  — only locally (`GET`/`DELETE /api/admin/berths/{id}/reference-images`). R26 adds both; the
+  missing image check and size limit are fixed with it (a body over 5 MB or not a JPEG/PNG/WebP is
+  refused). *Proposal: 5 MB.*
+- **A5 — is the match result separate from occupancy?** **No.** `GET /api/ext/pedestals/{id}/berths/
+  occupancy` returns `occupied` and `last_analyzed` only (`ext_pedestal_endpoints.py:189-206`). The
+  match exists only in `GET /api/ext/berths` (`berths.list`) as `match_ok_bit`, `state_code` (0
+  empty, 1 occupied + match, 2 occupied + mismatch) and `match_score`; the webhook strips them
+  (`webhook_service.py:50-60`). R28 separates it.
+- **A6 — do guard alarms come through `alarms.active`?** **No.** Guard writes only its own tables
+  (`guard_events`, `guard_detections`, `guard_recordings`) and never an `active_alarms` row, so
+  `GET /api/alarms/active` has no guard alarm under any `alarm_type`. That stays so in Phase 1
+  (§5.5.5, §17.6).
+
+**Q-ERP — one question back to the ERP:** which value does your webhook receiver accept TODAY —
+the cabinet's `ERP_API_KEY` or its gateway key? The transition release sends that one in
+`X-API-Key` beside the signature (§18.7).

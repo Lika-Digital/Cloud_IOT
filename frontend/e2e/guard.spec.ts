@@ -33,7 +33,7 @@ const CAMERA = {
 }
 
 const EVENTS = {
-  total: 4, limit: 50, offset: 0,
+  total: 5, limit: 50, offset: 0,
   events: [
     { kind: 'person', id: 11, camera_id: 1, pedestal_id: 1, at_utc: '2026-10-16T19:14:00Z',
       label: null, has_frame: true, has_video: true, video_skipped: false, video_skip_reason: null },
@@ -44,6 +44,8 @@ const EVENTS = {
       label: null, has_frame: true, has_video: false, video_skipped: true,
       video_skip_reason: 'no_disk' },
     { kind: 'paused_cpu', id: 3, camera_id: 1, at_utc: '2026-10-13T08:00:00Z', reason: 'CPU' },
+    { kind: 'unknown_state', id: 4, camera_id: 1, at_utc: '2026-10-12T08:00:00Z',
+      reason: 'CALIBRATING' },
   ],
 }
 
@@ -104,7 +106,10 @@ test('TC-GU-12 admin plays a recording, labels it, and reads why a clip is missi
   await expect(rows.nth(0)).toContainText('Person seen — needs checking')
   await expect(rows.nth(1)).toContainText('Person seen — marked false alarm')
   await expect(rows.nth(2)).toContainText('No recording — there was no space to record')
-  await expect(page.getByTestId('guard-state-row')).toContainText('Guard paused — processor overloaded')
+  const stateRows = page.getByTestId('guard-state-row')
+  await expect(stateRows.nth(0)).toContainText('Guard paused — processor overloaded')
+  // S7 (Q4b): a state we cannot read is shown raw, never as a resume or a pause.
+  await expect(stateRows.nth(1)).toContainText('Guard reported a state we cannot read: CALIBRATING')
 
   await rows.nth(0).getByRole('button', { name: '▶ Play recording' }).click()
   await expect(page.getByTestId('guard-video')).toHaveCount(1)

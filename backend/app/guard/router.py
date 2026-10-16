@@ -167,6 +167,7 @@ def guard_enable(camera_id: int, db: DBSession = Depends(get_db),
     cfg.suspended_reason = None
     cfg.suspended_at = None
     db.commit()
+    service.liveness._s6_sent.discard(camera_id)      # a person decided: a new episode
     req_id = service.publish_command(db, cfg, service.CMD_ARM, actor=user.email)
     return {"status": "accepted", "req_id": req_id, "camera_id": camera_id,
             "state": STATE_ARMING,
@@ -182,6 +183,7 @@ def guard_disable(camera_id: int, db: DBSession = Depends(get_db),
     cfg.suspended_reason = None
     cfg.suspended_at = None
     db.commit()
+    service.liveness._s6_sent.discard(camera_id)      # a person decided: a new episode
     req_id = service.publish_command(db, cfg, service.CMD_DISARM, actor=user.email)
     return {"status": "accepted", "req_id": req_id, "camera_id": camera_id,
             "state": STATE_OFF}

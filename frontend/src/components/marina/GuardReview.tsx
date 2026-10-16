@@ -111,7 +111,8 @@ function EventRow({ ev, onLabelled }: { ev: GuardListRow; onLabelled: () => void
     return (
       <li className="text-xs text-gray-300" data-testid="guard-state-row">
         {when(ev.at_utc)}{'   '}
-        {ev.kind === 'paused_cpu' ? 'Guard paused — processor overloaded' : 'Guard resumed on its own'}
+        {ev.kind === 'paused_cpu' ? 'Guard paused — processor overloaded'
+          : ev.kind === 'unknown_state' ? `Guard reported a state we cannot read: ${ev.reason}` : 'Guard resumed on its own'}
       </li>
     )
   }

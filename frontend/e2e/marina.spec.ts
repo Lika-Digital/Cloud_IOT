@@ -830,3 +830,30 @@ test('TC-UIN-04 admin nav keeps what it had, plus Setup, which opens the wizard 
   await expect(page).toHaveURL(/\/marina\/setup\/1$/)
   await expect(page.getByTestId('marina-setup')).toBeVisible()
 })
+
+// ═══ TC-GU-17 — "Guard recording although switched off" reads as a fault, in all three places ══
+
+test('TC-GU-17 S6 is marked as a fault on the dashboard, berth detail and the guard page', async ({ page }) => {
+  // Spec §5.5.1 S6 (owner, 2026-10-16): the worker says it records although someone asked for
+  // off. The words are the server's; what this proves is that each screen marks them as a fault.
+  const S6 = 'Guard recording although switched off'
+  const s6 = { state: 'on_while_off', sentence: S6, scope: 'pedestal', auto_resumes: null }
+  const core = healthyCore()
+  core.pedestals[0].guard = s6 as typeof core.pedestals[0]['guard']
+  await mockCore(page, core)
+  await page.route('**/api/marina/berths/101', (route) => route.fulfill({
+    json: { ...berthDetailBody(), guard: s6 },
+  }))
+  const FAULT = /text-amber-200/
+
+  await gotoMarina(page)
+  await expect(page.getByText(S6)).toHaveClass(FAULT)
+
+  await page.goto('/marina/berth/101')
+  await expect(page.getByTestId('berth-detail')).toBeVisible()
+  await expect(page.getByText(S6)).toHaveClass(FAULT)
+
+  await page.goto('/marina/guard')
+  await expect(page.getByTestId('guard-sentence')).toHaveText(new RegExp(S6))
+  await expect(page.getByTestId('guard-sentence')).toHaveClass(FAULT)
+})

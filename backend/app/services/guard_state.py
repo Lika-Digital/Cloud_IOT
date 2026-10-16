@@ -25,20 +25,29 @@ GUARD_OFF = "Guard off"
 PAUSED_CPU = "Guard paused — processor overloaded"
 PAUSED_DARK = "Guard paused — too dark to see"
 PAUSED_UNKNOWN = "Guard paused — reason not reported"
+RECORDING_WHILE_OFF = "Guard recording although switched off"
 NOT_MEASURED = "Not measured"
 
 _ON = ("ARMING", "ARMED", "ALARM", "RECORDING")
 
 # Worst first. A state not listed is a pause the backend has no reason for — ranked just below
 # "not answering", never as "on".
-_ORDER = ["UNAVAILABLE", "<unknown>", "SUSPENDED_CPU", "ARMING", "ALARM", "RECORDING", "ARMED",
+_ORDER = ["ON_WHILE_OFF", "UNAVAILABLE", "UNREADABLE", "<unknown>", "SUSPENDED_CPU", "ARMING", "ALARM",
+          "RECORDING", "ARMED",
           "OFF"]
 
 
 def sentence_for(state: str | None, flags: list | None = None) -> tuple[str, str]:
-    """(code, sentence) for one reconciled guard state. Codes: not_answering, on, off, paused."""
+    """(code, sentence) for one reconciled guard state.
+    Codes: on_while_off, not_answering, on, off, paused."""
+    if state == "ON_WHILE_OFF":
+        # S6 — a fault said aloud: recordings are personal data (owner, 2026-10-16).
+        return "on_while_off", RECORDING_WHILE_OFF
     if state == "UNAVAILABLE" or state is None:
         return "not_answering", NOT_ANSWERING
+    if state == "UNREADABLE":
+        # S7 (owner, 2026-10-16): an answer we cannot read is not a measurement.
+        return "not_measured", NOT_MEASURED
     if state in _ON:
         if "limited_visibility" in (flags or []):
             return "paused", PAUSED_DARK
@@ -52,7 +61,7 @@ def sentence_for(state: str | None, flags: list | None = None) -> tuple[str, str
 
 
 def _rank(state: str) -> int:
-    return _ORDER.index(state) if state in _ORDER else 1
+    return _ORDER.index(state) if state in _ORDER else 3
 
 
 def current_guard_state(db: DBSession, pedestal_id: int) -> dict | None:

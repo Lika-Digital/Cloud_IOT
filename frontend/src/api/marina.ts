@@ -148,7 +148,7 @@ export interface GuardBlock {
   /** Spec §5.5.1 (2026-10-16): one code per sentence. 'not_answering' is a FAULT and must never
    *  render as 'off', which is a decision; 'none' = the worker never announced itself;
    *  'not_measured' = the reading failed (§5.5.6). The words are the server's `sentence`. */
-  state: 'none' | 'not_answering' | 'on' | 'off' | 'paused' | 'not_measured'
+  state: 'none' | 'not_answering' | 'on' | 'off' | 'paused' | 'not_measured' | 'on_while_off'
   sentence: string
   scope: 'pedestal'
   /** The automatic-resume budget; null = not measured (§5.5.1 item 3). */

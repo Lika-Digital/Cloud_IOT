@@ -233,3 +233,4 @@ class GuardStateEvent(Base):
 
 KIND_PAUSED_CPU = "paused_cpu"
 KIND_AUTO_RESUMED = "auto_resumed"
+KIND_UNKNOWN_STATE = "unknown_state"      # the raw state is the row's reason (§5.5.1 S7)

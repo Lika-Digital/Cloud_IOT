@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import {
   getBerthDetail, switchFacility, type BerthDetail as BerthDetailData,
 } from '../../api/marina'
-import { Status, TONE } from '../../components/marina/Status'
+import { Status, TONE, guardFault } from '../../components/marina/Status'
 import { ControlledLine } from '../../components/marina/ControlledLine'
 import { PhaseBlock } from '../../components/marina/PhaseBlock'
 import { Row, Section } from '../../components/marina/DetailSection'
@@ -168,7 +168,7 @@ export default function BerthDetail() {
 
       {/* ── Guard ──────────────────────────────────────────────────────────── */}
       <Section title="Guard">
-        <p className="text-sm text-gray-200">{d.guard.sentence}</p>
+        <p className={`text-sm ${guardFault(d.guard.state) ? TONE.noticeText : 'text-gray-200'}`}>{d.guard.sentence}</p>
         {/* One camera per pedestal, so the events are the CABINET's. Saying so prevents
             attributing a stranger walking past berth 1 to berth 3. */}
         <p className="text-xs text-gray-500 mt-1">{d.guard_scope_note}</p>

@@ -14,6 +14,9 @@ out). The UI half — the button, playback, "Not measured" on the page — is `e
   TC-GU-13          a failed reading is "Not measured", never "unavailable" or zero
   TC-GU-15          the API and the marina page give the same sentence for the same state
   TC-GU-16          a pause is lifted only by a LIVE ARMED, and the pause and the resume are listed
+  TC-GU-17          switched off but recording: said aloud (S6), one switch-off, 5 s → S2, OFF → S4
+  TC-GU-18          switched off: a pause reads "Guard off" and is listed; an unknown state reads
+                    "Not measured", is logged and listed (Q4b, S4b / S7)
 """
 from __future__ import annotations
 
@@ -36,6 +39,7 @@ S4 = "Guard off"
 S5_CPU = "Guard paused — processor overloaded"
 S5_DARK = "Guard paused — too dark to see"
 S5_UNKNOWN = "Guard paused — reason not reported"
+S6 = "Guard recording although switched off"
 NOT_MEASURED = "Not measured"
 
 ON_SET = ("ARMING", "ARMED", "ALARM", "RECORDING")
@@ -196,7 +200,13 @@ def _expected(f) -> str | None:
     if ack == "waiting":                       # a person's command: the reported state alone
         return by_report()
     if desired == "OFF":
-        return S4 if reported == "OFF" else None          # Q4 — open
+        if reported == "OFF":
+            return S4
+        if reported in ON_SET:
+            return S6                                     # S6, owner 2026-10-16
+        if reported == "SUSPENDED_CPU":
+            return S4                                     # S4b: nothing records, as asked
+        return NOT_MEASURED                               # S7: a state we cannot read
     if desired == "SUSPENDED_CPU":
         return S5_CPU
     # desired ARMED
@@ -254,9 +264,8 @@ def _check_sentence(grid, sentence: str) -> None:
 def test_grid_is_the_whole_space_and_the_open_cells_are_named(grid):
     open_cells = [f for f, e, _a in grid if e is None]
     assert len(grid) == 1 + 3 * 4 * 3 * (8 + 4)        # no row, + every row combination
-    # Q4 is open: desired OFF, live, a non-OFF report, nothing waiting or overdue.
-    assert {f[3] for f in open_cells} == {"ARMING", "ARMED", "ALARM", "RECORDING",
-                                          "SUSPENDED_CPU", "NO_DISK"}
+    # Q4b answered 2026-10-16 (S4b, S7): no cell is open any more.
+    assert open_cells == []
     assert all(f[1] == "OFF" and f[2] == "live" and f[5] == "none" for f in open_cells)
 
 
@@ -274,6 +283,14 @@ def test_tc_gu_03_guard_on_exactly_for_its_condition(grid):
 
 def test_tc_gu_04_guard_off_exactly_for_its_condition(grid):
     _check_sentence(grid, S4)
+
+
+def test_tc_gu_17_recording_although_off_exactly_for_its_condition(grid):
+    _check_sentence(grid, S6)
+
+
+def test_tc_gu_18_unknown_state_is_not_measured_exactly_for_its_condition(grid):
+    _check_sentence(grid, NOT_MEASURED)
 
 
 def test_tc_gu_14_paused_exactly_for_its_condition_and_never_bare(grid):
@@ -624,3 +641,77 @@ def test_tc_gu_16_a_live_armed_lifts_the_pause_and_both_are_listed(client, cam, 
     body = client.get("/api/guard/events", headers=_headers("admin"),
                       params={"camera_id": cam}).json()
     assert [e["kind"] for e in body["events"]] == ["auto_resumed", "paused_cpu"], body
+
+
+# ── switched off, but recording (TC-GU-17) ────────────────────────────────────
+
+def _disarms(published) -> list[dict]:
+    return [p for _t, p in published if p["cmd"] == "disarm"]
+
+
+def test_tc_gu_17_recording_although_off_is_said_and_switched_off_once(cam, published):
+    _row(cam, 67, "OFF")
+    _feed(cam, "state", {"state": "OFF", "flags": [], "pedestal_id": 67})
+    assert _sentence(67) == S4
+
+    _feed(cam, "state", {"state": "ARMED", "flags": [], "pedestal_id": 67})
+    assert _sentence(67) == S6
+    assert len(_disarms(published)) == 1, "the backend sends the switch-off once"
+    # more live messages saying the same: still S6, still ONE switch-off
+    _feed(cam, "health", {"state": "ARMED", "cpu_pct_now": 4.0})
+    _feed(cam, "state", {"state": "RECORDING", "flags": [], "pedestal_id": 67})
+    _feed(cam, "health", {"state": "RECORDING", "cpu_pct_now": 4.0})
+    assert _sentence(67) == S6
+    assert len(_disarms(published)) == 1, f"switch-off sent {len(_disarms(published))} times"
+
+    # not confirmed within 5 s → not answering; and no further switch-off
+    _overdue(cam)
+    assert _sentence(67) == S2
+    _feed(cam, "health", {"state": "RECORDING", "cpu_pct_now": 4.0})
+    assert _sentence(67) == S2 and len(_disarms(published)) == 1
+
+    # the worker finally reports OFF → off
+    _feed(cam, "state", {"state": "OFF", "flags": [], "pedestal_id": 67})
+    assert _sentence(67) == S4
+
+
+def test_tc_gu_17_a_confirmed_switch_off_reads_off(cam, published):
+    _row(cam, 67, "OFF")
+    _feed(cam, "state", {"state": "ARMED", "flags": [], "pedestal_id": 67})
+    assert _sentence(67) == S6
+    req = _disarms(published)[0]["req_id"]
+    _feed(cam, "ack", {"req_id": req, "accepted": True, "state": "OFF"})
+    assert _sentence(67) == S4
+    # a new episode later gets its own single switch-off
+    _feed(cam, "state", {"state": "ARMED", "flags": [], "pedestal_id": 67})
+    assert _sentence(67) == S6 and len(_disarms(published)) == 2
+
+
+# ── switched off: a pause, and a state we cannot read (TC-GU-18) ──────────────
+
+def _kinds(client, cam: int) -> list[dict]:
+    body = client.get("/api/guard/events", headers=_headers("admin"),
+                      params={"camera_id": cam}).json()
+    return [(e["kind"], e.get("reason")) for e in body["events"]]
+
+
+def test_tc_gu_18_a_pause_under_a_requested_off_reads_off_and_is_listed(client, cam, published):
+    _row(cam, 68, "OFF")
+    _feed(cam, "state", {"state": "OFF", "flags": [], "pedestal_id": 68})
+    _feed(cam, "state", {"state": "SUSPENDED_CPU", "flags": [], "pedestal_id": 68,
+                         "reason": "60 s average CPU 92 %"})
+    assert _sentence(68) == S4, "nothing records — what the person asked for"
+    assert _sentence(68) != NOT_MEASURED
+    assert ("paused_cpu", "60 s average CPU 92 %") in _kinds(client, cam), "the pause is lost"
+
+
+def test_tc_gu_18_an_unknown_state_reads_not_measured_and_is_logged(client, cam, published, caplog):
+    _row(cam, 68, "OFF")
+    _feed(cam, "state", {"state": "OFF", "flags": [], "pedestal_id": 68})
+    with caplog.at_level("WARNING"):
+        _feed(cam, "state", {"state": "CALIBRATING", "flags": [], "pedestal_id": 68})
+    assert _sentence(68) == NOT_MEASURED
+    assert _sentence(68) not in (S4, S2)
+    assert ("unknown_state", "CALIBRATING") in _kinds(client, cam)
+    assert any("CALIBRATING" in r.getMessage() for r in caplog.records), "the raw state is not logged"
+

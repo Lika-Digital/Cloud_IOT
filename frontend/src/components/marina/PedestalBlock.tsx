@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { switchFacility, type MarinaPedestal } from '../../api/marina'
-import { statusSortKey, TONE } from './Status'
+import { statusSortKey, TONE, guardFault } from './Status'
 import { ControlledLine } from './ControlledLine'
 import { BerthRow } from './BerthRow'
 
@@ -143,7 +143,7 @@ export function PedestalBlock({ pedestal, showAll, onChanged }: {
             className={
               pedestal.guard.state === 'on'
                 ? TONE.okText
-                : pedestal.guard.state === 'not_answering' || pedestal.guard.state === 'not_measured'
+                : guardFault(pedestal.guard.state)
                   ? TONE.noticeText
                   : 'text-gray-300'
             }

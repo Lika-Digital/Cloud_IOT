@@ -66,6 +66,8 @@ const GUARD_STYLE: Record<GuardBlock['state'], { cls: string; icon: string; help
     icon: '–',
     help: 'No guard has ever reported from this pedestal.',
   },
+  on_while_off: { cls: TONE.fault, icon: '!', // S6: a fault said aloud (§5.5.1)
+    help: 'Switched off, but the camera reports it is recording. The switch-off has been sent.' },
   not_measured: {
     cls: TONE.fault,
     icon: '?',

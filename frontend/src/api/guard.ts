@@ -19,7 +19,7 @@ export interface GuardCamera {
   pedestal_id: number
   /** The same words /marina shows for this state (§5.5.1; TC-GU-15). */
   sentence: string
-  sentence_code: 'not_answering' | 'on' | 'off' | 'paused'
+  sentence_code: 'not_answering' | 'on' | 'off' | 'paused' | 'on_while_off'
   desired_state: string
   state: string
   reason: string | null
@@ -40,7 +40,7 @@ export interface GuardPersonEvent {
 }
 
 export interface GuardStateRow {
-  kind: 'paused_cpu' | 'auto_resumed'
+  kind: 'paused_cpu' | 'auto_resumed' | 'unknown_state'
   id: number
   camera_id: number
   at_utc: string

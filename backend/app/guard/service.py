@@ -55,6 +55,7 @@ from .models import (
     BAND_ALARM,
     KIND_AUTO_RESUMED,
     KIND_PAUSED_CPU,
+    KIND_UNKNOWN_STATE,
     STATE_ALARM,
     STATE_ARMED,
     STATE_ARMING,
@@ -71,6 +72,13 @@ from .models import (
 
 # The worker is watching (spec §5.5.1 S3).
 ON_STATES = (STATE_ARMING, STATE_ARMED, STATE_ALARM, STATE_RECORDING)
+# Not a worker state: desired OFF while the worker reports it is recording (§5.5.1 S6).
+STATE_ON_WHILE_OFF = "ON_WHILE_OFF"
+# Not a worker state: desired OFF while the worker reports a state we cannot read (§5.5.1 S7).
+STATE_UNREADABLE = "UNREADABLE"
+# Every state the worker may report that the backend knows how to read.
+KNOWN_STATES = frozenset({STATE_OFF, STATE_ARMING, STATE_ARMED, STATE_ALARM, STATE_RECORDING,
+                          STATE_SUSPENDED_CPU, STATE_UNAVAILABLE})
 REASON_NO_ACK = "the guard worker did not acknowledge"
 
 logger = logging.getLogger(__name__)
@@ -142,6 +150,10 @@ class WorkerLiveness:
         # A command not acknowledged in time (§5.5.1 item 2). Kept until the worker
         # acknowledges a later command or reports the state that was asked for.
         self._ack_missed: dict[int, str] = {}
+        # S6 (§5.5.1): cameras that were sent the one switch-off of the current episode —
+        # recording although switched off. Cleared when the worker reports OFF or a person
+        # changes the desired state.
+        self._s6_sent: set[int] = set()
 
     def mark_seen(self, camera_id: int, now: float | None = None) -> None:
         self._seen[camera_id] = now if now is not None else time.time()
@@ -222,6 +234,7 @@ class WorkerLiveness:
         self._seen.pop(camera_id, None)
         self._reported_state.pop(camera_id, None)
         self._ack_missed.pop(camera_id, None)
+        self._s6_sent.discard(camera_id)
 
 
 liveness = WorkerLiveness()
@@ -294,6 +307,11 @@ def effective_state(db: DBSession, cfg: GuardConfig, now: float | None = None) -
         # Alive (alarm or detection traffic) but its state never said: today's default was
         # ARMING, i.e. "Guard on" for a state nobody reported.
         state, reason = STATE_UNAVAILABLE, "the worker has not reported its state"
+    elif cfg.desired_state == STATE_OFF and rep in ON_STATES and waiting != "person":
+        # S6 (owner, 2026-10-16): the worker SAYS it is recording and someone asked for off —
+        # said aloud, never "on", "off" or "not answering". The switch-off is on its way.
+        state = STATE_ON_WHILE_OFF
+        reason = "the worker reports it is recording although guard was switched off"
     elif waiting == "auto":
         state = STATE_UNAVAILABLE
         reason = "re-arming after the worker restarted — waiting for it to confirm"
@@ -301,9 +319,13 @@ def effective_state(db: DBSession, cfg: GuardConfig, now: float | None = None) -
         # A person's command on its way: the worker's own report, until it confirms.
         state, reason = rep, reported.get("reason")
     elif cfg.desired_state == STATE_OFF:
-        # §5.5.8 Q4 is OPEN for a worker that reports anything but OFF here: today's answer
-        # stands until the owner decides.
-        state, reason = STATE_OFF, None
+        # Q4b (owner, 2026-10-16): a pause under a requested off records nothing — "Guard off"
+        # (S4b); a state we cannot read is not a measurement — "Not measured" (S7).
+        if rep in (STATE_OFF, STATE_SUSPENDED_CPU):
+            state, reason = STATE_OFF, None
+        else:
+            state = STATE_UNREADABLE
+            reason = f"the worker reports a state the backend does not know: {str(rep)[:60]}"
     elif cfg.desired_state == STATE_SUSPENDED_CPU:
         state, reason = STATE_SUSPENDED_CPU, cfg.suspended_reason
     elif rep == STATE_OFF:
@@ -415,6 +437,8 @@ async def _on_ack(camera_id: int, data: dict, retained: bool) -> None:
     liveness.mark_seen(camera_id)
     if data.get("state") and data.get("state") != STATE_UNAVAILABLE:
         _update_reported(camera_id, state=data.get("state"))
+        if data.get("state") == STATE_OFF:
+            liveness._s6_sent.discard(camera_id)
     logger.info("[Guard] ack camera=%d req_id=%s accepted=%s state=%s",
                 camera_id, req_id, data.get("accepted"), data.get("state"))
     await _broadcast_state(camera_id)
@@ -521,9 +545,39 @@ def _on_live_state(camera_id: int, data: dict) -> None:
             publish_command(db, cfg, CMD_ARM, actor="backend: worker restarted", auto=True)
             logger.warning("[Guard] camera=%d came up OFF while guard is switched on — arm "
                            "sent once", camera_id)
+        if cfg.desired_state == STATE_OFF and state == STATE_SUSPENDED_CPU:
+            # S4b: "Guard off" on screen, but the pause is not lost (owner, 2026-10-16).
+            db.add(GuardStateEvent(camera_id=camera_id, kind=KIND_PAUSED_CPU,
+                                   reason=data.get("reason") or "CPU limit exceeded"))
+            db.commit()
+        if state not in KNOWN_STATES:
+            # S7: an answer we cannot read — logged raw and listed, so we learn what it is.
+            raw = str(state)[:200]
+            logger.warning("[Guard] camera=%d reported a state the backend does not know: %r",
+                           camera_id, raw)
+            db.add(GuardStateEvent(camera_id=camera_id, kind=KIND_UNKNOWN_STATE, reason=raw))
+            db.commit()
+        _maybe_switch_off_s6(db, cfg, state)
         _clear_missed_if_matching(cfg, state)
     finally:
         db.close()
+
+
+def _maybe_switch_off_s6(db: DBSession, cfg: GuardConfig, state: str | None) -> None:
+    """S6 (§5.5.1): switched off, but the worker reports it is recording → ONE switch-off per
+    episode. Not again while it waits, not again after it was missed; a new episode begins only
+    once the worker has reported OFF."""
+    cam = cfg.camera_id
+    if state == STATE_OFF:
+        liveness._s6_sent.discard(cam)
+        return
+    if (cfg.desired_state == STATE_OFF and state in ON_STATES and cam not in liveness._s6_sent
+            and liveness.waiting(cam) is None and not liveness.ack_missed(cam)):
+        liveness._s6_sent.add(cam)
+        publish_command(db, cfg, CMD_DISARM, actor="backend: recording although switched off",
+                        auto=True)
+        logger.warning("[Guard] camera=%d reports %s although guard is switched off — "
+                       "switch-off sent once", cam, state)
 
 
 def _clear_missed_if_matching(cfg: GuardConfig, state: str | None) -> None:
@@ -559,6 +613,8 @@ async def _on_health(camera_id: int, data: dict, retained: bool) -> None:
         try:
             cfg = db.get(GuardConfig, camera_id)
             if cfg is not None:
+                if data.get("state") != STATE_UNAVAILABLE:
+                    _maybe_switch_off_s6(db, cfg, data.get("state"))
                 _clear_missed_if_matching(cfg, data.get("state"))
         finally:
             db.close()

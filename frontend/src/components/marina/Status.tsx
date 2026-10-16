@@ -46,6 +46,9 @@ const STYLES: Record<BerthStatus, { cls: string; icon: string; word: string }> =
  * of "fine", "needs attention" and "not known" is decided in one place. A tone is a colour
  * only — the page must still put an icon and a word next to it.
  */
+/** A guard state that is a fault, never a setting (§5.5.1 S2, S6; §5.5.6). */
+export const guardFault = (s: string) => ['not_answering', 'not_measured', 'on_while_off'].includes(s)
+
 export const TONE = {
   ok: STYLES.ok.cls,
   attention: STYLES.attention.cls,

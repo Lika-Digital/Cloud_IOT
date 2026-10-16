@@ -49,7 +49,9 @@ MAX_LINES = 250
 # the owner's decision, made in the spec, not by editing this number to get a green gate.
 # 2026-10-16, owner: raised to 2 752 with the guard UI — "a measure of movement, not a budget";
 # nothing was cut. The rule stands: raised only by the owner, in the spec.
-MAX_TOTAL_LINES = 2752
+# Standing rule (owner, 2026-10-16, fifth message): pinned at the measured size whenever a
+# function lands with proven tests — 2 757 with S6, 2 758 with Q4b.
+MAX_TOTAL_LINES = 2758
 
 
 def _files():

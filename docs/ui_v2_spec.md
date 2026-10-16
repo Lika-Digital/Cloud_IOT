@@ -59,7 +59,7 @@ Evidence is a test, a commit or a path, never a claim.
 | CORE `/api/marina/berths`, berth detail, status sentences and precedence | BUILT+PROVEN | `test_marina_core.py` TC-MC-01..14, `test_marina_core_shape.py` |
 | `outlet_silent` (rank 2.5) | BUILT+PROVEN on dev, cabinet fact pending | block 3, 2026-10-12: a socket is silent when the fresher of its meter telemetry (`meter_load_updated_at`, every 5 s) and its status message (`socket_states.updated_at`) is missing or older than 60 s; the power state is then `unknown`, not `idle`. `test_outlet_silent.py` TC-OS-01..05 (02/03 failed on the code before). That idle sockets really report every 5 s is checked on the cabinet: §13.6b 11i |
 | Guard on `/marina` | BUILT+PROVEN on dev; **owner's decision pending** | block 3, 2026-10-12: `services/guard_state.py` reads `guard.service.effective_state` per pedestal (worst camera wins; desired ARMED + silent worker stays UNAVAILABLE). `test_marina_guard_state.py` TC-MGS-01..06 (01/02/04/05 failed on the code before — every pedestal said "unavailable"). **Decided 2026-10-16 (owner):** "No guard on this pedestal" with no row — superseded by the "Guard UI" row below |
-| **Guard UI — four sentences, arm, a visible alarm, playback** (owner, 2026-10-16) | **NOT BUILT** — spec §5.5 | §5.5.1 sentences, the row created on the worker's announce, re-arm after a worker restart, a missed ack as "not answering"; §5.5.2 Arm / Switch off, admin only (button and API); §5.5.3 rank 7 and `/marina/alarms` from guard events, the legacy `unauthorized_entry` separated; §5.5.4 playback, admin only (button and API). **Decided (§5.5.5, 2026-10-16):** the event list, frame, recording and labels are admin only, in the page and in the API. When the button lands, `guard_operator_runbook.md:3-6` ("no screen, curl") is corrected in the same commit |
+| **Guard UI — four sentences, arm, a visible alarm, playback** (owner, 2026-10-16; second order the same day) | **NOT BUILT — spec written, waiting on §5.5.8 Q1–Q3** | §5.5.1 S1..S4 with the 15 s boundary and the 5 s ack, the row created on the worker's announce (REST no longer creates one), the two known faults (worker restart, lost ack); §5.5.2 Arm / Switch off, admin only (button and API, two tests); §5.5.3 rank 7 and `/marina/alarms` from guard events, the legacy `unauthorized_entry` separated; §5.5.4 playback; §5.5.5 list, frame, recording, labels admin only; §5.5.6 "Not measured"; §5.5.7 TC-GU-01..13, each failing on the old code. When the button lands, `guard_operator_runbook.md:3-6` ("no screen, curl") is corrected in the same commit. After `main`: DOC.4 (§13.12) |
 | Row controls (power, water, light) | BUILT+PROVEN on dev 2026-10-15; cabinet 11l | The server decides: each facility carries `action` (on/off/null) and ONE `unavailable_reason` — `no_socket`, `no_contact`, `standalone`, `read_only`, `state_unknown`, `nothing_plugged`, `needs_scan` (`routers/marina.py`, `Gate`/`_offer`). A control is offered only when its endpoint will accept it: "Turn on" power only for a plug waiting (`pending`; with nothing plugged the endpoint 409s), water only with a live NFC reservation (§15), read by a query that does not write. `ControlledLine.tsx`: one sentence per reason, no control element in its place; a confirm before anything that ends a session or switches the shared light ("This light covers berths 1, 2, 3 and 4…"); after a tap it says "Sent" — not "done" — and a refusal shows the server's sentence, a missing answer says it is not known whether it switched. **Two defects fixed by it:** a smart-mode pedestal out of contact said "The pedestal is switching this itself" (`unavailable_reason` was always `standalone`), and a read-only `monitor` got `available: true` for endpoints that 403 it — both shown on the old code. Proof: `test_row_controls.py` TC-RC-01..07 all failed on the old code; TC-RC-06 taps every offered action against its real endpoint (accepted) and both facility refusals (refused), so the offer cannot drift from the endpoint; mutants caught — the reservation read via `get_live_pending`, which writes (TC-RC-04); "Turn on" offered on an idle socket (TC-RC-03, TC-RC-06). `marina.spec.ts` TC-UIRC-01..04 failed on the old pages; TC-UIR-03 is no longer vacuous (TC-UIRC-01 is its positive control). The water 409 now reads as a sentence first (`controls.py`; TC-RC-07). **Open, not fixed here:** `mqtt_client.publish` drops a command when the broker is disconnected and returns nothing, so the endpoint still answers `sent` — and a `stop` completes the DB session while the socket stays on. Changing it changes what the ERP receives: the owner's decision |
 | TC-UIR-01 (no raw colour classes) | BUILT+PROVEN, with exemptions | `test_ui_rule_colours.py` (block 3, 2026-10-12): no status hue (red/green/amber/yellow/orange/emerald/lime/rose on a colour utility) in `pages/marina/**`, `components/marina/**` outside `Status.tsx`, whose exported `TONE` is the only palette. Measured with that pattern: 29 lines, 2 of them in `Status.tsx` (the earlier "32" used a pattern that was not recorded). Fixed now: MarinaGuard, MarinaAlarms, MarinaWater. Exempt per file until block 4: MarinaDashboard, BerthDetail, MarinaSetup — the gate fails when block 4 is marked DONE below while any is still exempt |
 | Block 4 — UI v2 remainder | DONE on dev 2026-10-15; cabinet checks 11k–11p | Row controls, L3 history, nav of 4 (Analytics already out — see the "Block 4 (part)" row below; do not redo), `<PhaseBlock>`, wizard step 3, §9 splits, `/marina` on the websocket — each has its own row. `EXEMPT_UNTIL_BLOCK_4` is empty, so TC-UIR-01c holds. **This row is the deadline of TC-UIR-01's exemptions** — `test_ui_rule_colours.py` reads it; setting it to DONE with exemptions left fails the gate |
@@ -351,8 +351,9 @@ wording stays editable.
 
 ### Guard state mapping — fixed here, written once
 
-*Updated 2026-10-16 (owner): "No guard on this pedestal" and "Guard not answering" — §5.5.1 is
-the full rule. NOT BUILT yet; the code still says "Guard unavailable" for both.*
+*Updated 2026-10-16 (owner, twice): §5.5.1 is the full rule — four sentences S1..S4, the 15 s
+boundary, the 5 s acknowledgement — and §5.5.6 "Not measured". NOT BUILT yet; the code still says
+"Guard unavailable" for no row, a dead worker and a failed read alike.*
 
 | Backend | Marina sees |
 |---|---|
@@ -362,7 +363,8 @@ the full rule. NOT BUILT yet; the code still says "Guard unavailable" for both.*
 | `OFF`, worker alive and reporting OFF | **Guard off** |
 | `SUSPENDED_CPU`, stalled ring | **Guard paused** + plain reason (`no_disk` is a flag, not a state — `watchdog.py:50`) |
 | `limited_visibility` while armed | **Guard paused — too dark to see** |
-| `UNAVAILABLE`, or any desired state with the worker silent, unacknowledged, or reporting OFF while desired ARMED | **Guard not answering** |
+| `UNAVAILABLE`, or any desired state with the worker silent for 15 s, unacknowledged for 5 s, or reporting OFF while desired ARMED | **Guard not answering** |
+| the guard state could not be read (backend exception, or the page cannot reach the backend) | **Not measured** (§5.5.6) |
 
 **`UNAVAILABLE` must never render as "Guard off"** — and since 2026-10-16 neither may a dead
 worker that was switched off. Off is a decision someone made; not answering is a fault. The entire liveness design — LWT plus heartbeat plus in-memory `worker_seen_at` —
@@ -654,43 +656,73 @@ Per pedestal, not per berth (one camera per pedestal).
 └────────────────────────────────────────────────────────┘
 ```
 
-### 5.5.1 The sentences — owner, 2026-10-16
+### 5.5.1 The sentences — owner, 2026-10-16 (second order, "Guard UI — faza 1")
 
-| Condition (backend) | Sentence |
-|---|---|
-| No `guard_config` row for any camera of this pedestal | **"No guard on this pedestal"** |
-| A row exists and the worker is not answering — **whatever was switched on or off**: never heard (installed, not started), heartbeat older than the timeout, Last Will received, a command not acknowledged within the ack timeout, **or** desired ARMED while the worker reports OFF | **"Guard not answering"** |
-| Desired ARMED, worker alive and ARMED / ALARM / RECORDING / ARMING | **"Guard on"** |
-| Desired OFF, worker alive and reporting OFF | **"Guard off"** |
-| Desired SUSPENDED_CPU; or `limited_visibility` while armed | **"Guard paused — …"** with its plain reason, as in §3 (unchanged; the owner's four do not remove it) |
+**Four sentences for four states, never one "unavailable" for all of them** (owner). Plus one
+sentence that is not a guard state at all: the reading itself failed (§5.5.6).
 
-**"Not answering" never reads as "off"** (§3). Today it does in two ways, both fixed in the same
-build, because without them that rule is only text:
+| # | Condition (backend) — exactly one row holds | Sentence |
+|---|---|---|
+| S1 | No `guard_config` row for any camera of this pedestal — **the worker has never announced itself** (the row is created only by that announce, below) | **"No guard on this pedestal"** |
+| S2 | A row exists, and the worker is not answering — **whatever was switched on or off**: no LIVE message from it within **15 s** (below), never heard since the backend started, Last Will received, a command not acknowledged within **5 s**, **or** desired ARMED while the worker reports OFF and no command is waiting for its acknowledgement | **"Guard not answering"** |
+| S3 | A row exists, the worker answers, desired ARMED, worker reports ARMED / ALARM / RECORDING / ARMING, no acknowledgement overdue | **"Guard on"** |
+| S4 | A row exists, the worker answers, desired OFF, worker reports OFF, no acknowledgement overdue | **"Guard off"** |
+| — | Desired SUSPENDED_CPU; or `limited_visibility` while S3 holds | **"Guard paused — …"** — **OPEN, owner (§5.5.8 Q1):** the owner's order names four; this one exists in the code and in §3 today |
 
-1. **Re-arm after a worker restart.** A worker that restarts while guard is armed comes up OFF
-   (`guard_worker/__main__.py:305-308`) and nothing sends it the arm again: the backend
-   publishes a command only from the four REST handlers (`guard/router.py:159, 174, 194, 252`).
-   `effective_state` then returns the worker's OFF (`guard/service.py:253`) and `/marina`
-   says "Guard off". The worker's own comment says the announce exists "so the backend can push
-   the desired state" (`__main__.py:305-307`) — the backend half was never written. **Built:**
-   when a worker announces itself (a LIVE state message, not a retained replay) reporting OFF
-   while the desired state is ARMED, the backend sends the arm once; until the worker
-   acknowledges it, the sentence is "Guard not answering". Desired SUSPENDED_CPU is never
-   re-armed this way — a guard the watchdog suspended must not rearm itself by restarting (the
-   same comment).
-2. **A missed acknowledgement.** `check_overdue_acks` only rebroadcasts
-   (`guard/service.py:651-665`) and `effective_state` never looks at pending commands.
-   **Built:** a command not acknowledged within the ack timeout makes the state UNAVAILABLE with
-   reason "the guard worker did not acknowledge", as `guard_b1_design.md:256` already specified.
+**The boundary for S2 — 15 seconds, measured from the last LIVE message.** The worker publishes
+`health` every 5 s in every state, OFF included (`guard_worker/__main__.py:95, 719`); the backend
+calls it not answering when the newest live `state`, `health` or `ack` is older than
+`guard_heartbeat_timeout_s` = **15 s** (`config.py:113`) — three missed health messages. A
+retained replay never counts (`guard/service.py:349-411`). An acknowledgement is overdue after
+`guard_ack_timeout_s` = **5 s** (`config.py:112`). Both are `.env` values on the cabinet; these are
+the defaults this spec fixes. What the operator sees lags by up to the page's 15 s refresh, so a
+worker that dies is shown as not answering at most 30 s later. After a backend restart every guard
+reads S2 until its worker's next health message — at most 5 s — because liveness is in memory on
+purpose (`guard/service.py:120`, the v3.40 lesson).
 
-**The row is created when the worker first announces itself** (owner, 2026-10-16), desired OFF,
-from a LIVE state message only — a retained replay never creates a row (the v3.40 lesson,
-`guard/service.py:22-31`). **The state message does not carry `pedestal_id` today** (only the
-alarm does, `guard_worker/__main__.py:576, 631`; state: `:334-343`), so the worker adds
-`GUARD_PEDESTAL_ID` to it — a worker change, part of this build. Until now
-the row appeared only on the first REST enable or config change (`get_or_create_config`), so a
-freshly installed, running guard read "Guard unavailable" and `/api/guard/status` listed no camera
-(§13.6c F.5 could not pass as written).
+**Exactly one sentence per state, decided in ONE function** — the backend's guard sentence
+(`routers/marina.py` `_guard_block` today). `/marina`, `/marina/guard` and berth detail show its
+`sentence` verbatim; the page never derives a sentence from a state of its own. Today the page has
+its own `GUARD_STYLE` table keyed by state (`MarinaGuard.tsx:36`) — it keeps colour and help text
+only.
+
+**The row is created when the worker first announces itself** (owner, 2026-10-16, repeated in the
+second order: "Dok reda nema, stoji prva rečenica"), desired OFF, from a LIVE state message only —
+a retained replay never creates a row (the v3.40 lesson, `guard/service.py:22-31`). **The state
+message does not carry `pedestal_id` today** (only the alarm does, `guard_worker/__main__.py:576,
+631`; state: `:334-343`), so the worker adds `GUARD_PEDESTAL_ID` to it — a worker change, part of
+this build. **Consequence, derived — the REST handlers no longer create a row:** today
+`get_or_create_config` creates one on the first enable or config change (`guard/service.py:192`),
+which would make S1 false for a worker that never spoke. After the build `enable / disable / rearm
+/ config` on a camera with no row answer **404 "No guard on this pedestal"**. Cabinet 1 has no
+guard rows (measured 2026-10-15), so nothing there changes meaning.
+
+**Two faults already known — each fixed, each with a test that fails on the old code (§5.5.7):**
+
+1. **After a worker restart the state is read wrongly.** A worker that restarts while guard is
+   armed comes up OFF (`guard_worker/__main__.py:305-308`) and nothing sends it the arm again: the
+   backend publishes a command only from the REST handlers (`guard/router.py:159, 174, 194, 252`).
+   **What the old code says, read from the code:** `/api/guard/status` says `enabled: true`
+   (desired ARMED), and `/marina` says "Guard off" (`effective_state` returns the worker's OFF,
+   `guard/service.py:253`). Neither is the truth — the operator asked for on and nothing is
+   watching. There is also a path to **"Guard on"**: the worker's `health` carries its state
+   (`__main__.py:721-722`) but the backend ignores that field (`guard/service.py:413-420`), so if
+   the restart announce is not received, the ARMED reported before the restart stays, live health
+   keeps the worker "alive", and the page says "Guard on" for a worker that is OFF.
+   **Built:** (a) when a worker announces itself LIVE reporting OFF while desired is ARMED, the
+   backend sends the arm once; until the worker acknowledges and reports ARMING/ARMED the sentence
+   is S2 — never S3, never S4. Desired SUSPENDED_CPU is never re-armed this way (a guard the
+   watchdog suspended must not rearm itself by restarting, the same comment). (b) the state field
+   of a LIVE `health` message updates the reported state too, so the backend never holds an older
+   state than the worker's newest message.
+2. **A lost acknowledgement stays "Guard on".** `check_overdue_acks` only rebroadcasts
+   (`guard/service.py:650-665`) and `effective_state` never looks at pending commands — with a
+   command unacknowledged the page keeps saying what the worker reported before. **Built:** a
+   command not acknowledged within 5 s puts the camera in S2 with reason "the guard worker did not
+   acknowledge", as `guard_b1_design.md:256` already specified. It stays S2 until the worker
+   acknowledges a later command or reports a state that matches the desired one. While a command
+   is waiting and not yet overdue, the sentence is computed from the worker's reported state alone
+   and the button says "Sent" (§5.5.2) — so a tap never flashes S2 for the second an ack takes.
 
 ### 5.5.2 Arm and switch off — ADMIN ONLY (owner, 2026-10-16)
 
@@ -707,6 +739,12 @@ become `require_admin` (today `require_control`, `guard/router.py:146-202`), as 
 backend-enforced (§4.9). *Derived from the owner's decision that control is admin only, not
 stated by the owner in these words — it is what makes the decision hold for a `monitor_control`
 account with curl.* The ERP's channel is §17, not this role.
+
+**Two separate tests** (owner, second order): the route answers 403 to `monitor_control` and to
+`monitor` (TC-GU-07), and the button is not rendered for them (TC-GU-08). Both fail on the old
+code — the route because `require_control` lets `monitor_control` through; the button because it
+does not exist, so the admin half of TC-GU-08 fails. That the non-admin half is not vacuous is
+shown by a mutant that renders the button for every role.
 
 ### 5.5.3 A guard alarm is visible — owner, 2026-10-16
 
@@ -771,6 +809,60 @@ and goes to the ERP in Phase 2 at the earliest (§17.6).
 **DECIDED — notifications stay off.** Your standing instruction: off until you have watched a
 week. **There is no built-and-disabled notification path** that could be switched on by
 accident — the code is absent, not flagged off.
+
+### 5.5.6 "Not measured" — never "off", never zero (owner, second order)
+
+**A failed reading has its own sentence: "Not measured".** The backend does not ask the worker; it
+listens. So silence from the worker is a measurement — S2, "Guard not answering". "Not measured" is
+the other case: the reading itself did not happen —
+
+- the backend could not compute the guard state (an exception in `_guard_block`; today that reads
+  "Guard unavailable", `routers/marina.py:333-334`) → `state: "not_measured"`, sentence
+  **"Not measured"**;
+- the page could not reach the backend → every guard line reads **"Not measured"**; below it, in
+  small text, "Last reading HH:MM — <that sentence>" (§5.5.8 Q3). Today the page keeps showing the
+  old sentence with a banner (`MarinaGuard.tsx:114-120`), so "Guard on" can stand for a reading
+  that failed;
+- the event list or a count could not be read → **"Not measured"**, never "No events" and never
+  `0` — on `/marina/guard`, in `/marina/alarms`, and in the nav badge.
+
+**No guard sentence, number or button is shown from a failed reading** — no "Guard off", no 0, no
+Arm / Switch off (Rule 6: absent).
+
+### 5.5.7 Tests — each must fail on the old code (owner, second order)
+
+Shown with the old code checked out and with a mutant per fix, as for every test since 2026-10-16.
+
+| Id | What it asserts | Why it fails on the old code |
+|---|---|---|
+| TC-GU-01 | **S1 is one sentence for one state.** Over the whole grid of guard facts (row yes/no × desired OFF/ARMED/SUSPENDED × worker live/stale/never/Last Will × reported OFF/ARMING/ARMED/ALARM/RECORDING × ack none/waiting/overdue), "No guard on this pedestal" is given exactly when there is no row, and no row gives nothing else | No row gives "Guard unavailable" |
+| TC-GU-02 | **S2** the same way: "Guard not answering" exactly for the S2 condition | A dead worker with desired OFF gives "Guard off"; an overdue ack with a live worker gives "Guard on" — two sentences for one state |
+| TC-GU-03 | **S3** the same way: "Guard on" exactly for the S3 condition | "Guard on" also comes out with an overdue acknowledgement |
+| TC-GU-04 | **S4** the same way: "Guard off" exactly for the S4 condition | "Guard off" also comes out for a dead worker switched off, and for desired ARMED reported OFF |
+| TC-GU-05 | **Worker restart:** guard armed; the worker restarts and announces OFF live → an arm command is published once, the sentence is S2 until the ack, then "Guard on"; with the announce lost, a live health reporting OFF never leaves "Guard on". Control: desired SUSPENDED_CPU → no arm sent | No arm is sent; the sentence is "Guard off"; with the announce lost it is "Guard on" |
+| TC-GU-06 | **Lost ack:** an arm (and, separately, a switch-off) not acknowledged within 5 s → S2 with "did not acknowledge"; an ack within 5 s → no S2 | The sentence stays what the worker last reported ("Guard on" for the lost switch-off) |
+| TC-GU-07 | **Route:** enable / disable / rearm / config → 403 for `monitor_control` and `monitor`, 200 for admin | `monitor_control` gets 200 |
+| TC-GU-08 | **Button (e2e):** Arm / Switch off rendered for admin, not for `monitor_control` or `monitor` | No button exists (admin half fails); non-admin half proven by a mutant |
+| TC-GU-09 | **Row on announce:** a live state message creates the row (desired OFF) and S1 becomes S4; a retained one does not; REST enable on a camera with no row → 404 | No row is created; REST enable creates one |
+| TC-GU-10 | **Alarm from guard events (§5.5.3):** an unlabelled `guard_events` row → rank 7 on every berth of its pedestal and a row in `/marina/alarms`; labelled → resolved; a customer `unauthorized_entry` alarm does NOT give the guard sentence | Rank 7 reads `active_alarms` only; the customer alarm gives the guard sentence |
+| TC-GU-11 | **Admin only, API (§5.5.5):** `/events`, `/events/{id}/frame`, `/events/{id}/video`, `/detections`, `/detections/{id}/frame`, `POST /events/{id}/label` → 403 for `monitor_control` and `monitor`; `/status` 200 for them | All are `require_any_role` |
+| TC-GU-12 | **Playback and labels (e2e):** admin sees the list, plays the clip in `<video>`, marks Correct / False alarm; the three no-clip sentences; staff see neither list nor buttons | None of it exists |
+| TC-GU-13 | **Not measured (§5.5.6):** the backend's guard read raising → "Not measured"; the page with the backend unreachable → "Not measured" and no button; the event count unreadable → "Not measured", not 0 | The backend says "Guard unavailable"; the page keeps the old sentence |
+
+The cabinet-only part — the clip's codec, and whether `cloud-iot` can read guard's files — is a
+§13.6c row in the build commit (§5.5.4).
+
+### 5.5.8 OPEN — the owner's answer before the code starts
+
+- **Q1 — "Guard paused".** The order names four sentences. The code and §3 have a fifth: "Guard
+  paused — the pedestal is busy" (the watchdog suspended guard for CPU) and "Guard paused — too
+  dark to see". Neither is on, off or not answering. **Proposal: keep it as a fifth sentence**,
+  with its own test of the TC-GU-01..04 shape (TC-GU-14). If it is to go, the owner says which of
+  the four each case becomes.
+- **Q2 — how many recent events.** The order says "the last alarms". **Proposal:** every event
+  retention still keeps (14 days), newest first, 50 per page.
+- **Q3 — the page when the server cannot be reached.** **Proposal** as §5.5.6: "Not measured",
+  with the last reading and its time in small text below. The alternative is "Not measured" alone.
 
 ## 5.6 Control-panel wizard — 3 steps, admin, once per pedestal
 
@@ -1363,6 +1455,12 @@ is NOT done until these rows pass.
 | DOC.1 | **ERP specification v4, under a NEW name** | `generate_erp_integration_doc.py` with `OUTPUT_PATH` → `Cloud_IOT_ERP_Integration_Guide_v4.pdf` (today it writes `_v3.pdf`, `:18`), its content corrected to the code first: event names, the §18 envelope and signature, `berth_id` int or null, authentication (§18.5) | `Cloud_IOT_ERP_Integration_Guide_v4.pdf` in the project folder; its events, envelope and auth match `erp_session_payload_contract.md` | The release is not done | ☐ |
 | DOC.2 | **v3 untouched** — it is the record of what the ERP was given | `git diff --stat <release> -- Cloud_IOT_ERP_Integration_Guide_v3.pdf` | No change | Restore it from git; v3 is never regenerated | ☐ |
 | DOC.3 | **The user guide** — `docs/User Guide.pdf`, from `scripts/generate_user_guide.py` (owner, 2026-10-16: the existing name; see below) | the generator, after its text is checked against the screens of this release (§5, §5.5, nav) | The guide in the project folder describes this release's screens | The release is not done | ☐ |
+
+**DOC.4 — guard, when it lands on `main` (owner, second order 2026-10-16).** The user guide gets
+the `/marina/guard` chapter: the four sentences (and "Not measured"), Arm / Switch off for admin,
+the alarm, playback and Correct / False alarm for admin. The ERP guide v4 states that guard sends
+nothing to the ERP in Phase 1 — `alarms.active` carries no guard event, and no camera endpoint is
+open to the ERP (§16.3). Both PDFs regenerated in the release, as DOC.1 and DOC.3.
 
 **DECIDED (owner, 2026-10-16): existing names, nothing invented.** The user guide is
 `docs/User Guide.docx` from `scripts/generate_user_guide.py`; the PDF obligation means a PDF from

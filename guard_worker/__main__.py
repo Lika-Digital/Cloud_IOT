@@ -252,6 +252,7 @@ class GuardWorker:
         # Armed-only resources. All None while disarmed, which is the point.
         self.detector = None
         self.supervisor: CaptureSupervisor | None = None
+        self._resume_pending = False    # an automatic resume armed, no frame yet (§5.5.1)
         self.frames = None
         self.pipeline_config = None
         self.alarm_state = None
@@ -511,7 +512,12 @@ class GuardWorker:
         if self.assembler is not None:
             self.assembler.unpin_all()
         self._flush_detections()
-        self.watchdog.disarm()
+        self._resume_pending = False
+        # A CPU suspension leaves the watchdog RUNNING: it is what notices the CPU has calmed
+        # down and calls a resume due. Switching it off here (as until 2026-10-16) meant the
+        # resume could never happen — guard stayed paused until a person re-armed it.
+        if state != STATE_SUSPENDED_CPU:
+            self.watchdog.disarm()
         self.state = state
         logger.info("%s camera=%d — capture stopped, model released%s",
                     state, self.cfg.camera_id, f" ({reason})" if reason else "")
@@ -714,9 +720,11 @@ class GuardWorker:
         for t in verdict.transitions:
             logger.warning("watchdog: %s — %s", t.event, t.reason)
             if t.event == "suspended_cpu":
-                # Shed guard. It does not come back on its own beyond the budget the
-                # watchdog itself allows — the backend re-arms explicitly.
+                # Shed guard. It comes back on its own only within the watchdog's budget.
                 self._disarm(state=STATE_SUSPENDED_CPU, reason=t.reason)
+            elif t.event == "resume_due":
+                self._auto_resume(now, t.reason)
+                continue
             self.publish_state(t.reason)
 
         if now - self._last["health"] >= HEALTH_INTERVAL_S:
@@ -737,6 +745,22 @@ class GuardWorker:
                 "auto_resumes_used": self.watchdog.auto_resumes_used(now),
                 "max_auto_resumes": self.watchdog.cfg.max_auto_resumes,
             })
+
+    def _auto_resume(self, now: float, why: str) -> None:
+        """A resume the watchdog called due (spec §5.5.1 item 3). Capture really restarts; the
+        budget is spent only on the first frame after it (`step`). A failed arm spends nothing
+        and says so in the state."""
+        try:
+            self._arm()
+        except Exception as exc:
+            reason = f"automatic resume failed: {exc}"
+            self._disarm(state=STATE_SUSPENDED_CPU, reason=reason)
+            for f in self.watchdog.auto_resume_failed(now, reason):
+                logger.warning("watchdog: %s — %s", f.event, f.reason)
+            self.publish_state(reason)
+            return
+        self._resume_pending = True
+        self.publish_state(f"automatic resume after a CPU suspension — {why}")
 
     def _run_retention(self) -> None:
         try:
@@ -795,6 +819,12 @@ class GuardWorker:
             except Exception:
                 logger.exception("reading a frame failed")
                 time.sleep(1.0)
+            if jpeg is not None and self._resume_pending:
+                # Capture is really running again: only now is the resume spent (owner).
+                self._resume_pending = False
+                for t in self.watchdog.confirm_auto_resume(time.time()):
+                    logger.info("watchdog: %s — %s", t.event, t.reason)
+                    self.publish_state(t.reason)
             if jpeg is not None:
                 try:
                     self.handle_frame(jpeg)

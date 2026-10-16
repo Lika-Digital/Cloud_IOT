@@ -155,6 +155,9 @@ class Watchdog:
         self._below_resume_since: float | None = None
         self._auto_resumes: list[float] = []      # timestamps, pruned to 24 h
         self._suspended_at: float | None = None
+        # A resume the watchdog has called DUE, waiting for the worker to arm and capture to
+        # deliver a frame (spec §5.5.1 item 3, 2026-10-16). Not counted until then.
+        self._resume_due = False
 
     # ── introspection ──
 
@@ -232,6 +235,7 @@ class Watchdog:
         self._below_resume_since = None
         self._suspended_at = None
         self._auto_resumes.clear()
+        self._resume_due = False
         # Start the CPU window fresh: pre-suspension samples describe a machine that was
         # overloaded, and judging the re-armed guard on them would re-suspend it at once.
         self._cpu.clear()
@@ -239,6 +243,7 @@ class Watchdog:
 
     def disarm(self) -> list[Transition]:
         was = self.state
+        self._resume_due = False
         self.state = STATE_OFF
         self._flags.clear()
         self._cpu.clear()
@@ -441,18 +446,41 @@ class Watchdog:
                 )]
             return []
 
+        # 2026-10-16 (owner): a resume is only DUE here. The budget is spent when capture has
+        # really started — the worker calls `confirm_auto_resume` on the first frame — and a
+        # failed arm spends nothing (`auto_resume_failed`). Counting here claimed a resume that
+        # had not happened.
+        if self._resume_due:
+            return []
+        self._resume_due = True
+        return [Transition(
+            "resume_due",
+            f"60 s average CPU stayed below {self.cfg.cpu_resume:.0f} % for "
+            f"{self.cfg.resume_after_s:.0f} s (last {avg:.1f} %) — resuming",
+            {"auto_resumes": len(self._auto_resumes), "max": self.cfg.max_auto_resumes},
+        )]
+
+    def confirm_auto_resume(self, now: float) -> list[Transition]:
+        """Capture is really running again after an automatic resume: spend the budget."""
+        if not self._resume_due:
+            return []
+        self._resume_due = False
+        self._prune_resumes(now)
         self._auto_resumes.append(now)
-        self.state = STATE_ARMED
-        self._below_resume_since = None
-        self._suspended_at = None
-        self._cpu.clear()       # judge the re-armed guard on fresh samples only
         return [Transition(
             "resumed_cpu",
-            f"60 s average CPU stayed below {self.cfg.cpu_resume:.0f} % for "
-            f"{self.cfg.resume_after_s:.0f} s (last {avg:.1f} %)",
-            {"auto_resumes": len(self._auto_resumes),
-             "max": self.cfg.max_auto_resumes},
+            f"guard resumed on its own and capture is running "
+            f"({len(self._auto_resumes)} of {self.cfg.max_auto_resumes} automatic resumes in 24 h)",
+            {"auto_resumes": len(self._auto_resumes), "max": self.cfg.max_auto_resumes},
         )]
+
+    def auto_resume_failed(self, now: float, reason: str) -> list[Transition]:
+        """The worker could not arm: back to suspended, nothing spent, the quiet clock restarts."""
+        self._resume_due = False
+        self.state = STATE_SUSPENDED_CPU
+        self._suspended_at = now
+        self._below_resume_since = None
+        return [Transition("auto_resume_failed", reason, {})]
 
 
 # ─── sampling (separate from the decision, so the decision is testable) ──────

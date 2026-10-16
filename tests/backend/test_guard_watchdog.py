@@ -67,12 +67,23 @@ from guard_worker.watchdog import (
 HEALTHY_DISK = dict(disk_free_gb=100.0, disk_free_percent=50.0)
 
 
-def _feed(wd: Watchdog, start: float, cpu: float, seconds: float, step: float = 5.0):
-    """Feed a constant CPU reading for `seconds`, returning all transitions."""
+def _feed(wd: Watchdog, start: float, cpu: float, seconds: float, step: float = 5.0,
+          *, worker_confirms: bool = True):
+    """Feed a constant CPU reading for `seconds`, returning all transitions.
+
+    Since 2026-10-16 (spec §5.5.1 item 3) the watchdog only says a resume is DUE; the worker
+    arms and confirms on the first frame, and only then is the budget spent. With
+    `worker_confirms` this plays the worker's part at once — the tests below are about the
+    watchdog's decisions; TC-GWD-23 and test_guard_worker_resume.py are about the confirmation.
+    """
     out = []
     t = start
     while t <= start + seconds:
-        out += wd.tick(now=t, cpu_pct=cpu, **HEALTHY_DISK).transitions
+        got = wd.tick(now=t, cpu_pct=cpu, **HEALTHY_DISK).transitions
+        out += got
+        if worker_confirms and any(x.event == "resume_due" for x in got):
+            wd.arm()
+            out += wd.confirm_auto_resume(t)
         t += step
     return out
 
@@ -531,3 +542,18 @@ def test_tc_gwd_23_current_flags_does_not_advance_the_machine():
     assert FLAG_SEGMENTS_STALLED in flags, "reading the flags cleared segments_stalled"
     assert FLAG_LIMITED_VISIBILITY in flags, "reading the flags cleared limited_visibility"
     assert wd.state == state_before, "reading the flags changed the state"
+
+
+def test_tc_gwd_23_a_due_resume_spends_nothing_until_the_worker_confirms():
+    """2026-10-16 (owner): the budget is spent only when capture has really started. A resume
+    that is due but never confirmed — or that failed — spends nothing."""
+    wd = Watchdog(WatchdogConfig(resume_after_s=60.0, max_auto_resumes=2))
+    _feed(wd, 0.0, 95.0, seconds=60.0)
+    assert wd.state == STATE_SUSPENDED_CPU
+    events = _events(_feed(wd, 70.0, 5.0, seconds=140.0, worker_confirms=False))
+    assert events.count("resume_due") == 1, "said once, not on every tick"
+    assert wd.auto_resumes_used(300.0) == 0
+    _events(wd.auto_resume_failed(300.0, "automatic resume failed: no model"))
+    assert wd.state == STATE_SUSPENDED_CPU and wd.auto_resumes_used(300.0) == 0
+    assert wd.confirm_auto_resume(300.0) == [], "nothing to confirm after a failure"
+

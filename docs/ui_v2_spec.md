@@ -947,7 +947,7 @@ guard rows (measured 2026-10-15), so nothing there changes meaning.
    the fix: a CPU suspension leaves the watchdog running; the watchdog says a resume is DUE
    (`resume_due`) without counting; the worker arms; the first frame after it records the resume
    (`resumed_cpu`, the budget spent); a failed arm records `auto_resume_failed`, spends nothing.
-   TC-GWD-03 and -06 change with it: they now play the worker's part (arm, then confirm).
+   TC-GWD-03 and -06 change with it: they now play the worker's part (arm, then confirm). **BUILT 2026-10-16:** TC-GW-01..03 failed on the old worker (it stayed SUSPENDED_CPU; nothing restarted); TC-GWD-23 added; the mutant that counts the resume when it is called due is caught by five tests.
 
 ### 5.5.2 Arm and switch off — ADMIN ONLY (owner, 2026-10-16)
 

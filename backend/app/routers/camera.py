@@ -65,6 +65,10 @@ async def camera_snapshot(
 def camera_stream(
     pedestal_id: int,
     db: DBSession = Depends(get_db),
+    # 2026-10-16 (owner, spec §16.3c): a login, as the snapshot beside it. Without one this
+    # route served the live camera to anyone who reached nginx :80 — the tailnet, and the
+    # internet through the tunnel. Recorded in the audit of 2026-06-10; TC-CAM-01/02.
+    _=Depends(require_any_role),
 ):
     """
     Proxy the IP camera MJPEG stream.

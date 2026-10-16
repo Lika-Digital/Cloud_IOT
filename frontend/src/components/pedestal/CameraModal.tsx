@@ -129,11 +129,11 @@ export default function CameraModal({ pedestalId, dataMode, cameraIp, onClose }:
               className="w-full h-full object-contain"
             />
           ) : cameraIp ? (
-            <img
-              src={`/api/camera/${pedestalId}/stream`}
-              alt="Live camera stream"
-              className="w-full h-full object-contain"
-            />
+            // 2026-10-16 (§16.3c): this was an <img> on /api/camera/{id}/stream, which cannot send
+            // a login — and the route now demands one. The live view is the snapshot poll above.
+            <div className="flex items-center justify-center h-full text-gray-500 text-sm">
+              <p>No live stream available.</p>
+            </div>
           ) : (
             <div className="flex items-center justify-center h-full text-gray-500 text-sm">
               <div className="text-center">

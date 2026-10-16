@@ -150,8 +150,6 @@ export const runDiagnostics = (pedestalId: number) =>
 export const resetInitialization = (pedestalId: number) =>
   api.post<{ pedestal_id: number; initialized: boolean }>(`/pedestals/${pedestalId}/diagnostics/reset`).then((r) => r.data)
 
-// Camera
-export const getCameraStreamUrl = (pedestalId: number) => `/api/camera/${pedestalId}/stream`
 
 // Predictions
 export const trainModels = (pedestal_id?: number) =>

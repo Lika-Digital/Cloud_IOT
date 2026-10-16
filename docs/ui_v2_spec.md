@@ -936,6 +936,18 @@ guard rows (measured 2026-10-15), so nothing there changes meaning.
    SUSPENDED_CPU, and is said in its state reason. The owner's words: a counter that claims
    something happened when it did not is exactly the defect being hunted. Tests TC-GW-01..03
    (`test_guard_worker_resume.py`) fail on the old worker.
+   **SECOND CORRECTION (measured on dev, 2026-10-16, while writing TC-GW-01..03):** the first
+   correction was wrong too. On a CPU suspension the worker sheds guard with `_disarm`, and
+   `_disarm` also switches the watchdog OFF (`guard_worker/__main__.py:514`); an OFF watchdog
+   evaluates nothing (`watchdog.py:265-266`). So in the running worker the resume never comes due
+   at all and **no budget is spent** — guard stays paused until a person re-arms. The resume and
+   the counting work only in the watchdog alone (TC-GWD-03..06 test it alone). Measured: a worker
+   suspended at 97 %, then 80 s at 5 % with a 10 s window and a 20 s resume delay — one
+   transition (`suspended_cpu`), budget 0, still SUSPENDED_CPU. The owner's two rules stand;
+   the fix: a CPU suspension leaves the watchdog running; the watchdog says a resume is DUE
+   (`resume_due`) without counting; the worker arms; the first frame after it records the resume
+   (`resumed_cpu`, the budget spent); a failed arm records `auto_resume_failed`, spends nothing.
+   TC-GWD-03 and -06 change with it: they now play the worker's part (arm, then confirm).
 
 ### 5.5.2 Arm and switch off — ADMIN ONLY (owner, 2026-10-16)
 

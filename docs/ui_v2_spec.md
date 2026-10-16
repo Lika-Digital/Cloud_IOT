@@ -1539,7 +1539,7 @@ Secrets are never typed on a command line: read them with `read -s` and pass the
 | 0.5 | Both databases are saved — ONLINE, never with `cp` | **Not `cp`:** the databases run in WAL mode, and copying a live one can produce an inconsistent copy without the `-wal` contents. Use SQLite's backup API, which is consistent while the backend runs: `sudo python3 -c "import sqlite3;[sqlite3.connect(s).backup(sqlite3.connect(d)) for s,d in (('/opt/cloud-iot/backend/pedestal.db','/root/pedestal.db.pre-release'),('/opt/cloud-iot/backend/data/users.db','/root/users.db.pre-release'))]"`, then check both copies: `sudo python3 -c "import sqlite3;print([sqlite3.connect(f).execute('PRAGMA integrity_check').fetchone()[0] for f in ('/root/pedestal.db.pre-release','/root/users.db.pre-release')])"`; and note the owner: `stat -c '%U:%G' /opt/cloud-iot/backend/pedestal.db \| sudo tee /root/db.owner` | `['ok', 'ok']`; an owner such as `cloud-iot:cloud-iot` | STOP | ☐ |
 | 0.6 | No other unit has pending changes that our `daemon-reload` would activate | `systemctl list-unit-files 'ssh*' --no-legend` — note which of `ssh.service` / `ssh.socket` is ENABLED: on recent Ubuntu SSH is often socket-activated, and then the service can read `inactive` while SSH works, then `for u in cloudflared tailscaled docker nginx <ssh-unit>; do echo "$u $(systemctl show -p NeedDaemonReload --value $u)"; done` | Every line ends in `no` | STOP — find out who changed which unit | ☐ |
 | 0.7 | Baseline of the bind | `ss -ltn 'sport = :8000'` | `0.0.0.0:8000` (the old state) | RECORD | ☐ |
-| 0.8 | The ERP key is configured — without printing it | `sudo grep -c '^ERP_API_KEY=.\+' /opt/cloud-iot/backend/.env` | `1` — without it every `/scan` below answers 503 | STOP for 13.7 and 13.10 | ☐ |
+| 0.8 | The ERP key is configured — without printing it. *2026-10-16: E.15 empties it in this session (owner); RECORD what it was, then E.15* | `sudo grep -c '^ERP_API_KEY=.\+' /opt/cloud-iot/backend/.env` | `1` — without it every `/scan` below answers 503 | STOP for 13.7 and 13.10 | ☐ |
 
 ## 13.2 The upgrade
 
@@ -1700,6 +1700,11 @@ R.1 runs BEFORE anything writes to those files — it is the proof of what they 
 
 ## 13.10 R1 — last, and the only check that decides Krk
 
+**2026-10-16 (owner, E.15):** `ERP_API_KEY` is emptied in the upgrade session, so R1 (rows 23–25
+call `/api/nfc/*` with the key) and §13.7 rows 13/13a do NOT run there — they run in the NFC e2e
+session, with the new per-cabinet key that only the ERP holds. R1 still decides Krk; it is moved,
+not dropped.
+
 | # | Check | Command / step | Expected | If it fails | Outcome |
 |---|---|---|---|---|---|
 | 21 | Still ready | P.1 still holds: the same `socket_configs` query, and smart mode on | Every socket `0`; smart mode on | STOP | ☐ |
@@ -1788,8 +1793,35 @@ task**, not this list's.
 | E.10 | Both databases saved before the test | §13.1 row 0.5 (backup API, both, `integrity_check`) | `['ok', 'ok']` | STOP | ☐ |
 | E.11 | The live camera route needs a login (§16.3c, for the record; the fix does not wait) | BEFORE the upgrade, then AFTER: `curl -s -m 5 -o /tmp/s.bin -w '%{http_code}\n' http://localhost/api/camera/1/stream; wc -c < /tmp/s.bin; rm -f /tmp/s.bin` | Before: RECORD the code and the byte count (200 and more than 0 = the camera was open). After: `401` or `403`, 0 bytes | After, anything else: STOP, tell the owner | ☐ |
 | E.12 | What R4's refusal will rest on (§16.5.3) | `grep -n "X-Real-IP\|proxy_pass\|listen" /etc/nginx/sites-enabled/*; sudo grep -n "service:\|hostname:" /etc/cloudflared/*.yml 2>/dev/null` — hostnames and targets only, no credentials | RECORD: `X-Real-IP $remote_addr` set in the `/api/` location; the local port each tunnel hostname targets (`:80` or `:8000`) | No `X-Real-IP`: the tunnel refusal must wait — tell the owner | ☐ |
+| E.13 | **ERP access OFF in one step — the switch, and its check** (owner, 2026-10-16) | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;c=sqlite3.connect('/opt/cloud-iot/backend/pedestal.db');c.execute('UPDATE external_api_config SET active=0 WHERE id=1');c.commit();print(c.execute('SELECT active FROM external_api_config WHERE id=1').fetchone())"` — or admin `/api-gateway` → Deactivate (login + 2FA). Check: any call with the ERP's token. Back on: the same with `active=1` | `(0,)`; from the next request every `/api/ext/*` refused — through the gateway 403, a direct ext route 503 (measured, table below). It does NOT close the `X-API-Key` routes — E.15 does | RECORD that the switch was tried once, on and off, before the test | ☐ |
+| E.14 | **How long a leaked token lives** — never read on the cabinet | `sudo grep -E '^JWT_EXPIRE_MINUTES=' /opt/cloud-iot/backend/.env \|\| echo "not set — the default, 120 min (config.py:21)"` | RECORD the value: it is how long an issued service token stays valid after the account is disabled or its password changed (below) | — | ☐ |
+| E.15 | **`ERP_API_KEY` emptied** (owner, 2026-10-16: the key was in the mobile app and must be assumed known; the read test does not use `/api/nfc/*`; it is the only path from the internet that SWITCHES POWER ON) | `sudoedit /opt/cloud-iot/backend/.env` → `ERP_API_KEY=` (empty); `sudo systemctl restart cloud-iot-backend`; then `curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost/api/nfc/scan -H 'X-API-Key: x'` | `503`. The admin UI's NFC screens (`outlets`, `mode`, `reconciliation`) still work — measured on dev: the four operator routes do not use the key | Not 503: STOP. A new key, different per cabinet, goes into `.env` only for the NFC e2e, and only the ERP holds it | ☐ |
 | S.1 | Diagnostics switches nothing (§4.11 SM-Q4 step 3 — the firmware is not in the repo) | With smart mode OFF and nothing plugged in: admin → Diagnostics; then `journalctl -u cloud-iot-backend --since "5 min ago" -o cat \| grep -E 'OutletActivated\|ValveAutoOpen\|opta/cmd/(socket\|water)'` | No `OutletActivated`; at most `ValveAutoOpen … SKIPPED` lines | An outlet or valve switched: STOP — `diagnostics.run` goes back under the gate; tell the owner | ☐ |
 | S.2 | With smart mode OFF, does the cabinet act on a local command? (§4.11 SM-Q6) | Smart mode OFF (now): on the admin dashboard switch the light; watch the light and `journalctl -u cloud-iot-backend --since "2 min ago" -o cat \| grep -i 'led'` | RECORD whether the light changed and whether the cabinet acknowledged (`opta/acks` for `cmd/led`) | If the cabinet ignores it: tell the owner — a "Sent" that does nothing | ☐ |
+
+**Disabling the account and changing its password are NOT a switch — measured on dev,
+2026-10-16, on `main`'s code (`1554bcf`), a real `api_client` account and real tokens:**
+
+| Done | Through the gateway (`/api/ext/pedestals/health`) | A direct ext route (`/api/ext/pedestals/{id}/status`) |
+|---|---|---|
+| fresh token | 200 | 200 |
+| **account disabled** | **200** | **200** |
+| **password changed** | **200** | **200** |
+| **gateway `active=0`** (E.13) | **403** | **503** |
+
+Neither path looks the account up: both check only the token's signature, role and expiry and
+whether the gateway is on (`external_api_gateway.py:55-70`, `ext_pedestal_endpoints.py:54-108`).
+A disabled account gets no NEW token (measured: 403), but an issued one lives until it expires —
+`JWT_EXPIRE_MINUTES` (E.14; default 120). **Disabling or a new password is a delay of up to the
+token's lifetime, never a switch. The switch is E.13.**
+
+**`ERP_API_KEY` emptied does not touch the operator NFC routes — measured on dev, 2026-10-16:**
+
+| `ERP_API_KEY` | the 4 operator `/api/nfc/*` (an operator login) | the 5 `X-API-Key` routes |
+|---|---|---|
+| set | 200 ×4 | past the key check (422/404/400 from the empty test body) |
+| `""` (empty in `.env`) | **200 ×4** | **503 ×5** |
+| absent | 200 ×4 | 503 ×5 |
 
 **Which answers are measurements and which only prove the connection** (§17.5 findings A and B):
 the occupancy and match fields — `berths.list` `occupied*`, `match*`, `state_code`, and
@@ -2138,13 +2170,35 @@ forward or a tunnel route to the cabinet for this — ever.** (Superseded: the `
 path proposed in the plan above — there is no separate path.)
 **R4 — CLOSED (owner, 2026-10-16), this way.** The tunnel (`marina2.lika.solutions` → nginx :80,
 measured 2026-10-12) MAY publish the application: it demands a login and 2FA. `camera2` and `tme2`
-stay as they are — the camera has its own password; the owner's decision. **But `/api/ext/*` and
-every live route refuse a request that came through the tunnel: 403.** "Through the tunnel" = the
-source address nginx passes (`X-Real-IP $remote_addr`, `ubuntu-install-26.04.sh:452`) is not in
-the tailnet range `100.64.0.0/10`; a request with no such header (straight to the backend, as a
-tunnel aimed at :8000 would arrive) is refused too. **Tests:** TC-LV-12 for the live routes, and
-**TC-EXT-TUN-01 for every existing `/api/ext/*` route** (each catalogue path and each direct ext
-route: through the tunnel 403, over the tailnet the usual answer).
+stay as they are — the camera has its own password; the owner's decision.
+
+**THE RULE (owner, 2026-10-16 — written as a rule, not as a list of routes; D12: the ERP reaches
+the cabinet ONLY over Tailscale):**
+> **A machine credential (the service token, the `X-API-Key`) is valid ONLY from the tailnet. A
+> human credential (login + 2FA) works through the tunnel too.**
+
+"From the tailnet" = the source address nginx passes (`X-Real-IP $remote_addr`,
+`ubuntu-install-26.04.sh:452`) is in `100.64.0.0/10`; a request with no such header (straight to
+the backend, as a tunnel aimed at :8000 would arrive) is NOT from the tailnet. A machine
+credential from anywhere else → 403. The four operator `/api/nfc/*` routes (`outlets`, `mode`,
+both `reconciliation`) take a human login and stay reachable through the tunnel, behind 2FA.
+
+**The test lists routes by WHICH CHECK THEY USE, never by path** — so every new route that
+accepts a machine credential is covered the day it lands; a list of paths would leak again in six
+months, as the gateway list did. Today that is not mechanically possible for every route: the
+`X-API-Key` routes use a dependency (`require_erp_api_key`), but the direct `/api/ext` routes
+call `_check_ext_auth` inside their body and the gateway decodes its token inline. **So the build
+first makes every machine check ONE dependency** (or marks it on the route), and then:
+- **TC-MC-TUN-01** — every route whose dependencies include a machine check (enumerated from the
+  app; today 5 `X-API-Key` + 17 direct ext + the gateway's catch-all): a valid machine credential
+  through the tunnel → 403; over the tailnet → the usual answer.
+- **TC-MC-TUN-02** — no route reads a machine credential outside that dependency: a scan of the
+  route functions for `_check_ext_auth`, `jwt.decode` of an `api_client` token, or the
+  `X-API-Key` header — fails if one is added by hand. A mutant (a new route that checks the
+  service token inline) is caught.
+- **TC-MC-TUN-03** — the positive control: a human login (an operator token) through the tunnel
+  still reaches `/api/marina/berths` and the four operator `/api/nfc/*` routes.
+TC-LV-12 becomes part of TC-MC-TUN-01 (the live routes take the same dependency).
 **When it is built — after the upgrade, with the D32 build, not in the second merge:** it rests on
 two cabinet facts nobody has read — that the cabinet's nginx really sets `X-Real-IP` (the repo's
 installer does; the cabinet's file was never read) and which local port the tunnel targets

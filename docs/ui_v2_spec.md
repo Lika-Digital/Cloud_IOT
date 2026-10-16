@@ -7,7 +7,14 @@ differ, the status review of 2026-10-12 lists each difference; each awaits the o
 on which side is right, and until then this document is NOT updated to match the code.
 **§0 records the owner's decisions of 2026-10-12 on where this text and the code differed,
 and the status of every main item. §13 is the list of checks that can be run only on the
-cabinet. §14 is the security model; §15 the consequences of D6.1 for the UI.**
+cabinet. §14 is the security model; §15 the consequences of D6.1 for the UI. §16 is the
+architecture — the cabinet as an edge device, Phase 1 decided and Phase 2 to be measured (owner,
+2026-10-16).**
+
+**RULE FROM 2026-10-16 (owner), to the end of the project: the spec comes FIRST.** Nothing is
+built that this document does not describe. Where it is silent or contradicts itself, work STOPS
+and the owner is asked — a gap is never filled by an assumption, and nothing is built first and
+written down afterwards.
 
 **The ERP contract is not in this document.** It lives in ONE place,
 `docs/erp_session_payload_contract.md`, and is only referenced here — two copies of a contract
@@ -1110,6 +1117,7 @@ fails with the `.xml` moved away and with it corrupted, and the real script on a
 | # | Check | Command / step | Expected | If it fails | Outcome |
 |---|---|---|---|---|---|
 | 17 | Reproduce the `/api/ext/*` 401 — seen so far only on the cabinet | `read -s EXT_KEY` (the gateway key), then `curl -s -w '\n%{http_code}\n' -H "Authorization: Bearer $EXT_KEY" http://localhost/api/ext/pedestals/1/status` | A MEASUREMENT, not pass/fail: record the code and the body. `401` confirms D17; `200` means it does not reproduce after the upgrade | RECORD | ☐ |
+| 17b | **Phase 1: no camera endpoint is allowed to the ERP** (§16.3, owner 2026-10-16 — GDPR) | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3,json;c=sqlite3.connect('file:/opt/cloud-iot/backend/pedestal.db?mode=ro',uri=True);r=c.execute('SELECT allowed_endpoints FROM external_api_config WHERE id=1').fetchone();ids=sorted(e['id'] for e in json.loads(r[0] or '[]')) if r else [];print(len(ids));print(ids);print([i for i in ids if i.startswith('camera.')])"` | RECORD the count and the list (the owner states 17 on 2026-10-15). The last line `[]` | A `camera.*` id in the list = an image path to the ERP is open against the Phase 1 decision: tell the owner; it is removed on `/api-gateway` by the owner's decision, not on the pier | ☐ |
 
 ## 13.9 Migration — the four populations
 
@@ -1212,3 +1220,101 @@ D6.1 (2026-10-12): the ERP is the only owner of the NFC mapping and of the custo
   customer and is filtered for non-admin (§14).
 - **The mobile app does not talk to the cabinet.** Its live view no longer connects (`/ws` is
   operator-only); the app goes through the ERP.
+
+
+---
+
+# 16. Architecture — the cabinet as an edge device: Phase 1 decided, Phase 2 to be measured
+
+**Owner, 2026-10-16.** From this date the spec is the control point of the work, not a record
+after it: nothing is built that this document does not describe, and where it is silent or
+contradicts itself, work stops and the owner is asked.
+
+## 16.1 Phase 1 — DECIDED: everything stays on the cabinet
+
+The cabinet is a device at the edge of the network. It runs four evaluation functions on its own
+camera, and **everything stays on the cabinet, exactly as today**:
+
+| # | Function | Its result | What reaches the ERP |
+|---|---|---|---|
+| 1 | Berth occupancy | 1 or 0 — occupied or not | the result |
+| 2 | Vessel match | match or no match — is it the right boat. The reference photo stays on the cabinet | the result |
+| 3 | The sector inside the camera image that the evaluation uses | a rectangle per berth | the sector as configured (numbers) |
+| 4 | Guard (new) | state, and events | state and events — never a frame, never a clip |
+
+**Towards the ERP goes state and result only — never an image, never video.**
+
+**Condition of Phase 1, not an option:** each of the four can be started LOCALLY (an operator on the
+cabinet's own UI) **and** THROUGH THE API (from the ERP). §17 specifies how.
+
+**Pull is the truth, push is the trigger** (owner's hybrid). The ERP's authoritative read is a GET;
+a webhook event tells it that something changed and is never the only copy of a fact.
+
+## 16.2 Today against Phase 1 — measured from the code, 2026-10-16
+
+| Function | Local, today | From the ERP, today | Result to the ERP, today |
+|---|---|---|---|
+| 1 Occupancy | `/berths` "Analyze", `POST /api/admin/berths/{id}/analyze` (`require_control`). **Manual only:** the periodic loop is disabled (`berth_analyzer.py:295-303`, "on-demand mode") | read only: `GET /api/ext/pedestals/{id}/berths/occupancy`, `GET /api/ext/berths`; nothing starts it | `berth_occupancy_updated` webhook — but only after someone clicks Analyze (`berths.py:543`) |
+| 2 Match | the same "Analyze" (histogram match); a second "Match" button runs a Re-ID engine whose result is never stored (§17.4) | can upload a reference photo (`POST /api/ext/pedestals/{pid}/berths/{bid}/reference-image`); cannot start a match | pull only: the webhook strips the match fields (`webhook_service.py:50-60`) |
+| 3 Sector | drawn on the frame, `SectorConfigModal.tsx` → `PUT /api/admin/berths/{id}/config` | read only (in `GET /api/ext/berths`); set on the cabinet by design (`ext_pedestal_endpoints.py:216-217`) | — |
+| 4 Guard | **nothing in the UI** — curl only (§5.5) | nothing: no guard entry in `api_catalog.py` | nothing: no guard event in `EVENT_CATALOG` |
+
+So **no function meets the Phase 1 condition today.** The gap per function is §17.
+
+## 16.3 Camera endpoints — they exist, they are NOT allowed to the ERP
+
+`camera.snapshot`, `camera.stream` (`api_catalog.py:23-24`), `camera.frame_ext`,
+`camera.stream_ext` (`:65-66`) return a frame, MJPEG, or the camera's stream address. **They stay
+in the code and in the catalogue** — they are used locally and Phase 2 may need them — **but they
+are not in the ERP's `allowed_endpoints`. Enabling them for the ERP is blocked by the owner's GDPR
+decision.**
+
+**The catalogue is not the allow list — measured in the code.** The gateway refuses any path whose
+catalogue id is not in `external_api_config.allowed_endpoints` (`external_api_gateway.py:279-302`,
+403 "Endpoint not allowed"); the direct `/api/ext/...` routes check the same list
+(`ext_pedestal_endpoints.py:102-114`, called at `:394` for the frame and `:473` for the stream).
+So a catalogued camera endpoint gives the ERP nothing unless the cabinet's list names it.
+
+**What the cabinet's list holds is a cabinet fact and is NOT measured from here.** The owner states
+that the configuration of 2026-10-15 enabled 17 endpoints and no `camera.*` among them. §13 check
+17b reads it. **Not enforced in code:** an admin on `/api-gateway` can still tick a `camera.*`
+endpoint — the block is a decision, not a mechanism. **Open — owner:** should the code refuse
+`camera.*` in `allowed_endpoints` while Phase 1 holds? (One check in `PUT /api/admin/ext-api/config`.)
+
+## 16.4 Phase 2 — a DIRECTION, NOT a decided architecture; the measurement decides
+
+**Direction:** small files move — images, never video — and the evaluation functions move to the
+ERP to unload the cabinet. The reference photo is uploaded to the ERP; the cabinet returns an image
+of the boat at the berth on request. **Guard:** detection stays on the cabinet (video never
+leaves it); in Phase 2 its CONTROL moves to the ERP. *(My reading of "faza 2 kontrola na ERP-u":
+arming, disarming and event review are operated from the ERP. Owner to confirm.)*
+
+**The owner is explicit: testing shows which is better.** Nothing of Phase 2 is built until the
+measurement below says so. **This is a PROPOSAL of the measures, not built; the thresholds are the
+owner's to set.**
+
+**Where:** cabinet 1 (the NUC on the pier, the real camera, the real uplink), never the dev box —
+a measurement taken elsewhere does not describe the cabinet (rule 17). **When:** after Phase 1 is
+deployed, with all four functions running as they will in service (occupancy at its configured
+interval, guard armed at 1 frame/s), for **7 consecutive days**, plus a 7-day control period with
+the functions off for M2.
+
+| # | What is measured | How | Why it matters |
+|---|---|---|---|
+| M1 | **Cabinet cost of each function**: CPU % (its process, and the whole machine), memory, inference time p50 / p95 | guard: its health message (CPU, inference time); occupancy and match: timed per run in the backend log; machine: a 1-minute `/proc/stat` + `/proc/meminfo` sampler | the reason Phase 2 exists is to unload the cabinet; if the load is small there is nothing to unload |
+| M2 | **Harm to the cabinet's core work** while the functions run: backend request time p95, MQTT message-to-database delay p95, time from a control tap to the cabinet's ack | the same metrics from the backend log, functions ON (M1's week) against OFF (control week), same hours of day | load only matters if it slows what the cabinet is for |
+| M3 | **Cost of moving images**: bytes per evaluation image (the sector crop, JPEG), images per day at the configured interval, upload success rate and time over the real uplink | a test upload of the real crop to an ERP test endpoint every interval, for the week | Phase 2 trades CPU for the uplink |
+| M4 | **Time to a result at the ERP**: frame → result on the cabinet + push, against frame → upload → ERP evaluation → result | timestamps at each step | the ERP must not learn later than today |
+| M5 | **Evaluation lost when the uplink is down**: hours in the week the cabinet could not reach the ERP | the uplink log (failed pushes, tunnel down) | in Phase 1 the evaluation continues offline; in Phase 2 it stops |
+
+**Proposed outcome rule** — numbers for the owner to set; the shape is the proposal:
+
+- **Moving makes sense** when BOTH hold: (a) the cabinet is under real pressure — M1 machine CPU
+  above **X %** on average over the week, or M2 core latency p95 more than **Y %** worse with the
+  functions on than off; AND (b) the uplink can carry it — M3 upload success at least **99.5 %**
+  within **Z s**, M4 no slower than today by more than **W s**, M5 below **V hours** a week.
+- **Stay in Phase 1** when the cabinet has headroom (M1 and M2 under their thresholds): moving
+  would add a dependency on the uplink and buy nothing.
+- **Guard is decided separately** with the same measures: its own M1 share, and for control on
+  the ERP, M4 for arm → acknowledgement and M5 (a guard that cannot be armed while the uplink is
+  down).

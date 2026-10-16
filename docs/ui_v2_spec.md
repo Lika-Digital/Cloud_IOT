@@ -2115,39 +2115,77 @@ behind live. 600 kbit/s ≈ 270 MB per hour viewed. M8 measures the cabinet's re
 VPS over Tailscale (a timed transfer; the router is a Teltonika on LTE — the audit of
 2026-10-12).
 
-### 16.5.3 The path of the picture — the cabinet is never exposed to the internet for this
+### 16.5.3 The path of the picture — DECIDED (owner, 2026-10-16): the existing door, nothing new
 
-**The mobile app never talks to the cabinet — only to the ERP.** The cabinet gives the stream to
-the ERP over **Tailscale** (`nginx :80`, reachable from the ERP's VPS only — the owner's
-Tailscale ACL, §13.14 E.5); the ERP serves it to its users. The cabinet has **no inbound port**:
-its only ways out are Tailscale and the Cloudflare tunnel, both opened from the inside. **Nobody
-opens a port, a forward or a tunnel route to the cabinet for this — ever.** The live path is
-also refused on the Cloudflare tunnel: nginx serves `/live/` only to the tailnet range
-(`allow 100.64.0.0/10; deny all;`), so a request arriving through cloudflared (from loopback) is
-refused.
+**The stream goes through the door that already exists.** The ERP signs in as `api_client`,
+gets its service token (`POST /api/auth/service-token`) and asks for everything camera-related
+on `/api/ext/*` over **Tailscale**, exactly like any other data. **No new channel, no other port,
+no other key; the cabinet opens nothing to the outside.** The mobile app never talks to the
+cabinet — only to the ERP, which serves the picture to its users. **Nobody opens a port, a
+forward or a tunnel route to the cabinet for this — ever.** (Superseded: the `nginx /live/<token>`
+path proposed in the plan above — there is no separate path.)
 **Already measured, and against this rule (audit 2026-10-12, R4):** the Cloudflare tunnel
-publishes `marina2.lika.solutions` → nginx :80 — the whole app — and the camera's own web page.
-So today the cabinet IS reachable from the internet through the tunnel, and with it
-`GET /api/camera/{id}/stream`, which needs no login (§16.3c addendum). R4 is the owner's
-decision, separate from D32; D32 must not be built on top of it.
+publishes `marina2.lika.solutions` → nginx :80 — the whole app, `/api/ext/*` included — and the
+camera's own web page. R4 is the owner's decision, separate from D32; D32 must not be built on
+top of it: the live routes answer only a request that comes in over the tailnet (the source
+address in `100.64.0.0/10`, as nginx passes it), and TC-LV-12 proves a request through the
+tunnel is refused.
 
-### 16.5.4 The stream lives only while the ERP watches — provably
+**The cabinet does not know customers.** It checks two things only: the service token is valid
+(and the id is enabled in the gateway list), and the berth belongs to this cabinet. **Who may
+watch which berth is decided by the ERP.** The viewer id the ERP sends for the viewing log is an
+opaque reference the cabinet stores and never interprets.
 
-- **A token per view:** random (128 bit), bound to one berth and to the ERP's viewer id, valid
-  only with heartbeats. Start: `POST /api/ext/pedestals/{id}/berths/{bid}/camera/live` → the
-  token and a URL behind nginx (`/live/<token>/index.m3u8`) — never the camera's address.
-- **No heartbeat → it stops on its own:** the ERP renews every ≤ 20 s; 30 s without one and the
-  process is ended. **A hard maximum per view** (proposal: 10 min; the owner sets it). The
-  numbers are proposals until the owner decides them.
-- **"Running" is MEASURED from the process, never assumed** — the same defect as a command
-  reported "sent": `active` only if the ffmpeg process is alive (polled) AND its newest segment
-  is younger than 2 segment lengths; otherwise `starting` (≤ 10 s after a start) or `failed`
-  with the reason (exit code, stderr's last line without the URL). Status:
-  `GET /api/ext/pedestals/{id}/camera/status` (16.5.8).
-- **Tests when built** (each must fail on the code before it): the process killed → `active`
-  disappears within 5 s; no heartbeat → the process is gone within 30 s (checked by pid); the
-  hard maximum ends it; a token is refused for another berth and after its end; nothing is
-  written to disk (segments in tmpfs, deleted at stop).
+### 16.5.4 The four catalogue keys, all under the same service token — DECIDED (owner)
+
+| Key | Method + path | Does | `image` |
+|---|---|---|---|
+| `camera.live_start` | `POST /api/ext/pedestals/{id}/berths/{bid}/camera/live` `{viewer_ref}` | asks to watch one berth; answers the playlist address (under `/api/ext/…`) and the deadline (`expires_at` = now + 30 s, moved by each keepalive, never past the 10-min cap) | **yes** |
+| `camera.live_keepalive` | `POST /api/ext/pedestals/{id}/camera/live/keepalive` `{viewer_ref}` | the ERP calls it while it has at least one viewer | yes |
+| `camera.live_stop` | `POST /api/ext/pedestals/{id}/camera/live/stop` `{viewer_ref}` | the ERP says its last viewer has left | yes |
+| `camera.live_status` | `GET /api/ext/pedestals/{id}/camera/live/status` | does the stream run — MEASURED from the process (below) | **no** — data |
+
+The playlist and the segments (`GET /api/ext/pedestals/{id}/camera/live/index.m3u8`, `…/seg_<n>.ts`)
+belong to `camera.live_start`: **both demand the service token**, the id enabled, and a stream
+that is running. **The most likely defect of the whole feature is a segment fetchable without
+the token** — a static file served beside the route, an nginx `location` that matches `.ts`, a
+cached response — so TC-LV-01 tests exactly that, by every way in.
+
+**One ffmpeg per camera, whatever the number of viewers.** A second `live_start` while it runs
+attaches to the same process (the deadline moves; the log gets a row per viewer_ref).
+**Stopped after 30 s without a keepalive; a hard maximum of 10 minutes** per stream, after which a
+new `live_start` is needed (owner, 2026-10-16).
+
+**"Active" is measured from the process, never assumed** — the same defect as a command reported
+"sent": `live_status` says `active` only if the ffmpeg process is alive (polled) AND its newest
+segment is younger than two segment lengths; otherwise `starting` (≤ 10 s after a start, no
+segment yet) or `failed` with the reason (exit code and stderr's last line, the camera address
+cut out), or `stopped`. **Nothing is written to disk:** segments in a tmpfs directory per stream,
+deleted when it stops.
+
+**The viewing log** (16.5.7): kept **12 months** (owner, 2026-10-16), then deleted; **read: admin
+only**, in the API and the page; not in the gateway catalogue.
+
+### 16.5.4a Tests — each must FAIL on the code before the D32 build
+
+All in `tests/backend/test_camera_live.py` unless named; ffmpeg replaced by a fake process that
+writes segments on a clock the test controls (no camera on the dev box), so "alive" and "fresh"
+are driven, not waited for.
+
+| Id | Asserts | Fails on the old code because |
+|---|---|---|
+| TC-LV-01 | **A segment and the playlist without the service token → 401**, with a token of another role → 403, with the token but the id not in the gateway list → 403, after the stream stopped → 404; and through nginx (`nginx_conf_test`: no `location` serves `.ts`/`.m3u8` outside the FastAPI route) | the routes do not exist — and the nginx check fails if a static location is ever added |
+| TC-LV-02 | a berth of ANOTHER cabinet → 404; a berth of this cabinet → started | no route |
+| TC-LV-03 | two `live_start` (two viewer_refs) → ONE process; `live_stop` from one keeps it running for the other; from the last → process gone | no route |
+| TC-LV-04 | no keepalive for 30 s → the process is gone (by pid), `live_status` not `active`, the log row `heartbeat_lost` | no route |
+| TC-LV-05 | the 10-minute cap ends it even with keepalives; the row `max_duration` | no route |
+| TC-LV-06 | `live_status`: killed process → not `active` within one poll; a stale segment → not `active`; just started → `starting`; ffmpeg exits at once → `failed` with a reason that carries no camera address | no route |
+| TC-LV-07 | nothing outside the stream's tmpfs directory is written; the directory is gone after stop | no route |
+| TC-LV-08 | the viewing log: a row per viewer_ref with berth, start, end, duration, end reason; `GET /api/admin/camera/views` 403 for `monitor_control` and `monitor`, absent from the catalogue; rows older than 12 months removed by the retention job | no table, no route |
+| TC-LV-09 | `live_start` without `viewer_ref` → 422, nothing started | no route |
+| TC-LV-10 | the ban: with `PHASE1_NO_IMAGES_TO_ERP` as today, the three image ids answer 403 and `live_status` answers (data); after the D32 commit only these ids open — `camera.snapshot`, `camera.frame_ext`, `camera.stream`, `camera.stream_ext` stay refused (D30) | the ids are not in the catalogue |
+| TC-LV-11 | no live answer (start, status, playlist) contains the camera's address or password (the ext filter of §16.3d, and a direct assertion naming the route, never the value) | no route |
+| TC-LV-12 | a request to any live route that did not come in over the tailnet (the source as nginx passes it is not in `100.64.0.0/10` — e.g. through the Cloudflare tunnel, from loopback) → 403 | no route |
 
 ### 16.5.5 Privacy masks — on the camera, fixed zones, zero CPU (owner)
 
@@ -2183,7 +2221,7 @@ Who watched, which berth, when, how long — without it a complaint has no answe
 the ERP's viewer id (required — a start without it is refused), pedestal, berth, the token's hash,
 started at, ended at, duration, how it ended (`stopped` / `heartbeat_lost` / `max_duration` /
 `process_died` / `failed`). **Read: admin only**, in the API and the page. Never an image.
-**OPEN for the owner:** how long the log is kept.
+**Kept 12 months (owner, 2026-10-16).** Not in the gateway catalogue: the ERP cannot read it.
 
 ### 16.5.8 `camera.status` is not a picture; `camera.stream_ext` is
 
@@ -2210,8 +2248,17 @@ refused (D30).
 | — | no latency requirement | searched 2026-10-16, none found |
 | — | Cloudflare exposes nginx :80 and the camera page (R4) | measured 2026-10-12 |
 
-**OPEN for the owner:** the name in the decision record; the token / heartbeat / maximum numbers;
-how long the viewing log is kept; whether sub-second latency is a requirement; R4.
+**Decided 2026-10-16 (owner, D32 continued):** the path (16.5.3), the four keys (16.5.4), one
+ffmpeg, 30 s without a keepalive, the 10-minute cap, the log kept 12 months and admin only.
+
+**OPEN for the owner:**
+- the name in the decision record; whether sub-second latency is a requirement (none found); R4;
+- **D32-Q1 — one picture shows every berth of the camera.** `live_start` is for ONE berth, and
+  there is one ffmpeg per camera; with the masks on the camera (16.5.5, decided: on the camera, not
+  on the cabinet) the picture is the camera's whole visible area — every berth of this pedestal
+  and the water. So a viewer the ERP allowed for berth 3 also sees berths 1, 2 and 4. Either that
+  is accepted (and the ERP is told), or each berth needs its own crop on the cabinet — a transcode
+  per berth, against "masks on the camera, zero CPU". Not decided here.
 
 ## 16.4 Phase 2 — a DIRECTION, NOT a decided architecture; the measurement decides
 

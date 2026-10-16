@@ -191,6 +191,20 @@ def test_direct_water_cmd_publishes_mqtt(client, auth_headers, action):
     assert any(p.get("action") == action for p in payloads)
 
 
+def _assert_no_outlet_command(pub) -> None:
+    """The refused request published no socket or valve command.
+
+    `pub` mocks the process-wide `mqtt_service.publish`, so it also records any publish another
+    part of the app makes in the same window (failed intermittently on 2026-10-16: the 11:33 gate and the push gate of 36228c2,
+    `assert 1 == 0`, the call not shown). The claim under test is the ROUTE's: no `opta/cmd/socket`
+    or `opta/cmd/water` command. Anything else that was published is named, never counted blind.
+    """
+    calls = [(c.args[0] if c.args else c.kwargs.get("topic"), c.args[1:] if c.args else c.kwargs)
+             for c in pub.call_args_list]
+    commands = [c for c in calls if c[0] and ("cmd/socket" in c[0] or "cmd/water" in c[0])]
+    assert commands == [], f"the refused request published an outlet command: {commands}; all: {calls}"
+
+
 def test_direct_socket_cmd_409_when_smart_mode_off(client, auth_headers):
     """v3.30 — standalone (SmartMode OFF) rejects socket control with 409."""
     _seed_smart_mode(1, False)
@@ -202,7 +216,7 @@ def test_direct_socket_cmd_409_when_smart_mode_off(client, auth_headers):
         )
     assert r.status_code == 409, r.text
     assert "smart mode" in r.json()["detail"].lower()
-    assert pub.call_count == 0
+    _assert_no_outlet_command(pub)
     _seed_smart_mode(1, True)   # restore for sibling tests sharing pedestal 1
 
 
@@ -216,7 +230,7 @@ def test_direct_water_cmd_409_when_smart_mode_off(client, auth_headers):
             headers=auth_headers,
         )
     assert r.status_code == 409, r.text
-    assert pub.call_count == 0
+    _assert_no_outlet_command(pub)
     _seed_smart_mode(1, True)
 
 

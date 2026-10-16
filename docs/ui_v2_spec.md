@@ -183,6 +183,9 @@ mistaken for the defect it replaces — and the defect cannot come back wearing 
 
 ## 1.4 CLOSED (by you, 2026-10-01) — we do not issue invoices
 
+**CORRECTED 2026-10-16:** the claim below that `invoice_service` is not on a live path is
+FALSE — every session completion calls it (§17.5 C). The owner's decision on it is open.
+
 BLOCK-2 asked how to invoice a session whose consumption could not be measured. **The question
 does not arise: the pedestal reports consumption and the ERP bills.** `invoice_service` is not
 on a live path.
@@ -1243,6 +1246,7 @@ fails with the `.xml` moved away and with it corrupted, and the real script on a
 |---|---|---|---|---|---|
 | 17 | Reproduce the `/api/ext/*` 401 — seen so far only on the cabinet | `read -s EXT_KEY` (the gateway key), then `curl -s -w '\n%{http_code}\n' -H "Authorization: Bearer $EXT_KEY" http://localhost/api/ext/pedestals/1/status` | A MEASUREMENT, not pass/fail: record the code and the body. `401` confirms D17; `200` means it does not reproduce after the upgrade | RECORD | ☐ |
 | 17b | **Phase 1: no camera endpoint is allowed to the ERP** (§16.3, owner 2026-10-16 — GDPR) | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3,json;c=sqlite3.connect('file:/opt/cloud-iot/backend/pedestal.db?mode=ro',uri=True);r=c.execute('SELECT allowed_endpoints FROM external_api_config WHERE id=1').fetchone();ids=sorted(e['id'] for e in json.loads(r[0] or '[]')) if r else [];print(len(ids));print(ids);print([i for i in ids if i.startswith('camera.')])"` | RECORD the count and the list (the owner states 17 on 2026-10-15). The last line `[]` | A `camera.*` id in the list = an image path to the ERP is open against the Phase 1 decision: tell the owner; it is removed on `/api-gateway` by the owner's decision, not on the pier | ☐ |
+| 17c | **What occupancy says on the cabinet today** (§17.5 A — before the fix) | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;c=sqlite3.connect('file:/opt/cloud-iot/backend/data/users.db?mode=ro',uri=True);print([r[1] for r in c.execute('PRAGMA table_info(berths)')]);print(c.execute('SELECT * FROM berths').fetchall())"`; `/opt/cloud-iot/backend/.venv/bin/pip list 2>/dev/null \| grep -ci openvino` | RECORD every berth's occupancy fields and the last analysis time, and the openvino count (`0` expected, G.4). Occupied on a berth seen EMPTY at the time = finding A on the cabinet | RECORD — the fix is §17.5 A, not on the pier | ☐ |
 
 ## 13.9 Migration — the four populations
 
@@ -1443,3 +1447,111 @@ the functions off for M2.
 - **Guard is decided separately** with the same measures: its own M1 share, and for control on
   the ERP, M4 for arm → acknowledgement and M5 (a guard that cannot be armed while the uplink is
   down).
+
+
+---
+
+# 17. The four functions — startable locally AND from the ERP (Phase 1 condition, §16.1)
+
+**Owner, 2026-10-16. NOT BUILT — this is what gets built, in the order of §17.7.**
+
+## 17.1 Rules for every ERP endpoint below
+
+- **Catalogued, and allowed per cabinet.** Each endpoint gets an id in `api_catalog.py`; the ERP
+  reaches it only when the cabinet's `allowed_endpoints` names it (§16.3). A write needs the
+  endpoint's mode set to `bidirectional` AND `allow_bidirectional` in the catalogue — the
+  gateway's existing rule (`external_api_gateway.py:308-315`).
+- **The same rule on the direct `/api/ext/...` routes.** Today they check only that the id is
+  listed (`ext_pedestal_endpoints.py:102-114`), so `berths.push_image_ext` accepts a write in
+  read-only mode. Fixed in the same build: one check, shared with the gateway.
+- **Result, never image** (§16.1): no endpoint here returns a frame, a crop or a clip.
+- **Pull is the truth, push is the trigger.** Every pushed event has a GET that returns the same
+  fact; the event carries the result itself (small), never a link to an image.
+
+## 17.2 The table
+
+| # | Function | Locally (UI → endpoint, role) | From the ERP (new unless marked) | Pushed to the ERP |
+|---|---|---|---|---|
+| 1 | Occupancy | `/berths` "Analyze" → `POST /api/admin/berths/{id}/analyze` (`require_control`, exists); **and periodically** (§17.3) | `POST /api/ext/pedestals/{id}/berths/{bid}/analyze` → runs now, answers `{occupied: 1|0|null, match, analysed_at}`; `GET /api/ext/pedestals/{id}/berths/occupancy` (exists) | `berth_occupancy_updated` (exists; today only after a manual click) — on a CHANGE of the result, from either trigger |
+| 2 | Match (histogram, §17.4) | the same analysis | the same `POST …/analyze`; the result in `GET …/berths/occupancy` (added: `match: true|false|null`); reference photos: `POST …/reference-image` (exists), plus `GET …/reference-images` (count and names only — no bytes) and `DELETE …/reference-images/{name}` | **new** `vessel_match_updated` `{pedestal_id, berth_id, match: true|false|null}` on a change. Today the match fields are stripped from the occupancy event (`webhook_service.py:50-60`) |
+| 3 | Sector | `/berths` → sector drawn on the frame → `PUT /api/admin/berths/{id}/config` (exists) | `GET` the sector as numbers (in `GET /api/ext/berths`, exists); **setting it: OPEN, §17.6 Q1** | — |
+| 4 | Guard | `/marina/guard` Arm / Switch off, admin (§5.5.2) | `POST /api/ext/pedestals/{id}/guard/enable`, `…/guard/disable`; `GET /api/ext/pedestals/{id}/guard/status` (the §5.5.1 state and sentence); `GET /api/ext/pedestals/{id}/guard/events` (time, label, has-recording — never the frame or the clip) | **OPEN, §17.6 Q2** — the owner named occupancy and match for push |
+
+## 17.3 Occupancy runs periodically AND on request (owner, 2026-10-16)
+
+Today the loop is disabled (`berth_analyzer.py:295-303`, "on-demand mode"), so the ERP receives a
+state only after someone clicks Analyze — Phase 1 function 1 is not met. **Built:** one
+analysis per configured berth every `occupancy_interval_min` minutes, plus on request (UI and
+ERP). The interval is a per-pedestal setting on the admin `/berths` screen and through
+`PATCH /api/ext/pedestals/{id}/berths/schedule` (bidirectional). **Proposed default 15 min, 0 =
+off, minimum 1** — the owner sets the default; §16.4 M1 measures what it costs. An analysis
+skipped (camera unreachable, thermal suspension, `is_rtsp_suspended`) leaves the result `null` =
+not known, never 0, and is logged; it never pushes a change.
+
+## 17.4 Match is the histogram; Re-ID is NOT IN USE (owner, 2026-10-16)
+
+For Phase 1 "match" is the engine whose result is STORED and which the UI already shows: the
+histogram comparison against the berth's reference photos (`compute_match_score`,
+`berth_analyzer.py:195-222`; stored as `match_ok_bit`, `state_code`, `match_score`).
+
+**Re-ID is not in use.** `POST /api/admin/berths/{id}/match` computes an embedding similarity and
+returns it, but nothing stores it or broadcasts it (`berths.py:678-681`), and the ERP cannot
+reach it. It decides nothing. **Built:** the "Match" button and the Re-ID sample upload leave the
+UI (`BerthOccupancy.tsx:121, 454`; `SectorConfigModal.tsx:232`); the two endpoints
+(`/match`, `/sample-embedding`) stay in the code, marked in their docstring as not in use in
+Phase 1 and deciding nothing, like the dormant QR code (§8). Joining it to the stored result is a
+Phase 2 question, not Phase 1 work.
+
+## 17.5 Findings from the 2026-10-16 check — three live defects
+
+**A. Occupancy reads "occupied" almost always on the cabinet — LIVE DEFECT in function 1.**
+`detect_conf_threshold` defaults to **0.30** (`auth/berth_models.py:30`, meant as a detector
+confidence). The analysis passes it as the Laplacian edge-variance threshold, whose intended
+value is 300: `detect_threshold=berth.detect_conf_threshold or 300.0` (`berths.py:498`) — 0.30
+is not falsy, so the 300 is never used, and `detect_ship` answers `variance > 0.30`
+(`berth_analyzer.py:149-174`), true for almost any picture. **On the cabinet the fallback is
+the only path:** the OpenVINO detector (`cv_services.yolo_detector` → `yolo_openvino.py:429`,
+lazy import) needs openvino in the backend venv, and §13.6c G.4 requires it NEVER to be there.
+So every analysis on cabinet 1 reads occupied unless the frame is nearly flat. **Fix, after the
+guard UI:** two separate settings — the detector confidence (0.30) and the edge-variance
+threshold (300) — never one field read as both; a test that a flat image is empty and a
+textured one occupied with the real defaults. Cabinet check §13 17c records what the berths
+say today.
+
+**B. The sector barely affects the result — function 3 does not drive function 1.** The route
+crops the drawn sector from its snapshot (`berths.py:455-476`), but that crop feeds only the
+OpenVINO detector (absent on the cabinet, A) and the Laplacian result computed from it
+(`:489`) is thrown away. The result comes from `analyze_berth_now`, which grabs a SECOND,
+uncropped snapshot (`berth_analyzer.py:255`) and judges a fixed centre crop of it — 60 % for
+occupancy (`:163`), 80 % for the match (`:208`). The sector is drawn and ignored. **Fix, with A:**
+one snapshot per analysis, cropped to the berth's sector, and both occupancy and match judged on
+that crop; a test that a change outside the sector does not change the result.
+
+**C. The cabinet still writes invoices — against the owner's standing decision.** Every
+session-completion path calls `create_invoice_for_session` (`controls.py:307`,
+`mqtt_handlers.py:1427, 3786`, `customer_sessions.py:282`); it writes an invoice whenever the
+session has a `customer_id` (`invoice_service.py:18`), and the still-registered legacy customer
+routes set one (`customer_sessions.py:159, 183`, `mobile.py:292`; `main.py:880-882`). §1.4 said
+"`invoice_service` is not on a live path" — wrong. **OPEN — owner (§17.6 Q3).**
+
+## 17.6 OPEN — the owner's decisions, nothing of it built until answered
+
+1. **Setting the sector from the ERP.** Defining a sector means looking at the frame; in Phase 1
+   the frame never leaves the cabinet. Either the ERP sets it blind, as four numbers
+   (`PUT …/berths/{bid}/sector {x1,y1,x2,y2}`, validated 0 ≤ x1 < x2 ≤ 1), or "startable from
+   the API" for function 3 means reading it only and it is drawn on the cabinet (today's design,
+   `ext_pedestal_endpoints.py:216-217`). Proposal: the four numbers, because the condition says
+   all four.
+2. **Guard to the ERP: pushed too?** Proposal: `guard_alarm` (time, pedestal, no image) and
+   `guard_state_changed` as webhook events — an alarm learned only by polling is late.
+3. **Invoices (finding C):** switch the four calls off (the cabinet stops writing invoices; the
+   invoice table and its legacy routes stay for history), or leave them as they are.
+4. **Smart mode and these functions.** The gateway refuses ERP writes on a pedestal in standalone
+   (`external_api_gateway.py:317-341`). Smart mode governs the outlets; the camera functions are
+   the cabinet's own. Proposal: analysis, schedule and guard are NOT blocked by smart mode off.
+
+## 17.7 Build order (owner, 2026-10-16, second message)
+
+1. Guard UI (§5.5). 2. The ERP webhook block (§18) — before the weekly report, because without
+the envelope and the two session events the NFC end-to-end test cannot pass. 3. Findings A and B
+(§17.5). 4. This section's API, locally and from the ERP. 5. The weekly report (admin only, §18.6).

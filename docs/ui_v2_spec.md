@@ -1876,6 +1876,9 @@ So **no function meets the Phase 1 condition today.** The gap per function is §
 
 ## 16.3 Camera endpoints — they exist, they are NOT allowed to the ERP
 
+**2026-10-16: D32 (§16.5) is this section's decision for the LIVE VIEW ONLY** — the ban stays
+active until the reviewed D32 commit; snapshot, frame and the analysis (D30) are not opened.
+
 `camera.snapshot`, `camera.stream` (`api_catalog.py:23-24`), `camera.frame_ext`,
 `camera.stream_ext` (`:65-66`) return a frame, MJPEG, or the camera's stream address. **They stay
 in the code and in the catalogue** — they are used locally and Phase 2 may need them — **but they
@@ -1996,6 +1999,17 @@ the report.
 `develop` into `main` → upgrade → 17b → the script (17d) → 17b → 17e. The ERP test after that,
 never before.
 
+**Addendum 2026-10-16 (D32 plan) — the live camera route needs no login, on `main` too.**
+`GET /api/camera/{id}/stream` has no identity dependency (`routers/camera.py:64-67`; the snapshot
+route beside it has one, `:24`). Measured on dev on `5ec542e`: no token, a pedestal with a camera
+→ **200, frames through**. It proxies the camera's MJPEG with the stored credentials
+(`camera_service.py:125-171`). Already in the audit of 2026-06-10 ("NO auth guard"), never fixed;
+the identity work of 146ab75 did not cover it. Reachable through nginx :80 — the tailnet, and the
+internet through the Cloudflare tunnel (R4). Whether this camera answers MJPEG at the probed paths
+is not measured: `curl -s -m 5 -o /tmp/s.bin -w '%{http_code}\n' http://localhost/api/camera/1/stream; wc -c < /tmp/s.bin; rm -f /tmp/s.bin`
+on the cabinet — 200 with more than 0 bytes = the camera is open now. **OPEN, the owner:** fix it
+before the upgrade (a second merge to `main`) or after.
+
 ### 16.3d DECIDED 2026-10-16 — the camera password and the customer's name never leave through the gateway
 
 **The camera password.** `GET /api/berths` returns `camera_stream_url` (`routers/berths.py:146`),
@@ -2052,6 +2066,152 @@ ninth checks the fixture is the 23); mutants caught — `camera.*`/`usage.*` wri
   every other column unchanged; an id missing from the catalogue listed and not written; a second
   run writes nothing.
 
+
+## 16.5 D32 — live view of a berth through the ERP (owner, 2026-10-16) — PLAN, NOT BUILT
+
+**The decision record.** D32 is the decision §16.3 asks for: it OPENS the camera ban for **live
+view only** — the ERP and its mobile app, on request, nothing recorded. Owner, 2026-10-16
+(*the owner's name: to be written here by the owner — it is not known from this repository*).
+**The ban stays active until the reviewed D32 commit** (the one commit of §16.3 that changes
+`PHASE1_NO_IMAGES_TO_ERP` for the live id only, with its test); the read test of Tuesday
+(§13.14) runs with the ban untouched. **D30 — the analysis: reference photos and the match — is
+unchanged; D32 does not widen it.** Snapshot and frame stay refused to the ERP.
+
+Every line below says whether it is **measured** or an **assumption**. Nothing is built before
+the measurements M6–M11 are in and the open numbers are decided.
+
+### 16.5.1 First: does the camera have a lower sub-stream? (M6 — changes the whole plan)
+
+**Known (measured 2026-09-27, `guard_camera_capabilities.md:19-21`):** DVC DCN-TF2283AI-DL,
+firmware 5.2.3, at 192.168.1.191; `profile1` = H.264 High, 1920×1080, 25 fps. **Not known:**
+whether `profile2`/`profile3` exist (`guard_phase1_assessment.md:235-238`: "typically D1/VGA
+~15 fps, not verified on this unit"). **If a lower sub-stream exists, the cabinet only repackages
+it (`-c:v copy`), no transcoding — near zero CPU.** If not, it transcodes (16.5.2).
+
+**M6, on the cabinet** (the URL is read from guard.env and never printed; it is in ffprobe's
+process arguments for ≤ 15 s per profile — the same exposure the guard worker's own ffmpeg has
+permanently):
+`sudo bash -c 'set -a; . /opt/cloud-iot/guard/guard.env; set +a; b="${GUARD_STREAM_URL%/*}"; for p in profile1 profile2 profile3; do echo "== $p"; timeout 15 ffprobe -v error -rtsp_transport tcp -select_streams v:0 -show_entries stream=codec_name,profile,width,height,r_frame_rate,bit_rate -of default=nw=1 "$b/$p" 2>&1 | sed -E "s#rtsp://[^ ]*#<url>#g" | head -8; done'`
+RECORD per profile: codec, profile, size, fps. Guard needs to be installed for guard.env to
+exist (§13.6c); without it, the same with the URL typed into a `read -s` variable.
+
+### 16.5.2 Format: HLS — sub-second is not a requirement found anywhere
+
+RTSP plays neither in a browser nor in the mobile app. **HLS** works everywhere, 5–15 s delay —
+enough for "look at my berth". **WebRTC** (under a second) needs signalling and a TURN relay,
+both ends are behind NAT and the cabinet has no inbound port. **Searched 2026-10-16:** this spec
+and the ERP spec (`erp_spec.md`) state no latency requirement for a camera view (the only
+"live" there is power, `erp_spec.md:634`). **Unless the owner states one: HLS.**
+
+**If transcoding is needed** (no sub-stream): hardware H.264 on the x7425E — VAAPI / Quick
+Sync, never software. *Assumption to measure (M10): Intel lists the Atom x7425E (Alder Lake-N)
+with integrated UHD graphics and Quick Sync; the owner's expectation was "no GPU". The check was
+written in `guard_phase1_assessment.md` §5.3 and never recorded:* `ls -l /dev/dri/; ffmpeg
+-hide_banner -hwaccels; vainfo 2>&1 | grep -E "Driver|H264"`.
+
+**Starting target for LTE, then measured (M8):** 854×480 or 640×360, 15 fps, 400–800 kbit/s
+CBR, H.264 baseline, a keyframe every 2 s; HLS segments of 2 s, a playlist of 3 — about 6–10 s
+behind live. 600 kbit/s ≈ 270 MB per hour viewed. M8 measures the cabinet's real uplink to the
+VPS over Tailscale (a timed transfer; the router is a Teltonika on LTE — the audit of
+2026-10-12).
+
+### 16.5.3 The path of the picture — the cabinet is never exposed to the internet for this
+
+**The mobile app never talks to the cabinet — only to the ERP.** The cabinet gives the stream to
+the ERP over **Tailscale** (`nginx :80`, reachable from the ERP's VPS only — the owner's
+Tailscale ACL, §13.14 E.5); the ERP serves it to its users. The cabinet has **no inbound port**:
+its only ways out are Tailscale and the Cloudflare tunnel, both opened from the inside. **Nobody
+opens a port, a forward or a tunnel route to the cabinet for this — ever.** The live path is
+also refused on the Cloudflare tunnel: nginx serves `/live/` only to the tailnet range
+(`allow 100.64.0.0/10; deny all;`), so a request arriving through cloudflared (from loopback) is
+refused.
+**Already measured, and against this rule (audit 2026-10-12, R4):** the Cloudflare tunnel
+publishes `marina2.lika.solutions` → nginx :80 — the whole app — and the camera's own web page.
+So today the cabinet IS reachable from the internet through the tunnel, and with it
+`GET /api/camera/{id}/stream`, which needs no login (§16.3c addendum). R4 is the owner's
+decision, separate from D32; D32 must not be built on top of it.
+
+### 16.5.4 The stream lives only while the ERP watches — provably
+
+- **A token per view:** random (128 bit), bound to one berth and to the ERP's viewer id, valid
+  only with heartbeats. Start: `POST /api/ext/pedestals/{id}/berths/{bid}/camera/live` → the
+  token and a URL behind nginx (`/live/<token>/index.m3u8`) — never the camera's address.
+- **No heartbeat → it stops on its own:** the ERP renews every ≤ 20 s; 30 s without one and the
+  process is ended. **A hard maximum per view** (proposal: 10 min; the owner sets it). The
+  numbers are proposals until the owner decides them.
+- **"Running" is MEASURED from the process, never assumed** — the same defect as a command
+  reported "sent": `active` only if the ffmpeg process is alive (polled) AND its newest segment
+  is younger than 2 segment lengths; otherwise `starting` (≤ 10 s after a start) or `failed`
+  with the reason (exit code, stderr's last line without the URL). Status:
+  `GET /api/ext/pedestals/{id}/camera/status` (16.5.8).
+- **Tests when built** (each must fail on the code before it): the process killed → `active`
+  disappears within 5 s; no heartbeat → the process is gone within 30 s (checked by pid); the
+  hard maximum ends it; a token is refused for another berth and after its end; nothing is
+  written to disk (segments in tmpfs, deleted at stop).
+
+### 16.5.5 Privacy masks — on the camera, fixed zones, zero CPU (owner)
+
+**Visible: only the berth(s) of this pedestal and the water in front of them.** Masked: the
+pier/walkway, the neighbouring pedestals' berths and boats, the land side, any building or window.
+**How:** in the camera's own setup page (privacy mask) or through ONVIF Media2 masks; the zones
+are drawn on the live image by an admin, then written down here as normalised polygons with the
+date, and checked in §13 (a check row is added when they are set). **M7 measures first:** does
+this camera support masks, how many, and do they apply to every stream (sensor-wide) or one
+profile. **A fact to check, not an objection:** if the masks are sensor-wide they also hide those
+areas from guard and from the occupancy analysis — after masking, §13 checks that guard's zone
+and every berth sector lie inside the visible area (guard watches the stern, where boarding
+happens — `guard_phase1_assessment.md` §5.6).
+
+### 16.5.6 Blurring people live — MEASURED, not estimated (M11)
+
+**The owner's expectation, recorded as an expectation:** not feasible — Atom x7425E, 4 cores, and
+guard already pauses itself for CPU. **Arithmetic from a measurement, not a measurement of
+blurring:** person detection costs 390 ms CPU per frame (`guard_a5_runbook.md:395`, 1200 frames on
+the NUC) — 5 fps ≈ 49 % of 4 cores and 10 fps ≈ 98 %, detection alone.
+**M11, the measurement:** with guard installed and ARMED (§13.6c first — guard is not deployed on
+cabinet 1 today), run person detection + blur + re-encode on the live stream at **5 fps and at
+10 fps, 60 s each**, output to `/dev/null`. Record: CPU per core (1 s samples from `/proc/stat`),
+frames in vs frames out (dropped), and whether guard published `SUSPENDED_CPU` in that minute.
+The tool is written and tested before it runs; it changes nothing in production.
+**Decision rule (owner):** if guard pauses, the answer is **no**, written so — and privacy is
+then the masks and the berth crop of 16.5.5 **as the replacement, not an addition**. M10 (the
+integrated GPU) is measured before M11: if OpenVINO sees a GPU, M11 runs on it as well.
+
+### 16.5.7 The viewing log — mandatory, whatever else is built
+
+Who watched, which berth, when, how long — without it a complaint has no answer. One row per view:
+the ERP's viewer id (required — a start without it is refused), pedestal, berth, the token's hash,
+started at, ended at, duration, how it ended (`stopped` / `heartbeat_lost` / `max_duration` /
+`process_died` / `failed`). **Read: admin only**, in the API and the page. Never an image.
+**OPEN for the owner:** how long the log is kept.
+
+### 16.5.8 `camera.status` is not a picture; `camera.stream_ext` is
+
+**`camera.status_ext`** — online/offline, last checked, live view active yes/no (measured as in
+16.5.4), viewers now: **data, not an image** (`image: False`), may go to the ERP like any other
+monitor id, today, without D32. **`camera.stream_ext`** — a picture (`image: True`): refused by
+`PHASE1_NO_IMAGES_TO_ERP` and opened **only by the D32 commit**, and then as the token flow of
+16.5.4, never as today's answer (today it returns the camera's LAN address,
+`ext_pedestal_endpoints.py:521`). `camera.snapshot`, `camera.frame_ext`, `camera.stream` stay
+refused (D30).
+
+### 16.5.9 Measured vs assumed — the list
+
+| # | What | Status |
+|---|---|---|
+| M6 | sub-streams `profile2`/`profile3` | **not measured** — 16.5.1 |
+| M7 | camera privacy masks: supported, how many, sensor-wide or per profile | **not measured** |
+| M8 | uplink cabinet → VPS over Tailscale | **not measured** |
+| M9 | CPU of transcode (only if M6 finds no sub-stream), hardware path | **not measured** |
+| M10 | integrated GPU / VAAPI / Quick Sync; OpenVINO GPU device | **not measured** — Intel's spec says yes, the owner expected no |
+| M11 | live blur at 5 / 10 fps with guard armed | **not measured**; needs guard deployed |
+| — | camera `profile1` 1080p25 H.264 | measured 2026-09-27 |
+| — | detection 390 ms CPU / frame | measured 2026-09-26 |
+| — | no latency requirement | searched 2026-10-16, none found |
+| — | Cloudflare exposes nginx :80 and the camera page (R4) | measured 2026-10-12 |
+
+**OPEN for the owner:** the name in the decision record; the token / heartbeat / maximum numbers;
+how long the viewing log is kept; whether sub-second latency is a requirement; R4.
 
 ## 16.4 Phase 2 — a DIRECTION, NOT a decided architecture; the measurement decides
 

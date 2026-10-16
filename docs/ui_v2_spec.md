@@ -1131,6 +1131,11 @@ IS in the plan: a rehearsal of R1 on dev with the simulator, in block 5, before 
 its check to this list IN THE SAME COMMIT. The list grows with the work and is never
 reconstructed from memory.
 
+**And (owner, 2026-10-16): check 17b runs BEFORE AND AFTER every change of the API gateway
+configuration** — not only after an upgrade. The configuration approved on 2026-10-14 never reached
+the cabinet and nobody noticed for two days (§16.3a). A configuration change is done when 17b
+after it shows it.
+
 Each check states what to do if it fails:
 
 - **ROLLBACK** — stop and roll back now (§13.11).
@@ -1280,6 +1285,7 @@ fails with the `.xml` moved away and with it corrupted, and the real script on a
 |---|---|---|---|---|---|
 | 17 | Reproduce the `/api/ext/*` 401 — seen so far only on the cabinet | `read -s EXT_KEY` (the gateway key), then `curl -s -w '\n%{http_code}\n' -H "Authorization: Bearer $EXT_KEY" http://localhost/api/ext/pedestals/1/status` | A MEASUREMENT, not pass/fail: record the code and the body. `401` confirms D17; `200` means it does not reproduce after the upgrade | RECORD | ☐ |
 | 17b | **Phase 1: no camera endpoint is allowed to the ERP** (§16.3, owner 2026-10-16 — GDPR) | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3,json;c=sqlite3.connect('file:/opt/cloud-iot/backend/pedestal.db?mode=ro',uri=True);r=c.execute('SELECT allowed_endpoints FROM external_api_config WHERE id=1').fetchone();ids=sorted(e['id'] for e in json.loads(r[0] or '[]')) if r else [];print(len(ids));print(ids);print([i for i in ids if i.startswith('camera.')])"` . **Then the ERP's calls (2026-10-16 it reports calling `camera.frame_ext` and `camera.stream_ext`):** `journalctl -u cloud-iot-backend --since "14 days ago" -o cat \| grep -E 'GET /api/ext/pedestals/[^ ]+/camera/(frame\|stream)' \| grep -oE '" [0-9]{3}' \| sort \| uniq -c` | RECORD the count and the list (the owner states 17 on 2026-10-15). The last line `[]`. The ERP's camera calls: every one `503` (dead calls). **No access lines at all = the access log is off: RECORD as unproven, not as a pass** | A `camera.*` id in the list = an image path to the ERP is open against the Phase 1 decision: tell the owner; it is removed on `/api-gateway` by the owner's decision, not on the pier | ☐ |
+| 17d | **Restore the ERP's list** (§16.3b) — 17b FIRST, then this, then 17b AGAIN | Copy `scripts/fix_gateway_allowed_endpoints.py` from the release; dry run: `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 fix_gateway_allowed_endpoints.py --db /opt/cloud-iot/backend/pedestal.db`; then the same with `--apply --backup /opt/cloud-iot/backend/pedestal.db.pre-gateway-$(date -u +%Y%m%dT%H%M%SZ)`. **And, to answer how 14.10 failed:** `sudo ls -la /var/backups/cloud-iot-erp/ /tmp/krk/ 2>&1; sudo grep -h krk_gateway_config /root/.bash_history /home/*/.bash_history 2>/dev/null` | The dry run lists 23 now and the diff; `--apply` ends with the 17b reading: `17`, the 17 ids, `[]`. RECORD the three listings: a `pedestal-*.db` under `/var/backups/cloud-iot-erp/` = an `--apply` got as far as the backup; none and no history line = it was never run with `--apply` | Any `camera.*` after = STOP, tell the owner. Exit 4 = the row read back differs from the target: restore from the backup (§13.11 procedure) | ☐ |
 | 17c | **What occupancy says on the cabinet today** (§17.5 A — before the fix) | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;c=sqlite3.connect('file:/opt/cloud-iot/backend/data/users.db?mode=ro',uri=True);print([r[1] for r in c.execute('PRAGMA table_info(berths)')]);print(c.execute('SELECT * FROM berths').fetchall())"`; `/opt/cloud-iot/backend/.venv/bin/pip list 2>/dev/null \| grep -ci openvino` | RECORD every berth's occupancy fields and the last analysis time, and the openvino count (`0` expected, G.4). Occupied on a berth seen EMPTY at the time = finding A on the cabinet | RECORD — the fix is §17.5 A, not on the pier | ☐ |
 
 ## 13.9 Migration — the four populations
@@ -1495,6 +1501,81 @@ that can be set by hand is not a rule but a memory". Built as:
 that decision — the same way the §9 limit is changed (TC-UIR-10); (3) the release that carries it
 says so in its notes, and an admin then enables the endpoints on `/api-gateway`. Never an `.env`
 value, never a flag on the screen: lifting it is a reviewed code change, like any other rule.
+
+**Order (owner, 2026-10-16, after 17b was measured):** this code ban is built in the SAME job as the
+cabinet's list repair (§16.3b), before the guard UI. Negative control: saving a list with
+`camera.frame_ext` is refused, and a request to that endpoint with such a list already stored is
+refused.
+
+### 16.3a MEASURED on cabinet 1, 2026-10-16 (owner) — images DID reach the ERP; the 14.10 configuration never landed
+
+**§13 check 17b, run by the owner:** **23** endpoints enabled for the ERP, not 17. **All four
+camera endpoints enabled** — `camera.frame_ext`, `camera.snapshot`, `camera.stream`,
+`camera.stream_ext`. The journal, 14 days: **12 × `200`** on
+`GET /api/ext/pedestals/*/camera/(frame|stream)`. So frames and the stream address DID go to the
+ERP: the Phase 1 rule was broken, and that is measured, not inferred.
+
+**FINDING (procedure, not code), 2026-10-16: the gateway configuration prepared, reviewed and
+approved on 2026-10-14 never reached the cabinet, and we worked for two days as if it had.**
+Nobody checked that it landed. The list on the cabinet is the one that was there before:
+
+| | |
+|---|---|
+| Asked for, missing | `berths.list`, `breakers.pedestal_list_ext`, `breakers.socket_get_ext`, `sockets.config_list`, `valves.config_list` |
+| Not asked for, present | `berths.occupancy_ext`, `breakers.marina_alarms_ext`, `load.marina_alarms_ext`, `load.socket_history_ext`, `usage.history`, `usage.report_download`, `usage.reports_list`, and the four `camera.*` |
+
+**Not run, or run and refused? — what the code says, and what only the cabinet can say.** The
+14.10 script is `scripts/krk/krk_gateway_config.py` in the ERP project (`erp-iot`, `2d5415e`,
+2026-10-13), not in this repository. Its `--apply` **refuses with exit 5** ("--apply odbijen:
+riješi ČEKA ODLUKU / BLOKADA") while ANY endpoint enabled today, outside its 17 and not
+`camera.*` / its three forbidden ids, has no `--keep` / `--keep-monitor` / `--drop` decision. On
+this cabinet there are SEVEN such (`berths.occupancy_ext`, `breakers.marina_alarms_ext`,
+`load.marina_alarms_ext`, `load.socket_history_ext`, `usage.history`, `usage.report_download`,
+`usage.reports_list`). So a run of `--apply` without seven decisions could not have written
+anything — by design. **Which of the two happened is on the cabinet, not in the code** (§13 17d):
+a `--apply` that got past the refusal requires `--backup` and leaves that file under
+`/var/backups/cloud-iot-erp/`; the script was copied to `/tmp/krk/`; the shell history of the
+account that ran it.
+
+**Second finding, same list: the ERP can download the monthly reports.** `usage.history`,
+`usage.report_download` and `usage.reports_list` are enabled. The reports carry `customer #<id>`.
+**And locking the reports to admin does NOT close this:** the gateway calls the internal route with
+a short-lived ADMIN token it mints itself (`external_api_gateway.py:74-88`, D3), so the ERP gets
+what admin gets — on `main` and on `develop` alike. Whether the ERP may read customer ids in
+reports is a decision, not a lock: the ERP owns the customer (D6.1), but the report is the
+cabinet's. **OPEN — owner.** Until it is decided, `usage.*` is not in the ERP's list.
+
+**From now on: §13 check 17b runs BEFORE AND AFTER every change of the gateway configuration —
+not only after an upgrade.** The "before" is what is being changed; the "after" is the proof that
+it landed. A change without both is not done.
+
+### 16.3b Restoring the cabinet's list — `scripts/fix_gateway_allowed_endpoints.py`
+
+**NOT BUILT — this is what gets built, before the guard UI (owner, 2026-10-16).**
+
+- **Target:** the 14.10 list — the 17 ids `pedestals.health`, `pedestals.list`,
+  `pedestals.status_ext`, `berths.list`, `sessions.active`, `sessions.pending`, `alarms.active`,
+  `load.pedestal_get_ext`, `load.socket_get_ext`, `load.pedestal_alarms_ext`,
+  `breakers.pedestal_list_ext`, `breakers.socket_get_ext`, `water.status_ext`,
+  `sockets.config_list`, `valves.config_list`, `analytics.daily`, `analytics.summary` — every one
+  `monitor`; **no `camera.*`, no `usage.*`.** All 17 exist in `main`'s catalogue (read
+  2026-10-16); the script checks again against the code it runs beside, and an id that is not
+  there is LISTED and NOT written. Everything else enabled today is removed — including
+  `berths.occupancy_ext`; occupancy stays readable to the ERP through `berths.list`.
+- **Only `allowed_endpoints` changes.** `active`, `verified`, `webhook_url`, `allowed_events` and
+  the key are untouched (written in one `UPDATE` of one column, inside `BEGIN IMMEDIATE`).
+- **Rules, as for every cabinet script:** dry run by default; prints the current state (count, each
+  id and mode, the `camera.*` and `usage.*` it finds) and the diff old → new (KEEP / ADD /
+  TO MONITOR / REMOVE); writes ONLY with `--apply`; `--apply` requires `--backup PATH`, a path that
+  does not exist yet, to which it copies the database through SQLite's backup API and checks the copy
+  with `PRAGMA integrity_check` before writing anything; after writing it reads the row back and
+  prints the 17b reading (count, list, `camera.*` = `[]`), exit 4 if it differs from the target.
+  Idempotent: a second run says "no difference" and writes nothing.
+- **Tests** on a throwaway database holding the cabinet's 23 (rule 16): dry run changes nothing;
+  `--apply` without `--backup` refused; with it, the backup exists and is intact, the list is the 17,
+  every other column unchanged; an id missing from the catalogue listed and not written; a second
+  run writes nothing.
+
 
 ## 16.4 Phase 2 — a DIRECTION, NOT a decided architecture; the measurement decides
 

@@ -49,6 +49,21 @@ overruled, so a correction costs one line from you rather than a conversation.
 | 8 | Live values by websocket | 15 s polling | **WS — but only AFTER part B** (role filtering, §14). *Part B built 2026-10-12, so this no longer blocks; the switch is block 4 work.* The broadcast carries `customer_id`; switching `/marina` to WS before filtering would put customer identity on the page. Polling stays until then. **Switched 2026-10-15** — see the "`/marina` on the websocket" row in §0.2 | §7 |
 | 9 | New `energy_intervals` rows carry `berth_id` | Only `berth_ref` | **SPEC.** Built 2026-10-12 (block 2): NULL = not known; old rows stay NULL — see the measured reason in §6 | §6, §13.9 20a, §13.10 27. `/scan` returns it too (BREAKING for the ERP, §13.7 13a); the admin export has it as the last column |
 
+## 0.1a The order after the cabinet session — the owner's priorities (2026-10-17)
+
+1. A new `ERP_API_KEY`, different per cabinet; never in any app.
+2. ONE security commit: rule H in code (after E.12), closing the customer / mobile / QR routes,
+   a limit on attempts at the service token. **Before closing the customer routes: a map admin
+   screen → route.**
+3. The SM-Q6 rule after S.2 (no "Sent" without the Opta's confirmation), then a report of what
+   changes for smart mode ON and the exact order (NFC mode BEFORE smart mode).
+4. R22–R26 and the `/api/nfc/*` keys in the gateway → the NFC e2e on the cabinet, then R1 and
+   §13.7 rows 13/13a.
+5. K and F in code (with Q6).
+6. Findings A and B, and the analyze 500.
+7. D32 (after the ERP's eight questions), the masks, then M11.
+8. The weekly PDF, the eight "described but not built", R27–R30.
+
 ## 0.2 Status of the main items (2026-10-12)
 
 BUILT+PROVEN = code + a test that can fail, green. BUILT-UNPROVEN = code, nothing proves it.
@@ -617,7 +632,7 @@ commands while the local dashboard accepts them is not a defect: it is exactly t
 off nobody can switch power or water from any screen; the light, cabinet reset and breaker reset
 work. The normal flow (approve / allow / deny / stop) has no button at all. **OPEN for the owner
 (SM-Q7):** the definition says staff at the cabinet work with smart mode off; the screens give
-them no way to switch power or water then.
+them no way to switch power or water then. *2026-10-17: the owner answers only with this map in hand — re-checked against the code that day, unchanged, and sent.*
 
 ### 4.10 The simulator — rewritten 2026-10-02
 Deleted 2026-03-15. **Rewritten 2026-10-02** against `opta/*` (`a8386c0`,
@@ -928,7 +943,9 @@ about the world, and after a backend restart we do not know it. So:
 - **Test (TC-GU-19), must fail on the code before:** backend restarted, the worker running
   (a live `health`, no `state`) → never "No guard on this pedestal"; before its first health
   → "Not measured"; after it → the row exists and the sentence is S4 (it reports OFF).
-- **OPEN — K-Q1, read literally the rule never ends on a cabinet with NO worker:** no live
+- **K-Q1 — DECIDED (owner, 2026-10-17): the proposal below.** "Not measured" lasts 15 s after
+  the backend starts, then "No guard on this pedestal" — the same boundary as three missed
+  heartbeats, consistent with S2. *(As asked:)* **read literally the rule never ends on a cabinet with NO worker:** no live
   message ever comes, so the page would say "Not measured" forever and S1 could never be shown
   again after any restart. *Proposal, not decided:* "Not measured" until one heartbeat boundary
   (15 s, §5.5.1) has passed since the backend started with no live guard message; after that, no
@@ -1161,8 +1178,11 @@ written, the 15 s boundary, the 404 without a row and the TC-GU-08 mutant includ
 **OPEN:**
 - **Q4 — ANSWERED 2026-10-16 (fourth message): S6**, above. **Q5 — ANSWERED: fix the worker**
   (item 3). **Q4b — ANSWERED (fifth message): S4b and S7**, above.
-- **Q6 — OPEN:** an unknown state with guard switched ON — keep "Guard paused — reason not
-  reported", or "Not measured" as with S7?
+- **Q6 — DECIDED (owner, 2026-10-17): guard switched ON and a state we cannot read → "Not
+  measured"** — the same as the unknown state in Q4b: an answer we cannot read is not a
+  measurement. Never "on" on the strength of a remembered wish. Consequence for the build (with K,
+  priority 5): "Guard paused — reason not reported" is reached by nothing any more — S5 keeps
+  "processor overloaded" and "too dark to see"; TC-GU-14's grid changes with it.
 - *(as asked)* **Q4 — switched off, but the worker says it is watching.** Desired OFF, worker alive and
   reporting ARMED / ALARM / RECORDING / ARMING, no command waiting or overdue. Reachable: a lost
   switch-off whose overdue mark was then cleared by a backend restart (the mark is in memory).

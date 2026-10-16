@@ -510,8 +510,67 @@ changed — §4.11 Q):
 - **TC-SM-02** — smart mode OFF: the socket and valve commands still answer 409, locally and
   through the gateway — the existing rule, untouched (`test_direct_socket_cmd_409_when_smart_mode_off`
   and its valve twin are kept; TC-SM-02 adds the gateway path and asserts no `opta/cmd` was sent).
+- **TC-SM-03** — smart mode OFF: the local commands of SM-Q3 are not refused for smart mode — the
+  same answer as with smart mode ON. Fails if a smart-mode check is added (mutant: one on the
+  light).
+- **TC-SM-04** — smart mode OFF: `diagnostics.run` through the gateway is not 409; the valve
+  auto-open after it still does nothing (the existing `test_post_diag_skips_all_valves_when_smart_mode_off`).
+  Fails on the old gate.
+- **TC-SM-05** — the switch: `POST /api/pedestals/{cabinet}/smartmode` 403 for `monitor_control`
+  and `monitor`; no catalogue path reaches it; `pedestals.health` carries `smart_mode` through the
+  gateway only when listed.
 
-**§4.11 Q — OPEN, for the owner before any change:**
+**The definition (owner, 2026-10-16, fourth message) — written because we did not have it:**
+smart mode decides whether **the ERP and the automation** may manage consumption — power, water,
+light, sockets, valves. It does **not** decide what staff at the cabinet may do. Smart mode off
+means: the cabinet does not run itself and the ERP does not manage it — a person at the cabinet
+does. **Local commands therefore work with smart mode off.** If they answered 409 the cabinet would
+be unusable whenever smart mode is off — and today it is off. That the gateway refuses all those
+commands while the local dashboard accepts them is not a defect: it is exactly this rule.
+
+**Answers (owner, 2026-10-16, fourth message):**
+- **SM-Q1:** admin only is the SWITCH, not the state. Using smart mode without knowing it is on
+  is the danger. Staff may see the sentence that the cabinet runs on its own (§3 rank 2), with no
+  control at all; only admin sees and touches the switch (today: `PedestalControlCenter.tsx:727`
+  renders it for admin only, `pedestal_config.py:336-341` refuses any other role). TC-SM-05.
+- **SM-Q2:** the ERP may READ smart mode through `pedestals.health`, and only when that key is in
+  the gateway list; it may never change it — no catalogue id may reach
+  `/api/pedestals/{cabinet}/smartmode`. TC-SM-05.
+- **SM-Q3:** no — the local commands stay as they are (allow / deny / stop, socket approve /
+  reject, light, cabinet reset, breaker reset, the light schedule). TC-SM-03 fails if a smart-mode
+  check is added to any of them.
+- **SM-Q4 — measured from the code, then decided by the owner's rule** ("if diagnostics only reads
+  and measures, it leaves the smart-mode check — the ERP may always run it, like the three camera
+  functions; if any of its steps switches a socket on or opens a valve, that step stays under the
+  check"). What `POST /api/pedestals/{id}/diagnostics/run` does, step by step:
+  1. stamps `last_diagnostic_at` (auto-activate skips the next 60 s) — `diagnostics.py:74-75`;
+  2. publishes `opta/cmd/diagnostic {"cabinetId", "request": "all"}` — `:78-81`;
+  3. the cabinet answers on `opta/diagnostic` with its sockets, valves, time and door, and its
+     hardware config (`firmware_requirements.md:30`; the firmware source is not in this repo —
+     §13.14 S.1 measures that nothing switches);
+  4. `_handle_opta_diagnostic` maps it to ok/fail/missing per sensor; a plugged, idle socket is
+     marked `awaiting_activation` — a marker for the dashboard, no command
+     (`mqtt_handlers.py:3674-3715`);
+  5. the endpoint marks the pedestal `initialized` when every reported sensor is ok — a database
+     flag (`diagnostics.py:105`);
+  6. for each valve that answered ok, `_maybe_auto_open_valve` starts — the ONE step that could
+     open a valve. It returns early always (ERP mode, §15; `firmware_requirements.md:3`) and has
+     its own smart-mode check first (`mqtt_handlers.py:1761`).
+  **Decision by the rule:** steps 1–5 read and measure, so `diagnostics.run` leaves the gateway's
+  smart-mode gate (out of `_CONTROL_PEDESTAL_RESOLVER`); step 6 stays under its own check, which
+  is not touched. TC-SM-04.
+
+**OPEN — the definition against what is already decided and documented (for the owner):**
+- **SM-Q5:** "local commands work with smart mode off" — but the local direct socket and valve
+  commands (`controls.py:679, 778`) answer 409 with smart mode off, and the owner's earlier order
+  said that rule "stays untouched" (TC-SM-02). Read here as: the SM-Q3 list works, the direct
+  socket/valve commands keep their 409. Confirm or correct.
+- **SM-Q6:** README (v3.28, firmware v3.0.0) says that with smart mode OFF "the Opta runs
+  standalone — it manages sockets itself and **ignores NUC commands**". If that holds, a local
+  command with smart mode off is sent and answered "Sent" but the cabinet does nothing — the
+  person at the cabinet would believe it switched. Not measured: §13.14 S.2.
+
+**§4.11 Q — as first asked (kept for the record):**
 - **SM-Q1** — "no other view sees it": does that mean the SWITCH (today only the admin control
   panel has it; `MarinaSetup.tsx:25` says so) — or also the STATE? Today the marina page shows the
   consequence ("This pedestal is running on its own", §3 rank 2), the admin dashboard shows a badge,
@@ -745,7 +804,21 @@ sentence that is not a guard state at all: the reading itself failed (§5.5.6).
 | S3 | A row exists, the worker answers, desired ARMED, worker reports ARMED / ALARM / RECORDING / ARMING, no acknowledgement overdue | **"Guard on"** |
 | S4 | A row exists, the worker answers, desired OFF, worker reports OFF, no acknowledgement overdue | **"Guard off"** |
 | S5 | A row exists, the worker answers, no acknowledgement overdue, and guard is armed but not looking: desired SUSPENDED_CPU (or the worker reports SUSPENDED_CPU); or S3 holds with `limited_visibility`; or the worker reports a state the backend has no reason for (below) | **"Guard paused — processor overloaded"** / **"Guard paused — too dark to see"** / **"Guard paused — reason not reported"**. Never "Guard paused" alone |
-| — | **OPEN (§5.5.8 Q4):** desired OFF, the worker answers and reports anything but OFF (ARMED / ALARM / RECORDING / ARMING, SUSPENDED_CPU, an unknown state), nothing waiting or overdue | not decided — the code keeps today's answer ("Guard off") until the owner decides, and the grid tests list these cells as open instead of asserting them |
+| S6 | A row exists, desired OFF, the worker answers and reports ARMING / ARMED / ALARM / RECORDING, no person's command waiting, no acknowledgement overdue | **"Guard recording although switched off"** — a fault, shown as one on `/marina`, `/marina/guard` and berth detail. The backend sends the switch-off ONCE; not confirmed within 5 s → S2; confirmed (worker reports OFF) → S4 |
+| — | **OPEN (§5.5.8 Q4b):** desired OFF, the worker answers and reports SUSPENDED_CPU or a state the backend does not know, nothing waiting or overdue | not decided — the owner's S6 is for a worker that reports it is recording; this one is not recording and not OFF. The code keeps today's answer ("Guard off"); the grid tests list these cells as open |
+
+**S6 — DECIDED (owner, 2026-10-16, fourth message).** The worker says plainly that it is recording,
+so the truth is known and must be said. "Guard not answering" would mean nobody knows the camera
+is recording — and recordings are personal data; "Guard on" would be a lie about the system,
+because someone asked for off. The owner's words: "Guard snima iako je isključen"; on screen in
+English, "Guard recording although switched off".
+**How it differs from the restart (item 1 below), for the record:** after a restart the backend
+does not know the worker's state until it confirms, so "not answering" is right; here the worker
+reports its state and it differs from what was asked, so that is said aloud.
+**Once:** one switch-off per episode — not again while it waits, not again after it was missed
+(then S2 stands until the worker reports OFF or acknowledges a later command). TC-GU-17 fails if
+S6 is ever shown as on, off or not answering, and a mutant that sends the switch-off on every
+message is caught.
 
 **S5 — DECIDED (owner, 2026-10-16, third message): a fifth sentence, the reason always in it.**
 The owner's reason, for the record: a paused guard is armed and its worker is alive, but it is not
@@ -854,7 +927,15 @@ guard rows (measured 2026-10-15), so nothing there changes meaning.
    stopped, the worker's own state stays SUSPENDED_CPU, and that is what it publishes. So today an
    automatic resume spends the budget and resumes nothing — the "budget drains silently" the owner
    named is happening already, and the decided rule above never fires. **OPEN (§5.5.8 Q5)** whether
-   the worker is fixed to actually re-arm on `resumed_cpu` in this build.
+   the worker is fixed to actually re-arm on `resumed_cpu` in this build. **DECIDED (owner,
+   2026-10-16, fourth message): fix the worker**, its own commit right after the guard UI and
+   before the merge — otherwise TC-GU-16 tests a path that cannot happen on the cabinet. Two
+   things: (1) on `resumed_cpu` capture really restarts; (2) the budget is spent ONLY when capture
+   has really started and the worker has published ARMED — the watchdog says a resume is due, the
+   worker arms, and only a successful arm records it. A failed arm spends nothing, stays
+   SUSPENDED_CPU, and is said in its state reason. The owner's words: a counter that claims
+   something happened when it did not is exactly the defect being hunted. Tests TC-GW-01..03
+   (`test_guard_worker_resume.py`) fail on the old worker.
 
 ### 5.5.2 Arm and switch off — ADMIN ONLY (owner, 2026-10-16)
 
@@ -987,6 +1068,7 @@ Shown with the old code checked out and with a mutant per fix, as for every test
 | TC-GU-14 | **S5** the same way as TC-GU-01..04: each paused sentence exactly for its condition, with its reason; a paused state is never "Guard on" or "Guard off"; never "Guard paused" alone | A suspended guard whose worker died reads "paused" (must be S2); the wording is "the pedestal is busy"; `NO_DISK` has an invented reason |
 | TC-GU-15 | **One state, one answer, two places (owner, third message):** in the same state — the worker-restart state first, then the whole grid — the sentence `GET /api/guard/status` gives for the camera equals the sentence `GET /api/marina/berths` gives for its pedestal, which the page renders verbatim | `/api/guard/status` has no sentence; it says `enabled: true` where the screen says "Guard off" |
 | TC-GU-16 | **A pause is lifted only by a live message:** desired SUSPENDED_CPU, a LIVE state ARMED → desired ARMED, "Guard on", a resume row in the event list; the same message RETAINED → nothing changes | No rule exists; the backend keeps SUSPENDED_CPU either way (fails on the live half) |
+| TC-GU-17 | **S6:** desired OFF, a LIVE state ARMED → "Guard recording although switched off", one switch-off sent; repeated live messages send no second one; no confirmation in 5 s → S2; the worker reports OFF → S4. Never "Guard on", "Guard off" or "Guard not answering" while S6 holds | The cell reads "Guard off" (Q4 kept today's answer); no switch-off is sent |
 | TC-GU-13 | **Not measured (§5.5.6):** the backend's guard read raising → "Not measured"; the page with the backend unreachable → "Not measured" and no button; the event count unreadable → "Not measured", not 0 | The backend says "Guard unavailable"; the page keeps the old sentence |
 
 The cabinet-only part — the clip's codec, and whether `cloud-iot` can read guard's files — is a
@@ -1001,7 +1083,10 @@ written, the 15 s boundary, the 404 without a row and the TC-GU-08 mutant includ
 (the API and the screen give the same sentence).
 
 **OPEN:**
-- **Q4 — switched off, but the worker says it is watching.** Desired OFF, worker alive and
+- **Q4 — ANSWERED 2026-10-16 (fourth message): S6**, above. **Q5 — ANSWERED: fix the worker**
+  (item 3). **Q4b — OPEN:** desired OFF while the worker reports SUSPENDED_CPU or an unknown state
+  (S6 covers a worker that reports it is recording; this one is not).
+- *(as asked)* **Q4 — switched off, but the worker says it is watching.** Desired OFF, worker alive and
   reporting ARMED / ALARM / RECORDING / ARMING, no command waiting or overdue. Reachable: a lost
   switch-off whose overdue mark was then cleared by a backend restart (the mark is in memory).
   Proposal: "Guard not answering" (reason: it is on although it was switched off), and the backend
@@ -1623,6 +1708,33 @@ exactly that path (`generate_user_guide.py:16`). A guide that describes this rel
 it. Either the record is superseded (it stays in git history at `6ae28fd`) or the generator writes
 the new .docx beside it. Proposal: supersede it — git history keeps v3.34 byte for byte.
 
+## 13.14 The first ERP read test — the owner's ten points (2026-10-16)
+
+Run AFTER §13.2 (the one upgrade) and 17b → 17d → 17b → 17e. Nothing here changes the cabinet. No
+firewall on the NUC in any form — not ufw, iptables, nftables, Docker rules, sshd, cloudflared,
+tailscaled: limiting :80 to the VPS is a **Tailscale ACL in the tailnet admin panel — the owner's
+task**, not this list's.
+
+| # | Point | Command / step | Expected | If it fails | Outcome |
+|---|---|---|---|---|---|
+| E.1 | The cabinet runs the newest `main` | `git -C ~/Cloud_IOT fetch -q origin && git -C ~/Cloud_IOT rev-parse --short HEAD origin/main`; `ss -ltn 'sport = :8000'`; `curl -s -o /dev/null -w '%{http_code}\n' http://localhost/api/sessions` | Both hashes equal; `127.0.0.1:8000`; `401` or `403` (§16.3c — `200` is the old code) | Not on main: §13.2. `200`: STOP the ERP test | ☐ |
+| E.2 | `display_id` and the cabinet's label | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;c=sqlite3.connect('file:/opt/cloud-iot/backend/pedestal.db?mode=ro',uri=True);print(c.execute('SELECT p.id,p.name,c.opta_client_id,c.dock_id FROM pedestals p LEFT JOIN pedestal_configs c ON c.pedestal_id=p.id').fetchall())"` | One row: id, name, `MAR_KRK_ORM_01`. The `/api/ext` routes answer with `display_id` = `opta_client_id` (`ext_pedestal_endpoints.py:147`) | RECORD | ☐ |
+| E.3 | Tailscale up, its address, the same tailnet as the VPS | `tailscale ip -4; tailscale status \| head -20` | `100.65.235.29`; the VPS listed as a peer | RECORD | ☐ |
+| E.4 | What listens on the Tailscale interface | `sudo ss -ltnp` | `:80` (nginx) on `0.0.0.0` or `100.65.235.29`; `:8000` only on `127.0.0.1` after E.1; **`:1883` on `0.0.0.0` — measured 2026-10-16, mosquitto anonymous: reachable on the tailnet until the owner's ACL closes it**; RECORD every other listener | A listener not on this list: RECORD and tell the owner — no firewall here | ☐ |
+| E.5 | `:80` reachable ONLY from the VPS | the owner's Tailscale ACL; then from the VPS `curl -s -o /dev/null -w '%{http_code}\n' http://100.65.235.29/api/auth/me` and the same from another tailnet device with `-m 5` | VPS: `401`; the other device: timeout | The ACL, the owner's task | ☐ |
+| E.6 | NTP synchronised | `timedatectl show -p NTPSynchronized --value; timedatectl show -p Timezone --value` | `yes` | RECORD — timestamps to the ERP would be off | ☐ |
+| E.7 | Smart mode now | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;print(sqlite3.connect('file:/opt/cloud-iot/backend/pedestal.db?mode=ro',uri=True).execute('SELECT pedestal_id,smart_mode FROM pedestal_configs').fetchall())"` | `0` (measured OFF 2026-10-16; stays off for the read test). The value is the cabinet's report — firmware resets it to OFF on every boot | RECORD | ☐ |
+| E.8 | The gateway today | 17b, plus `SELECT active,verified FROM external_api_config WHERE id=1` | After 17d: 17 ids, all `monitor`, no `camera.*`, no `usage.*` | 17d | ☐ |
+| E.9 | Berth → socket as the cabinet keeps it | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;print(sqlite3.connect('file:/opt/cloud-iot/backend/pedestal.db?mode=ro',uri=True).execute('SELECT pedestal_id,berth_id,socket_id FROM berth_assignments ORDER BY socket_id').fetchall());print(sqlite3.connect('file:/opt/cloud-iot/backend/data/users.db?mode=ro',uri=True).execute('SELECT id,name,berth_number,pedestal_id FROM berths').fetchall())"` | RECORD both lists; the ERP compares with its own | RECORD | ☐ |
+| E.10 | Both databases saved before the test | §13.1 row 0.5 (backup API, both, `integrity_check`) | `['ok', 'ok']` | STOP | ☐ |
+| S.1 | Diagnostics switches nothing (§4.11 SM-Q4 step 3 — the firmware is not in the repo) | With smart mode OFF and nothing plugged in: admin → Diagnostics; then `journalctl -u cloud-iot-backend --since "5 min ago" -o cat \| grep -E 'OutletActivated\|ValveAutoOpen\|opta/cmd/(socket\|water)'` | No `OutletActivated`; at most `ValveAutoOpen … SKIPPED` lines | An outlet or valve switched: STOP — `diagnostics.run` goes back under the gate; tell the owner | ☐ |
+| S.2 | With smart mode OFF, does the cabinet act on a local command? (§4.11 SM-Q6) | Smart mode OFF (now): on the admin dashboard switch the light; watch the light and `journalctl -u cloud-iot-backend --since "2 min ago" -o cat \| grep -i 'led'` | RECORD whether the light changed and whether the cabinet acknowledged (`opta/acks` for `cmd/led`) | If the cabinet ignores it: tell the owner — a "Sent" that does nothing | ☐ |
+
+**Which answers are measurements and which only prove the connection** (§17.5 findings A and B):
+the occupancy and match fields — `berths.list` `occupied*`, `match*`, `state_code`, and
+`berths.occupancy_ext` — prove only that the call works; the threshold is 0.30 instead of 300 and
+the drawn sector is not used. Every other answer of the 17 is a measurement.
+
 ## 13.13 Not yet on this list
 
 These are not built yet, so they have no check yet. Each gets its own check in the commit that
@@ -1807,6 +1919,47 @@ cabinet's. **OPEN — owner.** Until it is decided, `usage.*` is not in the ERP'
 **From now on: §13 check 17b runs BEFORE AND AFTER every change of the gateway configuration —
 not only after an upgrade.** The "before" is what is being changed; the "after" is the proof that
 it landed. A change without both is not done.
+
+### 16.3c MEASURED 2026-10-16 — `main` answers five routes without a login; this is why the upgrade goes BEFORE the ERP test
+
+**Measured on dev, on `main`'s code (`e80a4c1`, a worktree, the test client, no token):**
+`GET /api/sessions`, `/api/sessions/active`, `/api/sessions/pending`, `/api/pedestals`,
+`/api/berths` → **200** with no login; `/api/pedestals/health`, `/api/alarms/active`,
+`/api/marina/berths` → 403. The same probe on `develop` (`3ab0cc6`): all eight 403 (146ab75,
+"every /api route proves identity"). Cabinet 1 runs `aa1f74f`, older than `main`; nginx proxies
+`/api/` on :80 (repo config), and :80 is reachable on the tailnet — so these five answer every
+device on the tailnet without a login. **Not measured on the cabinet itself** — the reading is of
+the code it runs; §13.14 point 1 measures it there. The owner (2026-10-16): the heaviest finding of
+the report.
+
+**The order (owner, 2026-10-16) — one merge, one upgrade:** guard UI commit → the worker fix
+(§5.5.1 item 3) → the camera password and the customer name out of the gateway (§16.3d) → merge
+`develop` into `main` → upgrade → 17b → the script (17d) → 17b → 17e. The ERP test after that,
+never before.
+
+### 16.3d DECIDED 2026-10-16 — the camera password and the customer's name never leave through the gateway
+
+**The camera password.** `GET /api/berths` returns `camera_stream_url` (`routers/berths.py:146`),
+and saving the camera settings writes the username and password INTO that address
+(`routers/pedestal_config.py:174-191`). The gateway proxies as admin (D3), so `berths.list` would
+hand the ERP the camera password. **Decided (owner):** the field must not exist in anything the
+gateway or an `/api/ext` route can return — otherwise the first person who puts it back releases
+the password again. Built as ONE filter on every response the gateway returns (not a fix in one
+route), and on the `/api/ext` routes: `camera_stream_url`, `camera_username`, `camera_password`
+removed wherever they occur. `berths.list` stays in the 17 once this is in. **The password is never
+printed** — not in a log, not in a test, not in an error message.
+
+**The customer's name.** `sessions.*` stays in the list; the ERP may have `customer_id`,
+`nfc_user_id`, `erp_ref` — that is the whole point, the ERP bills and must know whose session it
+is. It may NOT have `customer_name` — the ERP has its own customer records. The same filter removes
+`customer_name`. `usage.*` stays closed: finished bulk reports the ERP computes itself anyway.
+
+**Tests (`test_gateway_secrets.py`):** TC-GS-01 `berths.list` through the gateway has no
+`camera_stream_url`, while the admin's own `GET /api/berths` still does (the filter is the
+gateway's, not a deleted field); TC-GS-02 with a camera password set, no response of ANY catalogue
+GET endpoint through the gateway, and no `/api/ext` route, contains it — the assertion names the
+endpoint, never the value; TC-GS-03 `sessions.active` through the gateway has `customer_id`,
+`nfc_user_id`, `erp_ref` and no `customer_name`. All fail on the old gateway.
 
 ### 16.3b Restoring the cabinet's list — `scripts/fix_gateway_allowed_endpoints.py`
 

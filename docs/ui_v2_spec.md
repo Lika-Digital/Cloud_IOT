@@ -1786,6 +1786,8 @@ task**, not this list's.
 | E.8 | The gateway today | 17b, plus `SELECT active,verified FROM external_api_config WHERE id=1` | After 17d: 17 ids, all `monitor`, no `camera.*`, no `usage.*` | 17d | ☐ |
 | E.9 | Berth → socket as the cabinet keeps it | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;print(sqlite3.connect('file:/opt/cloud-iot/backend/pedestal.db?mode=ro',uri=True).execute('SELECT pedestal_id,berth_id,socket_id FROM berth_assignments ORDER BY socket_id').fetchall());print(sqlite3.connect('file:/opt/cloud-iot/backend/data/users.db?mode=ro',uri=True).execute('SELECT id,name,berth_number,pedestal_id FROM berths').fetchall())"` | RECORD both lists; the ERP compares with its own | RECORD | ☐ |
 | E.10 | Both databases saved before the test | §13.1 row 0.5 (backup API, both, `integrity_check`) | `['ok', 'ok']` | STOP | ☐ |
+| E.11 | The live camera route needs a login (§16.3c, for the record; the fix does not wait) | BEFORE the upgrade, then AFTER: `curl -s -m 5 -o /tmp/s.bin -w '%{http_code}\n' http://localhost/api/camera/1/stream; wc -c < /tmp/s.bin; rm -f /tmp/s.bin` | Before: RECORD the code and the byte count (200 and more than 0 = the camera was open). After: `401` or `403`, 0 bytes | After, anything else: STOP, tell the owner | ☐ |
+| E.12 | What R4's refusal will rest on (§16.5.3) | `grep -n "X-Real-IP\|proxy_pass\|listen" /etc/nginx/sites-enabled/*; sudo grep -n "service:\|hostname:" /etc/cloudflared/*.yml 2>/dev/null` — hostnames and targets only, no credentials | RECORD: `X-Real-IP $remote_addr` set in the `/api/` location; the local port each tunnel hostname targets (`:80` or `:8000`) | No `X-Real-IP`: the tunnel refusal must wait — tell the owner | ☐ |
 | S.1 | Diagnostics switches nothing (§4.11 SM-Q4 step 3 — the firmware is not in the repo) | With smart mode OFF and nothing plugged in: admin → Diagnostics; then `journalctl -u cloud-iot-backend --since "5 min ago" -o cat \| grep -E 'OutletActivated\|ValveAutoOpen\|opta/cmd/(socket\|water)'` | No `OutletActivated`; at most `ValveAutoOpen … SKIPPED` lines | An outlet or valve switched: STOP — `diagnostics.run` goes back under the gate; tell the owner | ☐ |
 | S.2 | With smart mode OFF, does the cabinet act on a local command? (§4.11 SM-Q6) | Smart mode OFF (now): on the admin dashboard switch the light; watch the light and `journalctl -u cloud-iot-backend --since "2 min ago" -o cat \| grep -i 'led'` | RECORD whether the light changed and whether the cabinet acknowledged (`opta/acks` for `cmd/led`) | If the cabinet ignores it: tell the owner — a "Sent" that does nothing | ☐ |
 
@@ -2007,8 +2009,18 @@ route beside it has one, `:24`). Measured on dev on `5ec542e`: no token, a pedes
 the identity work of 146ab75 did not cover it. Reachable through nginx :80 — the tailnet, and the
 internet through the Cloudflare tunnel (R4). Whether this camera answers MJPEG at the probed paths
 is not measured: `curl -s -m 5 -o /tmp/s.bin -w '%{http_code}\n' http://localhost/api/camera/1/stream; wc -c < /tmp/s.bin; rm -f /tmp/s.bin`
-on the cabinet — 200 with more than 0 bytes = the camera is open now. **OPEN, the owner:** fix it
-before the upgrade (a second merge to `main`) or after.
+on the cabinet — 200 with more than 0 bytes = the camera is open now. **DECIDED (owner,
+2026-10-16): fixed BEFORE the upgrade, a second merge to `main`** — independent of whether a
+picture leaks this second; the measurement above is for the record. Every camera route without a
+login gets one: today exactly one, `GET /api/camera/{id}/stream` (listed from the app's routes:
+every path naming camera, snapshot, frame, stream, image, video, photo or crop — the rest already
+demand a role, or the service token on `/api/ext`). It takes `require_any_role`, as the snapshot
+beside it. The one page that used it — the fallback `<img src>` in the admin camera window
+(`CameraModal.tsx:133`), which cannot send a login — says "No live stream available" instead; the
+live view there is the snapshot poll, which already sends one. **Tests (`test_camera_routes_auth.py`):**
+TC-CAM-01 the stream without a login → 401/403 (200 today); TC-CAM-02 every route of the app whose
+path names a camera, a frame, a stream, an image, a video, a photo or a crop answers 401/403
+without a login — enumerated from the app, so a new route is covered the day it is added.
 
 ### 16.3d DECIDED 2026-10-16 — the camera password and the customer's name never leave through the gateway
 
@@ -2124,12 +2136,21 @@ no other key; the cabinet opens nothing to the outside.** The mobile app never t
 cabinet — only to the ERP, which serves the picture to its users. **Nobody opens a port, a
 forward or a tunnel route to the cabinet for this — ever.** (Superseded: the `nginx /live/<token>`
 path proposed in the plan above — there is no separate path.)
-**Already measured, and against this rule (audit 2026-10-12, R4):** the Cloudflare tunnel
-publishes `marina2.lika.solutions` → nginx :80 — the whole app, `/api/ext/*` included — and the
-camera's own web page. R4 is the owner's decision, separate from D32; D32 must not be built on
-top of it: the live routes answer only a request that comes in over the tailnet (the source
-address in `100.64.0.0/10`, as nginx passes it), and TC-LV-12 proves a request through the
-tunnel is refused.
+**R4 — CLOSED (owner, 2026-10-16), this way.** The tunnel (`marina2.lika.solutions` → nginx :80,
+measured 2026-10-12) MAY publish the application: it demands a login and 2FA. `camera2` and `tme2`
+stay as they are — the camera has its own password; the owner's decision. **But `/api/ext/*` and
+every live route refuse a request that came through the tunnel: 403.** "Through the tunnel" = the
+source address nginx passes (`X-Real-IP $remote_addr`, `ubuntu-install-26.04.sh:452`) is not in
+the tailnet range `100.64.0.0/10`; a request with no such header (straight to the backend, as a
+tunnel aimed at :8000 would arrive) is refused too. **Tests:** TC-LV-12 for the live routes, and
+**TC-EXT-TUN-01 for every existing `/api/ext/*` route** (each catalogue path and each direct ext
+route: through the tunnel 403, over the tailnet the usual answer).
+**When it is built — after the upgrade, with the D32 build, not in the second merge:** it rests on
+two cabinet facts nobody has read — that the cabinet's nginx really sets `X-Real-IP` (the repo's
+installer does; the cabinet's file was never read) and which local port the tunnel targets
+(unmeasured, audit 2026-10-12). Built blind, a wrong guess makes every ERP call 403 on Tuesday's
+read test. §13.14 E.12 reads both in the upgrade session; *the owner may move it earlier once E.12
+is in.*
 
 **The cabinet does not know customers.** It checks two things only: the service token is valid
 (and the id is enabled in the gateway list), and the berth belongs to this cabinet. **Who may
@@ -2252,13 +2273,19 @@ refused (D30).
 ffmpeg, 30 s without a keepalive, the 10-minute cap, the log kept 12 months and admin only.
 
 **OPEN for the owner:**
-- the name in the decision record; whether sub-second latency is a requirement (none found); R4;
-- **D32-Q1 — one picture shows every berth of the camera.** `live_start` is for ONE berth, and
-  there is one ffmpeg per camera; with the masks on the camera (16.5.5, decided: on the camera, not
-  on the cabinet) the picture is the camera's whole visible area — every berth of this pedestal
-  and the water. So a viewer the ERP allowed for berth 3 also sees berths 1, 2 and 4. Either that
-  is accepted (and the ERP is told), or each berth needs its own crop on the cabinet — a transcode
-  per berth, against "masks on the camera, zero CPU". Not decided here.
+- the name in the decision record — the owner writes it when signing (the marked place stays).
+
+**D32-Q1 — DECIDED (owner, 2026-10-16): the whole camera picture, no crop per berth.** Why: a crop
+needs re-encoding per viewer — up to four processes on the Atom — which breaks "masks on the
+camera, zero CPU" and can starve guard. Boats on the pontoon are visible to anyone who walks past;
+privacy is about people, and the masks and the framing handle them. Two consequences:
+- **the picture shows every berth of this cabinet and the water in front of them; the ERP must
+  tell its user so, in that sentence — it may never be presented as the view of one berth;**
+- a crop per berth stays possible for **Phase 2**, only if M10 shows that hardware encoding on the
+  iGPU does not load the CPU. **Not built now.**
+
+**Latency — ANSWERED (owner, 2026-10-16): sub-second is not a requirement. HLS, 8–12 s to the
+phone.** Not to be asked again.
 
 ## 16.4 Phase 2 — a DIRECTION, NOT a decided architecture; the measurement decides
 

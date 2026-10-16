@@ -745,7 +745,7 @@ sentence that is not a guard state at all: the reading itself failed (§5.5.6).
 | S3 | A row exists, the worker answers, desired ARMED, worker reports ARMED / ALARM / RECORDING / ARMING, no acknowledgement overdue | **"Guard on"** |
 | S4 | A row exists, the worker answers, desired OFF, worker reports OFF, no acknowledgement overdue | **"Guard off"** |
 | S5 | A row exists, the worker answers, no acknowledgement overdue, and guard is armed but not looking: desired SUSPENDED_CPU (or the worker reports SUSPENDED_CPU); or S3 holds with `limited_visibility`; or the worker reports a state the backend has no reason for (below) | **"Guard paused — processor overloaded"** / **"Guard paused — too dark to see"** / **"Guard paused — reason not reported"**. Never "Guard paused" alone |
-| — | **OPEN (§5.5.8 Q4):** desired OFF, the worker answers and reports ARMED / ALARM / RECORDING / ARMING, nothing waiting or overdue | not decided — the code keeps today's answer ("Guard off") until the owner decides |
+| — | **OPEN (§5.5.8 Q4):** desired OFF, the worker answers and reports anything but OFF (ARMED / ALARM / RECORDING / ARMING, SUSPENDED_CPU, an unknown state), nothing waiting or overdue | not decided — the code keeps today's answer ("Guard off") until the owner decides, and the grid tests list these cells as open instead of asserting them |
 
 **S5 — DECIDED (owner, 2026-10-16, third message): a fifth sentence, the reason always in it.**
 The owner's reason, for the record: a paused guard is armed and its worker is alive, but it is not
@@ -758,6 +758,29 @@ rendered as "there is no space to record" (`routers/marina.py:349-351`), or any 
 worker adds. With a dead worker, S2 wins over S5: a paused guard whose worker is gone is not
 answering. *Derived, not said by the owner: a `no_disk` flag alone does not pause — detection
 continues without recording (`guard/router.py:303-304`), so it stays S3.*
+
+**Read together, and details the build needs (2026-10-16, written before the code; not new
+decisions — each follows from a sentence above, and is listed so the owner can see it):**
+- **A waiting command.** "While a command is waiting the sentence comes from the reported state
+  alone" is for a command a person sent (the button). The automatic re-arm after a worker restart
+  is the case item 1 below names: S2 until the worker confirms. The backend marks which is which
+  when it sends.
+- **The worker's state, from every live message that carries one.** `state`, `health` and `ack`
+  each carry the worker's state (`__main__.py:334-343, 721-722`; the ack's `state`); a LIVE one of
+  any of them updates the reported state. A worker that answers but has never said its state (only
+  alarm or detection traffic) is S2, reason "the worker has not reported its state" — today that
+  reads ARMING, i.e. "Guard on" (`guard/service.py:253`).
+- **The row needs the pedestal.** A live state message without `pedestal_id` creates no row and
+  logs why — the camera id is never taken for the pedestal id (today's
+  `get_or_create_config` default, `guard/service.py:199`).
+- **Pauses and resumes are stored in their own table** (`guard_state_events`: camera, time, kind
+  `paused_cpu` / `auto_resumed`, reason), never in `guard_events` — an unlabelled `guard_events`
+  row is a rank-7 alarm (§5.5.3). `GET /api/guard/events` returns both kinds merged by time, each
+  row with `kind`, 50 per page. **The budget** comes from the worker: its `health` adds
+  `auto_resumes_used` and `max_auto_resumes` (`watchdog.py:165-167`, the limit `:67`) — a worker
+  change. The counter "Automatic resumes left today: N of 2" is shown on `/marina/guard` to every
+  role (it is not a picture of anyone); the rows are in the admin list. No reading of the budget →
+  "Automatic resumes left: not measured".
 
 **The boundary for S2 — 15 seconds, measured from the last LIVE message.** The worker publishes
 `health` every 5 s in every state, OFF included (`guard_worker/__main__.py:95, 719`); the backend
@@ -954,7 +977,7 @@ Shown with the old code checked out and with a mutant per fix, as for every test
 | TC-GU-03 | **S3** the same way: "Guard on" exactly for the S3 condition | "Guard on" also comes out with an overdue acknowledgement |
 | TC-GU-04 | **S4** the same way: "Guard off" exactly for the S4 condition | "Guard off" also comes out for a dead worker switched off, and for desired ARMED reported OFF |
 | TC-GU-05 | **Worker restart:** guard armed; the worker restarts and announces OFF live → an arm command is published once, the sentence is S2 until the ack, then "Guard on"; with the announce lost, a live health reporting OFF never leaves "Guard on". Control: desired SUSPENDED_CPU → no arm sent | No arm is sent; the sentence is "Guard off"; with the announce lost it is "Guard on" |
-| TC-GU-06 | **Lost ack:** an arm (and, separately, a switch-off) not acknowledged within 5 s → S2 with "did not acknowledge"; an ack within 5 s → no S2 | The sentence stays what the worker last reported ("Guard on" for the lost switch-off) |
+| TC-GU-06 | **Lost ack:** an arm (and, separately, a switch-off) not acknowledged within 5 s → S2 with "did not acknowledge"; an ack within 5 s → no S2 | The lost arm reads "Guard off" (the worker's OFF); the lost switch-off reads "Guard off" (desired OFF wins, `guard/service.py:240-242`) while the worker may still be watching |
 | TC-GU-07 | **Route:** enable / disable / rearm / config → 403 for `monitor_control` and `monitor`, 200 for admin | `monitor_control` gets 200 |
 | TC-GU-08 | **Button (e2e):** Arm / Switch off rendered for admin, not for `monitor_control` or `monitor` | No button exists (admin half fails); non-admin half proven by a mutant |
 | TC-GU-09 | **Row on announce:** a live state message creates the row (desired OFF) and S1 becomes S4; a retained one does not; REST enable on a camera with no row → 404 | No row is created; REST enable creates one |

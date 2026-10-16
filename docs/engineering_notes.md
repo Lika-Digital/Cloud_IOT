@@ -1,5 +1,12 @@
 # Engineering notes — rules that cost us something to learn
 
+> **Corrections of 2026-10-16.** Rule 2 says it is enforced by TC-NFCA-01..10 — that file is
+> SKIPPED in full (`tests/backend/test_nfc_object_authz.py:44`) since D6.1 commented the
+> per-customer NFC routes out; by rule 4 a skipped test enforces nothing. Rule 2's NFC examples
+> and the appendix rows on tags, `provisioned_by`, the water-tag gate and outlet types describe the
+> tag registry that D6.1 removed (`docs/erp_session_payload_contract.md`). Rule 13 says filtering
+> by role (part B) is planned — it was built 2026-10-12 (`docs/ui_v2_spec.md` §14).
+
 Cross-cutting rules, each earned from a specific defect. They live here rather than inside the
 design document that happened to expose them, because **a general rule filed under a specific
 design document is a rule nobody finds.**

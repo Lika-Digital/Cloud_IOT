@@ -1,5 +1,15 @@
 # Cloud_IOT — how the system actually works
 
+> **⚠ SUPERSEDED IN PART — 2026-10-16.** Where this document describes the NFC **tag table**,
+> **attribution by scanned tag**, **MODE 2** or **the pedestal billing / the ledger as the
+> financial record**, it is history: since D6.1 (2026-10-12) the ERP owns the tag mapping and the
+> customer, the cabinet keeps no tag registry, and the ERP bills. **The truth:**
+> `docs/erp_session_payload_contract.md` (the ERP contract) and `docs/ui_v2_spec.md` §15–§18.
+> Also out of date here, found 2026-10-16: retention and a disk guard DO exist
+> (`retention_service.py`, `disk_guard.py`); OTP HAS an attempt limit (`totp_service.py`); the
+> ERP key is a static `ERP_API_KEY`, not a 10-year token (that is the gateway key); the simulator
+> was rewritten 2026-10-02; `docs/engineering_notes.md` has 17 rules, not the 11 summarised in §10.
+
 **Status:** current as of 2026-10-01 (v3.43). **Supersedes** any statement elsewhere about
 topics, billing figures or the ERP contract that contradicts it.
 

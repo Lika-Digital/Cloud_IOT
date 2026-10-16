@@ -1,5 +1,17 @@
 # Guard — Deployment Runbook
 
+> **⚠ SUPERSEDED FOR INSTALL, FIRST START AND ROLLBACK — 2026-10-16.** Do not follow those steps
+> here. Wrong here: install the unit "from guard_b1_design §2" and `enable --now` in one go — the
+> unit comes from `nuc_image/install-guard.sh`, which NEVER starts the service (first start is a
+> separate step); `guard:cloud-iot` mode 2750 — the installer makes the data dir `guard:guard`
+> (`install-guard.sh:90-94`); "pip list | grep telemetry must print nothing" — telemetry may be
+> legitimately KEPT (§13.6c G.8); the rollback comment "rm -rf /opt/cloud-iot/guard # venv +
+> models" — the model lives in `/opt/cloud-iot/backend/models` and is not under guard; the rollback
+> also leaves `/opt/cloud-iot/guard_worker` and the `GUARD_INSTANCE_ID` line in the backend `.env`.
+> `GUARD_INSTALL=1 upgrade.sh` runs the install and is not mentioned here.
+> **The truth for install, first start and rollback:** `docs/ui_v2_spec.md` §13.6c; for the
+> guard UI: §5.5.
+
 **Written for a phone on a pier.** Short blocks, copy-paste, one thing per step.
 **Date:** 2026-09-28 · **Deploys:** the guard worker + backend guard contract (v3.42).
 

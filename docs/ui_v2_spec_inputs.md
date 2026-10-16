@@ -1,5 +1,12 @@
 # What the foundation work changed that the UI v2 spec must reflect
 
+> **⚠ SUPERSEDED — 2026-10-16.** Folded into `docs/ui_v2_spec.md` §4 on 2026-10-01 and kept as the
+> record. Out of date here: "six NFC tags / attribution by scanned tag" and "the ledger is the
+> financial record" (D6.1: the ERP owns the mapping and bills — `docs/erp_session_payload_contract.md`;
+> the report reads the session row — `ui_v2_spec.md` §4.4); `mobile.py` accepts V1/V2 as well;
+> the simulator was rewritten 2026-10-02; item 6 (`opta/*`) is decided, not open. **The truth:**
+> `docs/ui_v2_spec.md`.
+
 A running list, kept as the work happens rather than reconstructed while writing the spec. Each
 entry is a fact the spec has to start from — several of them contradict what the UI v2 audit
 assumed, because the audit was written before these were known.

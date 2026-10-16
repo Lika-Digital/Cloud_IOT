@@ -1,5 +1,10 @@
 # Firmware ↔ Backend Contract (Arduino Opta)
 
+> **Corrections of 2026-10-16 (backend side only).** The v3.9 post-diagnostic valve auto-open
+> ("Do not change") is OFF: it always returns early (`mqtt_handlers.py:1766-1781`) — a valve never
+> opens itself in ERP mode (`docs/ui_v2_spec.md` §15). The lifespan hook no longer clears the
+> `pedestals` table, only `socket_states` (`main.py:594-606`).
+
 This document captures the non-code contract between the Arduino Opta firmware
 and the NUC-side Cloud_IOT backend. It lives here — not in the README changelog
 — because firmware and backend teams iterate on different schedules and the

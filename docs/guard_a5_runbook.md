@@ -1,5 +1,10 @@
 # Guard A.5 — Measurement Runbook
 
+> **⚠ HISTORY — 2026-10-16.** The A.5 measurement is done. Its check that
+> `/opt/cloud-iot/backend/models` "should be absent" is out of date: since 2026-10-11 that
+> directory is the guard model's one home. **The truth for install, first start and rollback:** `docs/ui_v2_spec.md` §13.6c; for the
+> guard UI: §5.5.
+
 **For:** operator on the pier, phone in hand. **Duration:** ~35 min, of which 10 min is
 an unattended control recording. **Daylight only.**
 

@@ -1,5 +1,14 @@
 # Guard Phase 1 — B1 Design, for approval before any code
 
+> **Corrections of 2026-10-16.** `NO_DISK` is a FLAG that stops recording only, not a state
+> (`watchdog.py:50`); the unit is `After=cloud-iot-backend.service` with no compose `Wants`
+> (`nuc_image/cloud-iot-guard.service:19-20`); the data dir is `guard:guard` (`install-guard.sh:90-94`),
+> not `guard:cloud-iot` 2750. Described here and NOT built (to be built per `docs/ui_v2_spec.md` §5.5,
+> or still open): the UI toggle and badge (§5.5.2), the event list, frames and labels in a UI
+> (§5.5.3–5), desired ARMED re-sent to a returning worker and a missed ack as UNAVAILABLE (§5.5.1),
+> `GUARD_DETECTION_RETENTION_DAYS` (nothing prunes `guard_detections`), `GUARD_LOG_MIN_CONFIDENCE`,
+> `GUARD_VISIBILITY_GRACE_S`, the health fields `rss_mb`, `proc_cpu_pct`, `inference_ms_p95`.
+
 **Date:** 2026-09-26 · **Status:** awaiting approval. **No implementation code written.**
 
 Settings fixed: `GUARD_FPS=1`, `GUARD_WINDOW_SECONDS=4`, `GUARD_FRAMES_REQUIRED=2`,

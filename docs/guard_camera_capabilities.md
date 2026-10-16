@@ -1,5 +1,9 @@
 # Camera capabilities and future options
 
+> **Note of 2026-10-16:** the camera is named "D-Link DCS-TF2283AI-DL" in
+> `guard_phase1_assessment.md` and `guard_a5_runbook.md`, and "DVC DCN-TF2283AI-DL" here — not
+> resolved from the repo; the label on the device decides.
+
 **Status: DISCOVERY ONLY. Not a task, not part of Stage B.** Recorded so nobody has to
 rediscover it. Carry this into the final documentation pass under "Camera capabilities and
 future options".

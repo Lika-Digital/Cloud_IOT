@@ -1,5 +1,11 @@
 # Guard Phase 1 — Stage A Assessment (read-only)
 
+> **⚠ HISTORY — 2026-10-16.** The assessment before the design; `guard_b1_design.md` and the code
+> decided otherwise on: 10 s segments and a 6 s pre-roll (not 2 s × 15); the topic
+> `marina/{MARINA_ID}/camera/{cam}/guard` (not `marina/cabinet/...`); `GUARD_MAX_GB` 20 (not 5); no
+> MOG2 stage; no VAAPI. **The truth for install, first start and rollback:** `docs/ui_v2_spec.md` §13.6c; for the
+> guard UI: §5.5.
+
 **Date:** 2026-09-26 · **Scope:** feasibility of dashboard-toggled person detection +
 alarm + short recording on the marina NUC. **No implementation code written.**
 

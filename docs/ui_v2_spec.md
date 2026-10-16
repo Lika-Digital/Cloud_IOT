@@ -63,7 +63,8 @@ Evidence is a test, a commit or a path, never a claim.
 | Row controls (power, water, light) | BUILT+PROVEN on dev 2026-10-15; cabinet 11l | The server decides: each facility carries `action` (on/off/null) and ONE `unavailable_reason` — `no_socket`, `no_contact`, `standalone`, `read_only`, `state_unknown`, `nothing_plugged`, `needs_scan` (`routers/marina.py`, `Gate`/`_offer`). A control is offered only when its endpoint will accept it: "Turn on" power only for a plug waiting (`pending`; with nothing plugged the endpoint 409s), water only with a live NFC reservation (§15), read by a query that does not write. `ControlledLine.tsx`: one sentence per reason, no control element in its place; a confirm before anything that ends a session or switches the shared light ("This light covers berths 1, 2, 3 and 4…"); after a tap it says "Sent" — not "done" — and a refusal shows the server's sentence, a missing answer says it is not known whether it switched. **Two defects fixed by it:** a smart-mode pedestal out of contact said "The pedestal is switching this itself" (`unavailable_reason` was always `standalone`), and a read-only `monitor` got `available: true` for endpoints that 403 it — both shown on the old code. Proof: `test_row_controls.py` TC-RC-01..07 all failed on the old code; TC-RC-06 taps every offered action against its real endpoint (accepted) and both facility refusals (refused), so the offer cannot drift from the endpoint; mutants caught — the reservation read via `get_live_pending`, which writes (TC-RC-04); "Turn on" offered on an idle socket (TC-RC-03, TC-RC-06). `marina.spec.ts` TC-UIRC-01..04 failed on the old pages; TC-UIR-03 is no longer vacuous (TC-UIRC-01 is its positive control). The water 409 now reads as a sentence first (`controls.py`; TC-RC-07). **Open, not fixed here:** `mqtt_client.publish` drops a command when the broker is disconnected and returns nothing, so the endpoint still answers `sent` — and a `stop` completes the DB session while the socket stays on. Changing it changes what the ERP receives: the owner's decision |
 | TC-UIR-01 (no raw colour classes) | BUILT+PROVEN, with exemptions | `test_ui_rule_colours.py` (block 3, 2026-10-12): no status hue (red/green/amber/yellow/orange/emerald/lime/rose on a colour utility) in `pages/marina/**`, `components/marina/**` outside `Status.tsx`, whose exported `TONE` is the only palette. Measured with that pattern: 29 lines, 2 of them in `Status.tsx` (the earlier "32" used a pattern that was not recorded). Fixed now: MarinaGuard, MarinaAlarms, MarinaWater. Exempt per file until block 4: MarinaDashboard, BerthDetail, MarinaSetup — the gate fails when block 4 is marked DONE below while any is still exempt |
 | Block 4 — UI v2 remainder | DONE on dev 2026-10-15; cabinet checks 11k–11p | Row controls, L3 history, nav of 4 (Analytics already out — see the "Block 4 (part)" row below; do not redo), `<PhaseBlock>`, wizard step 3, §9 splits, `/marina` on the websocket — each has its own row. `EXEMPT_UNTIL_BLOCK_4` is empty, so TC-UIR-01c holds. **This row is the deadline of TC-UIR-01's exemptions** — `test_ui_rule_colours.py` reads it; setting it to DONE with exemptions left fails the gate |
-| Nav of 4, Card 5 (water toggle) | NOT BUILT | `Layout.tsx:40-57` has 8 items; the nav goes LAST in block 4 (owner, 2026-10-15) |
+| Card 5 (water toggle, §1.3) | NOT BUILT — checked 2026-10-16: `report_water_sessions` exists nowhere in the code | *Corrected 2026-10-16: this row said the nav was not built either; the nav IS built — row "Nav — LAST in block 4" below.* |
+| **Described here, not built — the spec check of 2026-10-16** | NOT BUILT | §5.4 alarms "filterable by pedestal and by berth" (the page filters active / all only); §5.3 the reference photo and "camera now" as pictures on berth detail (it shows sentences); §3 `TC-UIR-02` "every rendered condition has a string-table entry" (no test carries that id or asserts it); §9 `TC-UIS-01` (stale cabinet reads grey) and `TC-UIR-05..07` (never written); §9 the tap count (not measured); §1 BLOCK-1, the real berths at Krk (open); §1.3 Card 5 (row above). Guard UI and the four functions: §5.5, §17 |
 | L3 history | BUILT+PROVEN on dev 2026-10-15; cabinet 11m | `/marina/berth/:id/history` (the socket that serves the berth NOW — said on screen, because assignments change and sessions are per socket) and `/marina/water/:pedestal/:V1|V2/history` (water is a pool, so its history is per valve; without it, taking `/history` out of the staff nav would take water history away). One component, `ConsumptionHistory.tsx`, a calendar month (UTC, as the report) at a time; no "Later" past the current month (absent, not disabled). **Session rows, not interval rows** — the §4.4 exception, same reason and same condition as the report, so the screen and the staff report say the same thing about the same session; **Owner's decision 2026-10-15: session rows, with `consumption_source`, as the report** — the report reads the session row, so the history must too; two views of one thing from two sources drift apart and then nobody knows which is true. Every figure carries `consumption_source` and both register readings (`usage_rows` now returns them — `test_l3_history.py` TC-L3-01/02 failed on the code before; staff still get no identity); unknown or provenance-less is `—`; any unmeasured session means NO month total, only "Total not shown: N of M". `marina.spec.ts` TC-UIH-01..04 all failed on the old frontend. Found in the old `/history` (admin, untouched): a water session reads "Socket 1" for V1 — the bare-digit ambiguity §4.5 forbids |
 | Row amps after the cabinet goes silent | BUILT+PROVEN on dev 2026-10-15 | `_power_block`: `amps` is null once the telemetry is older than the outlet window — the same rule as `<PhaseBlock>`. It showed the last current as now for as long as a session stayed open. `test_phase_block.py` TC-AMP-01 failed on the code before (`7.25 is None`), with a fresh-telemetry control in the same test |
 | Session churn on cabinet 1 — RECORDED, NOT BUILT (owner, 2026-10-15) | OPEN — measure after the package | **Measured 2026-10-15, read-only:** sessions on pedestal 1 by start month and status: 2026-06 completed 53; 2026-08 completed 3; 2026-09 completed 84; **2026-10 completed 707**. 178 sessions in total on 2026-10-12, max id 847 on 2026-10-15 — about 670 in three days; the newest five (ids 843–847, standalone) opened and closed at 11:46, 11:57, 12:01, 12:06 and 12:16. **Owner's hypothesis, not measured:** `_METER_ACTIVE_AMPS` is 0.30 A, socket Q4 reads 0.21–0.31 A, so the current crosses the threshold and the watchdog opens and closes sessions in a loop. To measure when its turn comes: how many have `energy_kwh` < 0.05 kWh, how many last under 5 min, on which socket, and whether the threshold has hysteresis. No fix before the package |
@@ -72,7 +73,7 @@ Evidence is a test, a commit or a path, never a claim.
 | `vessel_match_configured` read a column nothing writes (found building step 3, 2026-10-15) | BUILT+PROVEN on dev 2026-10-15; cabinet 11n | L1/L2 decided "matching configured" from `berths.reference_image`. No upload path writes it: the admin upload and the ERP push (`/api/ext/.../reference-image`) write FILES, the matcher (`compute_match_score`) compares against those files, and only the first-start seed sets the column (`Full_Berth.jpg`, berth 1). So a berth with no photo read "checked against a photo", and one with photos read "No reference photo is set". Now `berth_analyzer.has_reference_images` (the matcher's own files, read-only). `test_vessel_match_configured.py` TC-VMC-01/02 failed on the code before. Also: the test suite wrote into the real `backend/backgrounds` (an empty `berth_N` per test berth, 41 on the dev box; on the old code TC-VMC-02's upload wrote a real file, removed). Rule 16: `BERTH_REFS_DIR` now points it into the per-run dir, TC-ISO-03 failed on the code before |
 | `<PhaseBlock>` | BUILT+PROVEN on dev 2026-10-15 | Berth detail `power.phase_amps` (`routers/marina.py`, `_phase_amps`): the three stored per-phase currents, or null — null when the cabinet sent none (single-phase), no session is running, or the telemetry is older than the outlet window; a missing phase is null, never 0. `components/marina/PhaseBlock.tsx`, "Phase 1/2/3" in words, absent from the DOM on null. `test_phase_block.py` TC-PHB-01..05 failed on the code before (no field); mutants caught: staleness check removed (TC-PHB-04), missing phase as 0 (TC-PHB-05). `marina.spec.ts` TC-UIP-01 failed on the old page. **Refresh is the page's 15 s poll until `/marina` is on the websocket (this block).** The row's `power.amps` lacked the same staleness check — fixed, row above |
 | Setup wizard | BUILT+PROVEN on dev 2026-10-15 (step 3); cabinet 11n | `MarinaSetup.tsx` (`4eb381e`). **Step 3 since 2026-10-15** (`SetupPhotos.tsx`): per berth, its socket from step 2 and its reference photos (add, remove), with one sentence: "N photo(s): the boat here is checked against them" or "No photo: the boat here is not checked". **No on/off checkbox — owner's decision 2026-10-15** (removed from §5.6): matching runs exactly when a berth has a photo, and a checkbox that stores nothing is not built. Photos are stored when added; Save stays the socket mapping. `marina.spec.ts` TC-UIW-01/02 both failed on the old frontend. **Route `adminOnly` since 2026-10-15** — before that it was admin only in the backend write and nowhere else, so staff could open it by typing the address. `marina.spec.ts` TC-UIN-02: staff typing `/marina/setup/1` land on `/dashboard` with no wizard (failed on the code before: the URL stayed), admin gets the wizard (positive control) |
-| §9 size limits | BUILT+PROVEN on dev 2026-10-15 — per file AND total | **Owner's decision 2026-10-15: the profile total limit is the measured size with block 4 complete — 2 507 lines** (.ts and .tsx, 21 files), enforced by `test_ui_rule_colours.py` TC-UIR-03. *I first reported 2 329: that was measured at `c6eb0ec`, before the websocket and nav commits, and counted .tsx only; corrected the same day.* | **Per file:** MarinaDashboard (402 → 168), MarinaSetup (307 → 234) and BerthDetail (264 → 204) split, no behaviour change: `PedestalBlock.tsx`, `BerthRow.tsx`, `SetupSockets.tsx`, `MonthFigure.tsx`, `DetailSection.tsx`; the largest marina file is now 234 lines (MarinaSetup). `marina.spec.ts` 21/21 unchanged. The limit was only a sentence until now; `test_ui_rule_colours.py` TC-UIR-02 enforces it and failed on the code before (402 / 307 / 264). Their raw status colours went to `Status.tsx` `TONE` (`okText`, `done` added), so `EXEMPT_UNTIL_BLOCK_4` is EMPTY. History: the target was "under 1 200"; at `c6eb0ec` the .tsx files alone were 2 329. Splitting moves lines, it cannot remove them; the growth is block 4's own features (row controls, L3 history, wizard step 3, `<PhaseBlock>`). Superseded by the owner's decision at the start of this row |
+| §9 size limits | BUILT+PROVEN on dev 2026-10-15 — per file AND total | **Owner's decision 2026-10-15: the profile total limit is the measured size with block 4 complete — 2 507 lines** (.ts and .tsx, 21 files), enforced by `test_ui_rule_colours.py` TC-UIR-10. *I first reported 2 329: that was measured at `c6eb0ec`, before the websocket and nav commits, and counted .tsx only; corrected the same day.* | **Per file:** MarinaDashboard (402 → 168), MarinaSetup (307 → 234) and BerthDetail (264 → 204) split, no behaviour change: `PedestalBlock.tsx`, `BerthRow.tsx`, `SetupSockets.tsx`, `MonthFigure.tsx`, `DetailSection.tsx`; the largest marina file is now 234 lines (MarinaSetup). `marina.spec.ts` 21/21 unchanged. The limit was only a sentence until now; `test_ui_rule_colours.py` TC-UIR-09 enforces it and failed on the code before (402 / 307 / 264). *TC-UIR-09 and TC-UIR-10 were committed as TC-UIR-02 and TC-UIR-03, ids §3 and `marina.spec.ts` already used; renamed 2026-10-16.* Their raw status colours went to `Status.tsx` `TONE` (`okText`, `done` added), so `EXEMPT_UNTIL_BLOCK_4` is EMPTY. History: the target was "under 1 200"; at `c6eb0ec` the .tsx files alone were 2 329. Splitting moves lines, it cannot remove them; the growth is block 4's own features (row controls, L3 history, wizard step 3, `<PhaseBlock>`). Superseded by the owner's decision at the start of this row |
 | `match_ok_bit` "never analysed" | BUILT+PROVEN | block 3, 2026-10-12: `vessel_matches` is `false` only for a measured mismatch (`state_code` 2), `true` only for `match_ok_bit` 1, otherwise `null` = not known — never analysed, analysis failed, berth empty, no reference to compare. UI says "not known" for null. `test_vessel_match_truth.py` TC-VMT-01 (the four not-known cases failed on the code before) |
 | D2 paired redaction test (HTTP) | BUILT+PROVEN | `test_identity_redaction.py` TC-IDR-03: monitor gets none of the identity keys, admin gets them (failed on the code before, 2026-10-12) |
 | Block 4 (part) — Analytics out of the nav (L3); `ui_v2_audit.md` §7 #9, **NOT the owner's nalaz 9** (`retention_service.py` — fixed separately in `4a4408b`, see the Nalaz 9 row) | BUILT+PROVEN 2026-10-14 | `Layout.tsx`: no Analytics item for any role; berth detail → "This month" → "Pedestal consumption history ›" opens `/analytics?pedestal=<id>` with that pedestal preselected (`Analytics.tsx` reads `?pedestal=`). The route itself is unchanged. `marina.spec.ts` TC-UIN-01 failed on the code before (nav link count 1; no berth link). Nav is now 7 items for admin's shared part, not yet the 4 of block 4. `BerthDetail.tsx` is 253 lines, 3 over the §9 limit it already had on block 4's list |
@@ -156,6 +157,9 @@ choice — which endpoints are allowed, which events are pushed.
 | **Endpoint** | the existing `PUT /api/admin/ext-api/config`. No new route. |
 | **Enforced at** | the three `erp_webhook` call sites in `mqtt_handlers.py`, via one predicate in `erp_webhook.py` so there is one place to read rather than three to keep in step. |
 | **Auth** | `require_admin`, matching the rest of the page (D14, built 2026-10-14 — `require_api_config` no longer exists). |
+
+*SUPERSEDED 2026-10-14 by D14 (§11): the screen IS admin-only; `require_api_config` no longer
+exists. The paragraph below is the record of 2026-10-01.*
 
 **One correction to the instruction, stated rather than silently applied:** you said "admin
 only, like everything else on that screen". **The screen is not admin-only today** — it is
@@ -416,7 +420,9 @@ writes is (a)'s precondition, not (a).
 
 ### 4.5 Six outlets, real spellings, attribution by scanned tag
 `Q1`–`Q4` and `V1`/`V2`. Never bare digits — `"1"` is ambiguous between socket 1 and valve 1.
-**The dashboard is organised by berth for monitoring; billing follows the scanned tag.** A
+*Corrected 2026-10-16 (D6.1, §15): there is no tag table on the cabinet; a session is attributed
+by the `erp_ref` the ERP sends with `/scan`, and the ERP bills.* **The dashboard is organised by
+berth for monitoring; attribution follows the ERP's `/scan`.** A
 shared valve is a scheduling constraint, not an attribution problem, so "(also berth 4)" is a
 monitoring clarification and never a billing caveat.
 
@@ -439,9 +445,10 @@ assumes either.
 ### 4.9 Smart mode is admin-only and backend-enforced
 It does not appear in the wizard, and the endpoint refuses the role regardless of what renders.
 
-### 4.10 The simulator does not exist yet
-Deleted 2026-03-15. Rewritten after this spec is approved and **before** implementation, so
-every configuration the wizard must handle can be looked at without a trip to Krk.
+### 4.10 The simulator — rewritten 2026-10-02
+Deleted 2026-03-15. **Rewritten 2026-10-02** against `opta/*` (`a8386c0`,
+`simulator/pedestal_simulator.py`), tested by `tests/backend/test_simulator.py`. *Corrected
+2026-10-16: this heading said it did not exist yet.*
 
 ---
 
@@ -464,6 +471,10 @@ L1  /marina                     Dashboard — one row per berth
 ```
 
 ## 5.1 L1 — Dashboard
+
+*The drawing is of 2026-10-01. Superseded in part by the decisions of 2026-10-12 (§0.1): amps,
+not watts (2); water per pedestal, not per berth (1); light and guard on a pedestal strip (4).
+The built screen follows the decisions, not the drawing.*
 
 ```
 ┌────────────────────────────────────────────────────────┐
@@ -550,6 +561,9 @@ Readings still render — they are real, they arrived over MQTT. **Controls are 
 sentence in their place. Never a greyed-out button.
 
 ## 5.3 L2 — Berth detail
+
+*The drawing is of 2026-10-01: "W" is amps since decision 2, and the berth has no water line since
+decision 1 (§0.1).*
 
 ```
 ┌────────────────────────────────────────────────────────┐
@@ -879,7 +893,7 @@ Every widget, its source, and what it does when the source is absent.
 | `<OutletSpec>` | `rated_amps`, `phases`, `rated_liters_per_min` | `GET /api/nfc/outlets/{cabinet}` | "Not reported by this cabinet yet" |
 | `<PhaseBlock>` | `currentAmpsL1..L3` | WS `meter_telemetry` | **absent** when the payload has no per-phase keys (§4.7) |
 | `<ConsumptionFigure>` | `energy_kwh` / `water_liters` + `consumption_source` | CORE | **—** with "not measured"; never `0.0` |
-| `<ConsumptionHistory>` | interval rows | `GET /api/pedestals/{id}/usage/history` | "No readings yet" |
+| `<ConsumptionHistory>` | **session rows** with `consumption_source` and both register readings — owner, 2026-10-15 (§0.2 "L3 history"; *corrected 2026-10-16, this row said interval rows*) | `GET /api/pedestals/{id}/usage/history` | "No readings yet" |
 | `<VesselMatch>` | `vessel_matches`, photos | existing occupancy endpoints | hidden unless `vessel_match_configured` |
 | `<AlarmList>` | marina-scoped alarms | **new** `GET /api/marina/alarms` | "No alarms" |
 | `<GuardEvents>` | guard events; Arm / Switch off; playback; labels (§5.5) | `GET /api/guard/status`, `GET /api/guard/events`, `POST /api/guard/{id}/enable|disable` (admin), `GET /api/guard/events/{id}/video` (admin), `POST /api/guard/events/{id}/label` | "No events" — **NOT BUILT** |
@@ -901,7 +915,8 @@ Part B was built 2026-10-12 and proven on dev (§14). **The switch was made 2026
 **DECIDED — one new backend endpoint for the reduction, two for the rest.**
 `GET /api/marina/berths`, `GET /api/marina/berths/{id}`, `GET /api/marina/alarms`, and
 `GET/PUT /api/marina/berth-assignments`. Nothing else is new; everything else reuses what
-exists.
+exists. *Since then, also new: `GET /api/pedestals/{id}/usage/staff-reports` (2026-10-14, §0.2
+plan item 4); and, specified 2026-10-16 and not built, §5.5 and §17.*
 
 ---
 
@@ -943,8 +958,8 @@ three items are admin-gated) and the per-card figure count (I said 11; the card 
 | Pages | **12** | 12 kept for admin, **+1** marina root | `ls pages/` |
 | Numbers on one dashboard tile | **5** (temp °C, moisture %, heartbeat age, pending count, active count) | **2** on an L1 row (amps, litres/min) — *amps since 2026-10-12, decision 2* | `PedestalCard.tsx:93-135` |
 | Distinct indicators on one dashboard tile | **10** (5 numbers + `data_mode` / `initialized` / `ALARM` badges + OPTA and Cam dots) | **4** (status, power, water, guard) | same |
-| Largest single component | **1 468 lines, 27 `useState`** (`PedestalControlCenter`) | **no marina component over 250 lines** — *2026-10-12: the limit STAYS; split inside block 4 — done 2026-10-15, largest now 234 (TC-UIR-02)* | `wc -l`, `grep -c useState` |
-| Total lines across `components/pedestal/**` | **5 075** across 16 files | marina profile adds **under 1 200**, reuses none of it — *the limit STAYS; owner, 2026-10-15: the limit is now **2 507** (the size with block 4 complete, .ts and .tsx), TC-UIR-03* | `wc -l` |
+| Largest single component | **1 468 lines, 27 `useState`** (`PedestalControlCenter`) | **no marina component over 250 lines** — *2026-10-12: the limit STAYS; split inside block 4 — done 2026-10-15, largest now 234 (TC-UIR-09)* | `wc -l`, `grep -c useState` |
+| Total lines across `components/pedestal/**` | **5 075** across 16 files | marina profile adds **under 1 200**, reuses none of it — *the limit STAYS; owner, 2026-10-15: the limit is now **2 507** (the size with block 4 complete, .ts and .tsx), TC-UIR-10* | `wc -l` |
 | Status representations | colour-only in places | **always colour + icon + word** | `TC-UIR-01` |
 | Marina-facing strings for a status | ad hoc per component | **one table, 11 entries** | §3 |
 
@@ -957,7 +972,9 @@ questions you have already said not to guess at. The UI v2 target is **2** — m
 the control on the row — and that one is countable from the wireframe.
 
 **Acceptance:** all nine measured rows met, the tap count measured in the walkthrough and at
-most 2, plus `TC-UIB-01` (the app boots) and `TC-UIR-01..08` green.
+most 2, plus `TC-UIB-01` (the app boots) and `TC-UIR-01..08` green. *Status 2026-10-16: written
+and green — TC-UIR-01 (+01c), 03, 04, 08, 09, 10; NOT written — 02, 05, 06, 07 (§0.2 "Described
+here, not built").*
 **A failure on any row is a failure of the profile, not a note for later.**
 
 ### Tests, in build order — the boot gate first
@@ -991,7 +1008,7 @@ exits 0 when the backend is not on `:8000`, and it did exactly that on the last 
 |---|---|---|
 | 1 | `berth_assignments` + `GET /api/marina/berths` + the reduction | the contract answerable with `curl`, no UI |
 | 2 | `TC-UIB-01` + fix the silent E2E skip | a gate that cannot pass vacuously |
-| 3 | **Simulator**, rewritten against today's contract | 1–4 berths, 6 outlets, shared valve, three-phase Q1, valve state — all renderable without a trip to Krk |
+| 3 | **Simulator**, rewritten against today's contract — **DONE 2026-10-02 (`a8386c0`)** | 1–4 berths, 6 outlets, shared valve, three-phase Q1, valve state — all renderable without a trip to Krk |
 | 4 | L1 dashboard, narrow-first, `<Status>` + string table | the screen the marina uses daily |
 | 5 | Setup wizard | installation captures what step 1 needs |
 | 6 | L2 berth detail incl. per-phase and provenance | the investigation screen |
@@ -1010,7 +1027,8 @@ fixed shape. Same discipline that made guard's measurement stage useful before i
 
 Found during the foundation work. **Yours to prioritise; none of it is in the build above.**
 
-**Status 2026-10-12, D14–D19 — none built:**
+**Status of D14–D19, updated 2026-10-16** *(this heading said "none built"; D14, D15 and D19
+are built):*
 
 | | State | Evidence |
 |---|---|---|
@@ -1020,6 +1038,9 @@ Found during the foundation work. **Yours to prioritise; none of it is in the bu
 | D17 | NOT BUILT — not reproduced off the cabinet | §13 check 17 measures it |
 | D18 | NOT BUILT — cabinet configuration | `external_api_admin.py` default `[]` |
 | D19 | **BUILT+PROVEN 2026-10-14** | The only live display was `PedestalView.tsx:508` ("Power … W"); removed — the meter's `current_amps` is shown in the same block. `SocketCard.tsx` and `ActiveSessions.tsx` also rendered it but were imported nowhere: deleted. `test_ui_no_powerkw_watts.py` TC-UIR-04: no `.tsx` reads `.watts`; failed on the code before with all three. The backend still computes and stores `power_watts` (`mqtt_handlers.py`) — nothing renders it |
+
+*The table below is each item's ORIGINAL description (2026-10-01/02). Its current state is the
+table above — where they differ (D14, D15, D19), the table above is right.*
 
 | | Item | Why deferred |
 |---|---|---|
@@ -1310,7 +1331,26 @@ The next `upgrade.sh` binds loopback again (the step is idempotent): a rollback 
 is decided otherwise. Nothing in this list touches sshd, cloudflared, tailscaled or any network
 or firewall configuration.
 
-## 13.12 Not yet on this list
+## 13.12 The documents — before the release is declared done (owner, 2026-10-16)
+
+What is done and committed to `main` must be in the two PDFs: the **ERP specification** and the
+**user guide**, both in the project folder. Both are generated by scripts in the repo
+(`docs/generated_documents.md`), so regenerating them is a step of the release, and the release
+is NOT done until these rows pass.
+
+| # | Check | Command / step | Expected | If it fails | Outcome |
+|---|---|---|---|---|---|
+| DOC.1 | **ERP specification v4, under a NEW name** | `generate_erp_integration_doc.py` with `OUTPUT_PATH` → `Cloud_IOT_ERP_Integration_Guide_v4.pdf` (today it writes `_v3.pdf`, `:18`), its content corrected to the code first: event names, the §18 envelope and signature, `berth_id` int or null, authentication (§18.5) | `Cloud_IOT_ERP_Integration_Guide_v4.pdf` in the project folder; its events, envelope and auth match `erp_session_payload_contract.md` | The release is not done | ☐ |
+| DOC.2 | **v3 untouched** — it is the record of what the ERP was given | `git diff --stat <release> -- Cloud_IOT_ERP_Integration_Guide_v3.pdf` | No change | Restore it from git; v3 is never regenerated | ☐ |
+| DOC.3 | **The user guide** — **OPEN: which file** (below) | the generator, after its text is checked against the screens of this release (§5, §5.5, nav) | The guide in the project folder describes this release's screens | The release is not done | ☐ |
+
+**OPEN — the owner: which is "the user guide"?** Two generators exist:
+`scripts/generate_pedestal_user_guide.py` → `Pedestal_User_Guide.pdf` (project folder, a PDF),
+and `scripts/generate_user_guide.py` → `docs/User Guide.docx` (a .docx, kept as the record of
+v3.34 and never regenerated over, `docs/generated_documents.md`). The first matches "PDF in the
+project folder"; whether it, a new file, or both is meant is the owner's call.
+
+## 13.13 Not yet on this list
 
 These are not built yet, so they have no check yet. Each gets its own check in the commit that
 builds it:

@@ -1,5 +1,7 @@
 # Deferred: documentation pass scope (do NOT write yet)
 
+> **Correction of 2026-10-16:** `NO_DISK` is a flag, not a state (`watchdog.py:50`).
+
 **Status: NOT STARTED, deliberately.** Agreed sequence:
 
 > **B1 approval → Stage B → UI v2 → deploy & activate → THEN documentation.**

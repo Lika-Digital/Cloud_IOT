@@ -1,6 +1,7 @@
 """TC-UIR-01 — no raw status colour in the marina profile, outside the one component that owns it.
-TC-UIR-02 — no marina component over 250 lines (§9), added 2026-10-15 with the block 4 splits.
-TC-UIR-03 — the marina profile as a whole stays within 2 507 lines (§9, owner 2026-10-15).
+TC-UIR-09 — no marina component over 250 lines (§9), added 2026-10-15 with the block 4 splits.
+TC-UIR-10 — the marina profile as a whole stays within 2 507 lines (§9, owner 2026-10-15).
+(Committed as TC-UIR-02/03, ids the spec and marina.spec.ts already used; renamed 2026-10-16.)
 
 docs/ui_v2_spec.md §4: status is colour + icon + word, all three, always, and the enforcement is
 a TEST, not a lint rule (the gate's eslint never ran — D13). Until 2026-10-12 this test was
@@ -91,11 +92,11 @@ def test_tc_uir_01c_block_4_done_means_no_exemptions():
             f"block 4 is marked {state!r} but files are still exempt: {sorted(EXEMPT_UNTIL_BLOCK_4)}")
 
 
-def test_tc_uir_02_no_marina_component_over_250_lines():
+def test_tc_uir_09_no_marina_component_over_250_lines():
     """§9 — the limit existed only as a sentence in the spec until 2026-10-15.
 
     FAILS on the code before the splits (shown 2026-10-15): MarinaDashboard 402, MarinaSetup 307,
-    BerthDetail 264. The profile total is TC-UIR-03."""
+    BerthDetail 264. The profile total is TC-UIR-10."""
     seen = list(_files())
     assert len(seen) >= 8, f"the scan saw only {len(seen)} files — it is not looking"
     over = {p.relative_to(SRC).as_posix(): n for p in seen
@@ -103,7 +104,7 @@ def test_tc_uir_02_no_marina_component_over_250_lines():
     assert not over, f"over {MAX_LINES} lines (§9): {over}"
 
 
-def test_tc_uir_03_the_marina_profile_stays_within_its_total():
+def test_tc_uir_10_the_marina_profile_stays_within_its_total():
     """§9 total, owner 2026-10-15: the size with block 4 complete, 2 507 lines. Counts .ts and .tsx, so a hook moved out of a
     component still counts. The scan must see the files it is limiting (not a vacuous zero)."""
     files = [p for d in SCOPE for p in sorted(d.rglob("*.ts*")) if p.suffix in (".ts", ".tsx")]

@@ -1,5 +1,11 @@
 # Mobile API Contract (v3.6)
 
+> **⚠ SUPERSEDED — 2026-10-16.** The mobile app does not talk to the cabinet (`docs/ui_v2_spec.md`
+> §15): `/ws` takes operator tokens only, in a header — `ws_session` tokens and `/ws?token=` are
+> refused (`routers/websocket.py`). The customer routes still registered on the backend are legacy
+> from the testing phase. **The truth:** `docs/erp_session_payload_contract.md` and
+> `docs/ui_v2_spec.md` §14–§15.
+
 > ### ⚠ QR IS DORMANT — decision of 2026-09-30
 >
 > **NFC is the supported provisioning and customer-entry path.** The QR code, the

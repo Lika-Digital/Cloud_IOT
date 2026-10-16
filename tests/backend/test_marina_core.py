@@ -402,20 +402,20 @@ def test_tc_mc_07_a_berth_with_no_socket_says_so(client, auth_headers, marina_pi
 
 
 def test_tc_mc_12_guard_unavailable_is_never_off(client, auth_headers, marina_pid):
-    """Off is a decision someone made; unavailable is a fault.
+    """Off is a decision someone made; no guard is not off.
 
-    With no guard wiring for this cabinet the state must be `unavailable`. Reporting `off`
-    would tell an operator guard was deliberately disabled when in fact nothing is watching —
-    and the whole liveness design exists to keep those apart.
+    With no guard wiring for this cabinet the state must not be `off`: that would tell an
+    operator guard was deliberately disabled when in fact nothing is watching. Updated
+    2026-10-16 (owner, spec §5.5.1): no guard row reads "No guard on this pedestal" (`none`),
+    no longer the collective "Guard unavailable".
     """
     pid, _ = marina_pid
     ped = _core(client, auth_headers, pid)
-    assert ped["guard"]["state"] in ("unavailable", "off", "on", "paused")
     assert ped["guard"]["state"] != "off", (
         "no guard worker for this pedestal reported as 'off' — that claims a decision nobody "
         "made"
     )
-    assert "unavailable" in ped["guard"]["sentence"].lower()
+    assert (ped["guard"]["state"], ped["guard"]["sentence"]) == ("none", "No guard on this pedestal")
 
 
 def test_tc_mc_10_unmeasurable_consumption_surfaces(client, auth_headers, marina_pid):

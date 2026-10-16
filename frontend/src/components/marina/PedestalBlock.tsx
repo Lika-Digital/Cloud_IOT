@@ -143,13 +143,13 @@ export function PedestalBlock({ pedestal, showAll, onChanged }: {
             className={
               pedestal.guard.state === 'on'
                 ? TONE.okText
-                : pedestal.guard.state === 'unavailable'
+                : pedestal.guard.state === 'not_answering' || pedestal.guard.state === 'not_measured'
                   ? TONE.noticeText
                   : 'text-gray-300'
             }
           >
-            {/* The server's sentence verbatim. 'unavailable' is a fault and must never be
-                shown as 'off', which would claim a decision nobody made. */}
+            {/* The server's sentence verbatim (§5.5.1). 'not_answering' is a fault and must
+                never be shown as 'off', which would claim a decision nobody made. */}
             {pedestal.guard.sentence}
           </span>
         </Link>

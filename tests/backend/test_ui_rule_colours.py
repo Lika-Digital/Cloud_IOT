@@ -1,6 +1,7 @@
 """TC-UIR-01 — no raw status colour in the marina profile, outside the one component that owns it.
 TC-UIR-09 — no marina component over 250 lines (§9), added 2026-10-15 with the block 4 splits.
-TC-UIR-10 — the marina profile as a whole stays within 2 507 lines (§9, owner 2026-10-15).
+TC-UIR-10 — the marina profile as a whole stays within 2 752 lines (§9, owner 2026-10-15; raised
+2026-10-16 for the guard UI).
 (Committed as TC-UIR-02/03, ids the spec and marina.spec.ts already used; renamed 2026-10-16.)
 
 docs/ui_v2_spec.md §4: status is colour + icon + word, all three, always, and the enforcement is
@@ -46,7 +47,9 @@ MAX_LINES = 250
 # §9, the whole profile (pages/marina + components/marina, .ts and .tsx). Owner, 2026-10-15: the
 # old target "under 1 200" is replaced by the measured size with block 4 complete. Raising it is
 # the owner's decision, made in the spec, not by editing this number to get a green gate.
-MAX_TOTAL_LINES = 2507
+# 2026-10-16, owner: raised to 2 752 with the guard UI — "a measure of movement, not a budget";
+# nothing was cut. The rule stands: raised only by the owner, in the spec.
+MAX_TOTAL_LINES = 2752
 
 
 def _files():

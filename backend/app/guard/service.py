@@ -53,16 +53,25 @@ from ..config import settings
 from ..time_utils import iso_z, now_iso
 from .models import (
     BAND_ALARM,
+    KIND_AUTO_RESUMED,
+    KIND_PAUSED_CPU,
+    STATE_ALARM,
     STATE_ARMED,
     STATE_ARMING,
     STATE_OFF,
+    STATE_RECORDING,
     STATE_SUSPENDED_CPU,
     STATE_UNAVAILABLE,
     GuardConfig,
     GuardDetection,
     GuardEvent,
     GuardRecording,
+    GuardStateEvent,
 )
+
+# The worker is watching (spec §5.5.1 S3).
+ON_STATES = (STATE_ARMING, STATE_ARMED, STATE_ALARM, STATE_RECORDING)
+REASON_NO_ACK = "the guard worker did not acknowledge"
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +136,12 @@ class WorkerLiveness:
         self._seen: dict[int, float] = {}
         self._reported_state: dict[int, dict] = {}
         self._pending_acks: dict[str, tuple[int, float]] = {}   # req_id -> (cam, sent_at)
+        # Commands the BACKEND sent on its own (the re-arm after a worker restart, §5.5.1):
+        # until confirmed they read "not answering", a person's command reads the worker.
+        self._auto_cmds: set[str] = set()
+        # A command not acknowledged in time (§5.5.1 item 2). Kept until the worker
+        # acknowledges a later command or reports the state that was asked for.
+        self._ack_missed: dict[int, str] = {}
 
     def mark_seen(self, camera_id: int, now: float | None = None) -> None:
         self._seen[camera_id] = now if now is not None else time.time()
@@ -147,14 +162,38 @@ class WorkerLiveness:
     def reported(self, camera_id: int) -> dict:
         return self._reported_state.get(camera_id, {})
 
-    def expect_ack(self, req_id: str, camera_id: int, now: float | None = None) -> None:
+    def expect_ack(self, req_id: str, camera_id: int, now: float | None = None,
+                   *, auto: bool = False) -> None:
         self._pending_acks[req_id] = (camera_id, now if now is not None else time.time())
+        if auto:
+            self._auto_cmds.add(req_id)
 
-    def ack_received(self, req_id: str, camera_id: int | None = None) -> None:
-        """Clear a pending ack. With `camera_id`, only if the command went to that camera."""
+    def ack_received(self, req_id: str, camera_id: int | None = None) -> bool:
+        """Clear a pending ack. With `camera_id`, only if the command went to that camera.
+        True when it matched a command still waiting."""
         pending = self._pending_acks.get(req_id)
         if pending is not None and (camera_id is None or pending[0] == camera_id):
             self._pending_acks.pop(req_id, None)
+            self._auto_cmds.discard(req_id)
+            return True
+        return False
+
+    def waiting(self, camera_id: int, now: float | None = None) -> str | None:
+        """"auto" / "person" when a command to this camera waits within the ack timeout."""
+        now = now if now is not None else time.time()
+        kinds = {("auto" if rid in self._auto_cmds else "person")
+                 for rid, (cam, sent) in self._pending_acks.items()
+                 if cam == camera_id and now - sent <= settings.guard_ack_timeout_s}
+        return "auto" if "auto" in kinds else ("person" if kinds else None)
+
+    def mark_ack_missed(self, camera_id: int, reason: str = REASON_NO_ACK) -> None:
+        self._ack_missed[camera_id] = reason
+
+    def ack_missed(self, camera_id: int) -> str | None:
+        return self._ack_missed.get(camera_id)
+
+    def clear_ack_missed(self, camera_id: int) -> None:
+        self._ack_missed.pop(camera_id, None)
 
     def overdue_acks(self, now: float | None = None) -> list[tuple[str, int]]:
         now = now if now is not None else time.time()
@@ -182,6 +221,7 @@ class WorkerLiveness:
     def forget(self, camera_id: int) -> None:
         self._seen.pop(camera_id, None)
         self._reported_state.pop(camera_id, None)
+        self._ack_missed.pop(camera_id, None)
 
 
 liveness = WorkerLiveness()
@@ -236,22 +276,47 @@ def effective_state(db: DBSession, cfg: GuardConfig, now: float | None = None) -
     reported = liveness.reported(cfg.camera_id)
     alive = liveness.is_alive(cfg.camera_id, now)
     seen = liveness.seen_at(cfg.camera_id)
+    rep = reported.get("state")
+    waiting = liveness.waiting(cfg.camera_id, now)
+    missed = liveness.ack_missed(cfg.camera_id)
 
-    if cfg.desired_state == STATE_OFF:
-        state = STATE_OFF
-        reason = None
-    elif cfg.desired_state == STATE_SUSPENDED_CPU:
-        state = STATE_SUSPENDED_CPU
-        reason = cfg.suspended_reason
-    elif not alive:
+    # Spec §5.5.1 (2026-10-16): "not answering" first, whatever was switched on or off — a dead
+    # worker that was switched off is a fault, not "off".
+    if not alive:
         state = STATE_UNAVAILABLE
         reason = (
             "the guard worker is not responding"
             + (f" (last seen {int(now - seen)}s ago)" if seen else " (never seen)")
         )
+    elif missed:
+        state, reason = STATE_UNAVAILABLE, missed
+    elif rep is None:
+        # Alive (alarm or detection traffic) but its state never said: today's default was
+        # ARMING, i.e. "Guard on" for a state nobody reported.
+        state, reason = STATE_UNAVAILABLE, "the worker has not reported its state"
+    elif waiting == "auto":
+        state = STATE_UNAVAILABLE
+        reason = "re-arming after the worker restarted — waiting for it to confirm"
+    elif waiting == "person":
+        # A person's command on its way: the worker's own report, until it confirms.
+        state, reason = rep, reported.get("reason")
+    elif cfg.desired_state == STATE_OFF:
+        # §5.5.8 Q4 is OPEN for a worker that reports anything but OFF here: today's answer
+        # stands until the owner decides.
+        state, reason = STATE_OFF, None
+    elif cfg.desired_state == STATE_SUSPENDED_CPU:
+        state, reason = STATE_SUSPENDED_CPU, cfg.suspended_reason
+    elif rep == STATE_OFF:
+        state = STATE_UNAVAILABLE
+        reason = "the worker reports off although guard is switched on"
     else:
-        state = reported.get("state") or STATE_ARMING
-        reason = reported.get("reason")
+        state, reason = rep, reported.get("reason")
+
+    from ..services.guard_state import sentence_for
+    flags = reported.get("flags", []) or []
+    sentence_code, sentence = sentence_for(state, flags)
+    health = reported.get("health", {}) or {}
+    used, cap = health.get("auto_resumes_used"), health.get("max_auto_resumes")
 
     return {
         "camera_id": cfg.camera_id,
@@ -267,13 +332,20 @@ def effective_state(db: DBSession, cfg: GuardConfig, now: float | None = None) -
         "worker_alive": alive,
         "worker_seen_at": iso_z(datetime.utcfromtimestamp(seen)) if seen else None,
         "health": reported.get("health", {}),
+        # §5.5.1 — the ONE sentence for this state; /marina shows the same (TC-GU-15).
+        "sentence_code": sentence_code,
+        "sentence": sentence,
+        # §5.5.1 item 3 — None when the worker has not told us (shown as "not measured").
+        "auto_resumes": ({"used": int(used), "max": int(cap)}
+                         if isinstance(used, (int, float)) and isinstance(cap, (int, float))
+                         else None),
     }
 
 
 # ─── commands (backend → worker) ─────────────────────────────────────────────
 
 def publish_command(db: DBSession, cfg: GuardConfig, cmd: str,
-                    *, actor: str | None = None) -> str:
+                    *, actor: str | None = None, auto: bool = False) -> str:
     """Publish arm/disarm/rearm and register the ack we expect. Returns the req_id."""
     from ..services.mqtt_client import mqtt_service
 
@@ -290,7 +362,7 @@ def publish_command(db: DBSession, cfg: GuardConfig, cmd: str,
     }
     # NOT retained — see the module docstring.
     mqtt_service.publish(topic_cmd(cfg.camera_id), json.dumps(payload), qos=1)
-    liveness.expect_ack(req_id, cfg.camera_id)
+    liveness.expect_ack(req_id, cfg.camera_id, auto=auto)
     logger.info("[Guard] cmd=%s camera=%d req_id=%s actor=%s config_version=%d",
                 cmd, cfg.camera_id, req_id, actor, cfg.config_version)
     return req_id
@@ -337,10 +409,12 @@ async def handle_guard_message(topic: str, payload: str, *, retained: bool = Fal
 
 async def _on_ack(camera_id: int, data: dict, retained: bool) -> None:
     req_id = data.get("req_id", "")
-    # liveness.ack_received(req_id)
     # The ack must be for a command sent to THIS camera — a req_id is not proof on its own.
-    liveness.ack_received(req_id, camera_id)
+    if liveness.ack_received(req_id, camera_id):
+        liveness.clear_ack_missed(camera_id)
     liveness.mark_seen(camera_id)
+    if data.get("state") and data.get("state") != STATE_UNAVAILABLE:
+        _update_reported(camera_id, state=data.get("state"))
     logger.info("[Guard] ack camera=%d req_id=%s accepted=%s state=%s",
                 camera_id, req_id, data.get("accepted"), data.get("state"))
     await _broadcast_state(camera_id)
@@ -393,30 +467,101 @@ async def _on_state(camera_id: int, data: dict, retained: bool) -> None:
     else:
         liveness.mark_seen(camera_id)
 
-    # A worker reporting SUSPENDED_CPU must survive a backend restart as suspended, never as
-    # silently armed, so the fact is persisted on the config row.
-    if data.get("state") == STATE_SUSPENDED_CPU and not retained:
-        from ..database import SessionLocal
-        db = SessionLocal()
-        try:
-            cfg = db.get(GuardConfig, camera_id)
-            if cfg is not None and cfg.desired_state == STATE_ARMED:
-                cfg.desired_state = STATE_SUSPENDED_CPU
-                cfg.suspended_reason = data.get("reason") or "CPU limit exceeded"
-                cfg.suspended_at = datetime.utcnow()
-                db.commit()
-        finally:
-            db.close()
+    if not retained and reported_state != STATE_UNAVAILABLE:
+        _on_live_state(camera_id, data)
     await _broadcast_state(camera_id)
+
+
+def _on_live_state(camera_id: int, data: dict) -> None:
+    """What a LIVE state message changes in the database (spec §5.5.1). Never a retained one.
+
+    * no row yet → the row is created here, desired OFF, with the pedestal the worker names —
+      the only place a row is created (2026-10-16); without `pedestal_id` none is.
+    * desired ARMED, worker SUSPENDED_CPU → the pause is persisted (it must survive a backend
+      restart as suspended, never as silently armed) and listed.
+    * desired SUSPENDED_CPU, worker ARMED → the worker lifted its own pause: desired returns to
+      ARMED, the last thing a person asked for (owner, 2026-10-16), and it is listed.
+    * desired ARMED, worker OFF → it restarted: the backend sends the arm once, and the sentence
+      is "not answering" until the worker confirms. Never for SUSPENDED_CPU.
+    """
+    from ..database import SessionLocal
+    state = data.get("state")
+    db = SessionLocal()
+    try:
+        cfg = db.get(GuardConfig, camera_id)
+        if cfg is None:
+            pid = data.get("pedestal_id")
+            if pid is None:
+                logger.warning("[Guard] camera=%d announced itself without pedestal_id — no "
+                               "row created (spec §5.5.1)", camera_id)
+                return
+            cfg = GuardConfig(camera_id=camera_id, pedestal_id=int(pid), desired_state=STATE_OFF)
+            db.add(cfg)
+            db.commit()
+            logger.info("[Guard] camera=%d pedestal=%s: row created from the worker's announce",
+                        camera_id, pid)
+        elif cfg.desired_state == STATE_ARMED and state == STATE_SUSPENDED_CPU:
+            cfg.desired_state = STATE_SUSPENDED_CPU
+            cfg.suspended_reason = data.get("reason") or "CPU limit exceeded"
+            cfg.suspended_at = datetime.utcnow()
+            db.add(GuardStateEvent(camera_id=camera_id, kind=KIND_PAUSED_CPU,
+                                   reason=cfg.suspended_reason))
+            db.commit()
+        elif cfg.desired_state == STATE_SUSPENDED_CPU and state == STATE_ARMED:
+            cfg.desired_state = STATE_ARMED
+            cfg.suspended_reason = None
+            cfg.suspended_at = None
+            db.add(GuardStateEvent(camera_id=camera_id, kind=KIND_AUTO_RESUMED,
+                                   reason=data.get("reason")))
+            db.commit()
+            logger.info("[Guard] camera=%d resumed on its own — desired back to ARMED",
+                        camera_id)
+        elif (cfg.desired_state == STATE_ARMED and state == STATE_OFF
+              and liveness.waiting(camera_id) is None):
+            publish_command(db, cfg, CMD_ARM, actor="backend: worker restarted", auto=True)
+            logger.warning("[Guard] camera=%d came up OFF while guard is switched on — arm "
+                           "sent once", camera_id)
+        _clear_missed_if_matching(cfg, state)
+    finally:
+        db.close()
+
+
+def _clear_missed_if_matching(cfg: GuardConfig, state: str | None) -> None:
+    """The worker reports what was asked for → a missed acknowledgement is over."""
+    if ((cfg.desired_state == STATE_OFF and state == STATE_OFF)
+            or (cfg.desired_state == STATE_ARMED and state in ON_STATES)
+            or (cfg.desired_state == STATE_SUSPENDED_CPU and state == STATE_SUSPENDED_CPU)):
+        liveness.clear_ack_missed(cfg.camera_id)
+
+
+def _update_reported(camera_id: int, **fields) -> None:
+    current = dict(liveness.reported(camera_id))
+    current.update({k: v for k, v in fields.items() if v is not None})
+    liveness.set_reported(camera_id, current)
 
 
 async def _on_health(camera_id: int, data: dict, retained: bool) -> None:
     if retained:
         return
     liveness.mark_seen(camera_id)
-    current = liveness.reported(camera_id)
+    current = dict(liveness.reported(camera_id))
     current["health"] = data
+    # The worker's state rides on every health message (§5.5.1): a backend that missed the
+    # state message must not keep an older state than the worker's newest word.
+    if data.get("state") and data.get("state") != STATE_UNAVAILABLE:
+        current["state"] = data["state"]
+        if isinstance(data.get("flags"), list):
+            current["flags"] = data["flags"]
     liveness.set_reported(camera_id, current)
+    if data.get("state"):
+        from ..database import SessionLocal
+        db = SessionLocal()
+        try:
+            cfg = db.get(GuardConfig, camera_id)
+            if cfg is not None:
+                _clear_missed_if_matching(cfg, data.get("state"))
+        finally:
+            db.close()
     await _broadcast_state(camera_id, health_only=True)
 
 
@@ -657,6 +802,7 @@ async def check_overdue_acks() -> None:
     overdue = liveness.overdue_acks()
     for req_id, camera_id in overdue:
         liveness.ack_received(req_id)      # stop re-reporting the same one
+        liveness.mark_ack_missed(camera_id)
         logger.warning(
             "[Guard] camera=%d did not acknowledge req_id=%s within %.0fs — reporting "
             "UNAVAILABLE (desired state unchanged)",

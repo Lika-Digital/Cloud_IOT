@@ -17,7 +17,7 @@ import { getMarinaAlarms, type MarinaAlarm } from '../../api/marina'
 
 type State =
   | { kind: 'loading' }
-  | { kind: 'ready'; alarms: MarinaAlarm[] }
+  | { kind: 'ready'; alarms: MarinaAlarm[]; guardMeasured: boolean }
   | { kind: 'error'; message: string; stale: MarinaAlarm[] | null }
 
 function describeError(e: unknown): string {
@@ -43,8 +43,10 @@ export default function MarinaAlarms() {
 
   const load = useCallback(async () => {
     try {
-      const { alarms } = await getMarinaAlarms()
-      setState({ kind: 'ready', alarms })
+      const { alarms, guard } = await getMarinaAlarms()
+      // §5.5.6: guard events that could not be read are "Not measured" — never a list or a
+      // count that looks like "none".
+      setState({ kind: 'ready', alarms, guardMeasured: guard?.measured !== false })
     } catch (e) {
       setState((prev) => ({
         kind: 'error',
@@ -68,6 +70,8 @@ export default function MarinaAlarms() {
     [alarms, activeOnly],
   )
   const activeCount = (alarms ?? []).filter((a) => a.active).length
+  const guardMeasured = state.kind === 'ready' ? state.guardMeasured : true
+  const count = (n: number) => (guardMeasured ? String(n) : 'not measured')
 
   if (state.kind === 'loading') {
     return <div className="p-4 text-sm text-gray-400" role="status">Loading alarms…</div>
@@ -108,7 +112,7 @@ export default function MarinaAlarms() {
                 : 'border-gray-600 text-gray-300 hover:bg-gray-700/60'
             }`}
           >
-            Still active ({activeCount})
+            Still active ({count(activeCount)})
           </button>
           <button
             type="button"
@@ -120,7 +124,7 @@ export default function MarinaAlarms() {
                 : 'border-gray-600 text-gray-300 hover:bg-gray-700/60'
             }`}
           >
-            All ({alarms.length})
+            All ({count(alarms.length)})
           </button>
         </div>
       </div>
@@ -134,9 +138,18 @@ export default function MarinaAlarms() {
         </p>
       )}
 
+      {!guardMeasured && (
+        <p className={`text-xs border ${TONE.notice} rounded px-2 py-1.5 mb-3`}
+           data-testid="alarms-guard-not-measured">
+          Guard events: Not measured — they could not be read, so this list may be missing them.
+        </p>
+      )}
+
       {shown.length === 0 ? (
         <p className="text-sm text-gray-400">
-          {activeOnly ? 'Nothing is wrong right now.' : 'No alarms have been recorded.'}
+          {!guardMeasured
+            ? 'No other alarms.'
+            : activeOnly ? 'Nothing is wrong right now.' : 'No alarms have been recorded.'}
         </p>
       ) : (
         <ul className="flex flex-col gap-2">

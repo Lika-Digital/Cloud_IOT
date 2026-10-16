@@ -317,39 +317,53 @@ def _water_outlets(db: DBSession, pedestal_id: int, *, gate: "Gate",
 
 
 def _guard_block(db: DBSession, pedestal_id: int) -> dict:
-    """Guard, mapped to the four words the marina sees.
+    """Guard, in the words of spec §5.5.1 — one sentence per state, never one "unavailable" for
+    all of them (owner, 2026-10-16).
 
-    `UNAVAILABLE` must never render as "Guard off". Off is a decision someone made;
-    unavailable is a fault. The whole liveness design exists to keep those apart, and
-    collapsing them here would throw it away at the last step.
+    The words come from `services.guard_state.sentence_for`, the same function
+    `/api/guard/status` uses, so the API and this page cannot disagree (TC-GU-15). A reading that
+    failed is "Not measured" (§5.5.6) — never "off", never "not answering": silence from the
+    worker is a measurement, an exception here is the absence of one.
     """
-    # 2026-10-12, block 3: services/guard_state did not exist, the ImportError landed here, and
-    # every pedestal read "Guard unavailable" whatever the guard was doing. It exists now and
-    # reads guard.service.effective_state. A failure to read it is still "unavailable".
     try:
-        from ..services.guard_state import current_guard_state
+        from ..services.guard_state import NO_GUARD, current_guard_state
         raw = current_guard_state(db, pedestal_id)
     except Exception:
         logger.exception("guard state for pedestal %s could not be read", pedestal_id)
-        return {"state": "unavailable", "sentence": "Guard unavailable", "scope": "pedestal"}
-    # raw is None when the pedestal has no guard configured at all. That still reads
-    # "unavailable", as before — whether it should say "no guard here" instead is the owner's
-    # decision (asked 2026-10-12), not changed silently.
+        return {"state": "not_measured", "sentence": "Not measured", "scope": "pedestal",
+                "auto_resumes": None}
+    if raw is None:
+        # No row: the worker has never announced itself (S1).
+        return {"state": "none", "sentence": NO_GUARD, "scope": "pedestal", "auto_resumes": None}
+    return {"state": raw["sentence_code"], "sentence": raw["sentence"], "scope": "pedestal",
+            "auto_resumes": raw.get("auto_resumes")}
 
-    s = (raw or {}).get("state", "UNAVAILABLE")
-    limited = bool((raw or {}).get("limited_visibility"))
 
-    if s in ("ARMED", "ALARM", "RECORDING", "ARMING"):
-        if limited:
-            return {"state": "paused", "sentence": "Guard paused — too dark to see",
-                    "scope": "pedestal"}
-        return {"state": "on", "sentence": "Guard on", "scope": "pedestal"}
-    if s == "OFF":
-        return {"state": "off", "sentence": "Guard off", "scope": "pedestal"}
-    if s in ("SUSPENDED_CPU", "NO_DISK"):
-        reason = "the pedestal is busy" if s == "SUSPENDED_CPU" else "there is no space to record"
-        return {"state": "paused", "sentence": f"Guard paused — {reason}", "scope": "pedestal"}
-    return {"state": "unavailable", "sentence": "Guard unavailable", "scope": "pedestal"}
+def _unlabelled_guard_pedestals(db: DBSession) -> set[int]:
+    """Pedestals with a guard event nobody has labelled yet — rank 7 (spec §5.5.3).
+
+    Read from `guard_events` directly: guard never writes `active_alarms`, so the alarm table
+    was dead text for guard. An event without a pedestal takes its camera's.
+    """
+    from ..guard.models import GuardConfig, GuardEvent
+    cam_to_ped = {c.camera_id: c.pedestal_id for c in db.query(GuardConfig).all()}
+    out: set[int] = set()
+    for ped, cam in (db.query(GuardEvent.pedestal_id, GuardEvent.camera_id)
+                     .filter(GuardEvent.label.is_(None)).all()):
+        pid = ped if ped is not None else cam_to_ped.get(cam)
+        if pid is not None:
+            out.add(pid)
+    return out
+
+
+def _guard_unreviewed(db: DBSession, pedestal_id: int) -> bool:
+    try:
+        return pedestal_id in _unlabelled_guard_pedestals(db)
+    except Exception:
+        # The berth line cannot say "not measured" for one rank; the guard line of the same
+        # pedestal and /marina/alarms do (§5.5.6). Logged, never silent.
+        logger.exception("guard events for pedestal %s could not be read", pedestal_id)
+        return False
 
 
 def _vessel_matches(berth) -> Optional[bool]:
@@ -485,9 +499,9 @@ def marina_berths(db: DBSession = Depends(get_db),
             moisture_alarm=any("moisture" in t or "leak" in t for t in alarm_types),
             temperature_alarm=any("temp" in t for t in alarm_types),
             breaker_tripped=any("breaker" in t for t in alarm_types),
-            guard_alarm_unreviewed=any(
-                "guard" in t or "unauthorized" in t for t in unreviewed_types
-            ),
+            # §5.5.3 (2026-10-16): from guard EVENTS. The customer `unauthorized_entry` alarm
+            # is not guard and no longer gives this sentence.
+            guard_alarm_unreviewed=_guard_unreviewed(db, pid),
         )
         facts_base.alarm_count = len(alarms)   # type: ignore[attr-defined]
 
@@ -567,9 +581,7 @@ def marina_berth_detail(berth_id: int,
         moisture_alarm=any("moisture" in t or "leak" in t for t in alarm_types),
         temperature_alarm=any("temp" in t for t in alarm_types),
         breaker_tripped=any("breaker" in t for t in alarm_types),
-        guard_alarm_unreviewed=any(
-            "guard" in t or "unauthorized" in t for t in unreviewed_types
-        ),
+        guard_alarm_unreviewed=_guard_unreviewed(db, pid),
     )
     facts_base.alarm_count = len(alarms)   # type: ignore[attr-defined]
 
@@ -705,7 +717,42 @@ def marina_alarms(db: DBSession = Depends(get_db),
             "resolved_at": iso_z(a.resolved_at) if a.resolved_at else None,
             "active": a.resolved_at is None,
         })
-    return {"alarms": out}
+
+    # §5.5.3 — guard events beside the other alarms: active while nobody has labelled them.
+    # A failed read is "Not measured" (§5.5.6), never an empty list that looks like "none".
+    guard = {"measured": True, "sentence": None}
+    try:
+        out.extend(_guard_alarm_rows(db, cabinets))
+    except Exception:
+        logger.exception("guard events could not be read for /marina/alarms")
+        guard = {"measured": False, "sentence": "Not measured"}
+    # Active first, newest first within each — the order the alarm table already had.
+    out.sort(key=lambda a: a["raised_at"] or "", reverse=True)
+    out.sort(key=lambda a: not a["active"])
+    return {"alarms": out, "guard": guard}
+
+
+def _guard_alarm_rows(db: DBSession, cabinets: dict) -> list[dict]:
+    from ..guard.models import GuardConfig, GuardEvent
+    cam_to_ped = {c.camera_id: c.pedestal_id for c in db.query(GuardConfig).all()}
+    rows = db.query(GuardEvent).order_by(GuardEvent.detected_at_utc.desc()).limit(200).all()
+    sentence = ms.SENTENCES["guard_unreviewed"]
+    out = []
+    for ev in rows:
+        pid = ev.pedestal_id if ev.pedestal_id is not None else cam_to_ped.get(ev.camera_id)
+        out.append({
+            "alarm_id": f"guard-{ev.id}",
+            "guard_event_id": ev.id,
+            "pedestal_id": pid,
+            "cabinet_id": cabinets.get(pid),
+            "status_code": sentence.code,
+            "sentence": sentence.text,
+            "severity": None,
+            "raised_at": iso_z(ev.detected_at_utc),
+            "resolved_at": iso_z(ev.labelled_at) if ev.label else None,
+            "active": ev.label is None,
+        })
+    return out
 
 
 def _alarm_code_for(alarm_type: str) -> str:
@@ -723,8 +770,8 @@ def _alarm_code_for(alarm_type: str) -> str:
         return "breaker_tripped"
     if "overload" in t or "auto_stop" in t:
         return "auto_off_overload"
-    if "guard" in t or "person" in t:
-        return "guard_unreviewed"
+    # "guard"/"person" no longer map to the guard sentence (§5.5.3, 2026-10-16): guard never
+    # writes this table, and a row that does is not guard — it reads "Something needs checking".
     if "meter" in t or "measure" in t:
         return "measurement_missing"
     return "unrecognised"

@@ -100,7 +100,7 @@ function nullHeavyCore() {
         available: false, unavailable_reason: 'standalone',
       }],
       light: { on: false, scope: 'pedestal', available: false, unavailable_reason: 'standalone' },
-      guard: { state: 'unavailable', sentence: 'Guard unavailable', scope: 'pedestal' },
+      guard: { state: 'not_answering', sentence: 'Guard not answering', scope: 'pedestal' },
       alarm_count: 0,
     }],
   }

@@ -1,9 +1,11 @@
 # Guard operator runbook — the watching week
 
-**Guard is fully operable from a terminal. No screen is required.** That is a step-5
-requirement, not a convenience: the guard admin screen (step 6) was cancelled and merged
-into UI v2, so during the watching week you arm guard, read state, list events and label
-alarms with `curl` and `mosquitto_sub` alone.
+**Corrected 2026-10-16:** guard now has a screen — `/marina/guard` (spec §5.5): the state as
+one sentence per state, **Arm / Switch off, the event list, playback and Correct / False alarm
+for admin**. Everything below still works from a terminal, which stays the fallback. Two things
+changed for curl too: a camera has a row only once its worker has announced itself (a command
+on a camera without one answers 404 "No guard on this pedestal"), and every command and every
+read of events, frames, recordings, detections and labels needs an **admin** token.
 
 Every command below is copy-paste. Set these once per shell:
 
@@ -35,8 +37,9 @@ curl -s -X POST $API/api/auth/verify-otp -H 'Content-Type: application/json' \
   -d '{"email":"you@example.com","otp":"123456"}'
 ```
 
-Roles: reading and **labelling** need any operator role; **arming, re-arming and config**
-need admin or monitor_control.
+Roles (2026-10-16, owner — spec §5.5.2, §5.5.5): `/api/guard/status` needs any operator role;
+**everything else — arming, re-arming, config, events, frames, recordings, detections and
+labelling — needs admin.** A `monitor_control` or `monitor` token gets 403.
 
 ---
 

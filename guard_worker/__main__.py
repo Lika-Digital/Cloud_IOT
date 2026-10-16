@@ -334,6 +334,9 @@ class GuardWorker:
     def publish_state(self, reason: str | None = None) -> None:
         self.publish("state", {
             "state": self.state,
+            # The backend creates this camera's row from the first live state, and needs the
+            # pedestal for it (spec §5.5.1, 2026-10-16) — never guessed from the camera id there.
+            "pedestal_id": self.cfg.pedestal_id,
             # current_flags reads the watchdog WITHOUT ticking it — a tick here would clear
             # segments_stalled and limited_visibility as a side effect of publishing.
             "flags": self.watchdog.current_flags,
@@ -729,6 +732,10 @@ class GuardWorker:
                 "config_version": self.config_version,
                 "capture_restarts": self.supervisor.restart_count if self.supervisor else 0,
                 "clips_pending": len(self._pending_clips),
+                # The automatic-resume budget, shown on /marina/guard (spec §5.5.1 item 3): a
+                # cabinet that keeps overloading must not look healthy while it drains.
+                "auto_resumes_used": self.watchdog.auto_resumes_used(now),
+                "max_auto_resumes": self.watchdog.cfg.max_auto_resumes,
             })
 
     def _run_retention(self) -> None:

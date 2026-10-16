@@ -15,6 +15,11 @@ the worker's liveness (desired ARMED + silent worker → UNAVAILABLE, never ARME
 
 TC-MGS-01/02/04/05 FAIL on the code before this change (shown 2026-10-12): it said
 "unavailable" for all of them.
+
+Updated 2026-10-16 (owner, spec §5.5.1): "off" needs a worker that answers and says OFF — a
+dead worker that was switched off is "not answering", never "off"; the fault word is
+`not_answering` ("Guard not answering"), and a CPU pause says "processor overloaded". The full
+grid is TC-GU-01..04, 14 (test_guard_ui_phase1.py).
 """
 from __future__ import annotations
 
@@ -103,7 +108,7 @@ def _block():
 
 
 def test_tc_mgs_01_off():
-    _cam(CAMS[0], "OFF")
+    _cam(CAMS[0], "OFF", alive=True, reported={"state": "OFF", "flags": []})
     assert _block()["state"] == "off"
 
 
@@ -114,7 +119,7 @@ def test_tc_mgs_02_armed_and_answering_is_on():
 
 def test_tc_mgs_03_armed_but_silent_is_unavailable_never_on():
     _cam(CAMS[0], "ARMED", alive=False, reported={"state": "ARMED", "flags": []})
-    assert _block()["state"] == "unavailable"
+    assert _block()["state"] == "not_answering"
 
 
 def test_tc_mgs_04_too_dark_is_paused():
@@ -125,12 +130,12 @@ def test_tc_mgs_04_too_dark_is_paused():
 
 
 def test_tc_mgs_05_suspended_for_cpu_is_paused():
-    _cam(CAMS[0], "SUSPENDED_CPU")
+    _cam(CAMS[0], "SUSPENDED_CPU", alive=True, reported={"state": "SUSPENDED_CPU", "flags": []})
     b = _block()
-    assert b["state"] == "paused" and "busy" in b["sentence"], b
+    assert b["state"] == "paused" and "processor overloaded" in b["sentence"], b
 
 
 def test_tc_mgs_06_two_cameras_the_worse_one_wins():
     _cam(CAMS[0], "ARMED", alive=True, reported={"state": "ARMED", "flags": []})
     _cam(CAMS[1], "ARMED", alive=False)
-    assert _block()["state"] == "unavailable"
+    assert _block()["state"] == "not_answering"

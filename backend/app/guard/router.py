@@ -10,10 +10,15 @@ that is the requirement for the watching week, and the exact commands are in
 `docs/guard_operator_runbook.md`. If any of this needed a UI to be usable, step 5 would not
 be finished.
 
-Roles:
-  * read        -> `require_any_role`  (a monitor watching the dashboard should see guard)
-  * label       -> `require_any_role`  (the person spotting a gull is exactly who should mark it)
-  * arm/disarm/rearm/config -> `require_control`
+Roles (owner, 2026-10-16 — spec §5.5.2, §5.5.5):
+  * status      -> `require_any_role`  (no picture: the state and its sentence)
+  * events, frames, recordings, detections, labels -> `require_admin` — a recording of a human
+    being is personal data, and a button hidden from staff with the file still served to them
+    would be the menu-only rule the owner rejected
+  * arm/disarm/rearm/config -> `require_admin` — control is admin only, in the API too
+
+A camera has a row only once its worker has announced itself (§5.5.1): every command on a camera
+without one answers 404 "No guard on this pedestal" — REST never creates the row.
 """
 from __future__ import annotations
 
@@ -27,7 +32,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DBSession
 
-from ..auth.dependencies import require_any_role, require_control
+from ..auth.dependencies import require_admin, require_any_role
 from ..auth.models import User
 from ..config import settings
 from ..database import get_db
@@ -44,6 +49,7 @@ from .models import (
     GuardDetection,
     GuardEvent,
     GuardRecording,
+    GuardStateEvent,
 )
 
 router = APIRouter(prefix="/api/guard", tags=["guard"])
@@ -76,7 +82,9 @@ class ConfigBody(BaseModel):
 def _cfg_or_404(db: DBSession, camera_id: int) -> GuardConfig:
     cfg = db.get(GuardConfig, camera_id)
     if cfg is None:
-        raise HTTPException(status_code=404, detail=f"No guard configured for camera {camera_id}")
+        raise HTTPException(status_code=404,
+                            detail=f"No guard on this pedestal (camera {camera_id}: its worker "
+                                   f"has never announced itself)")
     return cfg
 
 
@@ -119,11 +127,13 @@ def _serve_file(path_str: str | None, media_type: str, kind: str,
 # ─── status ──────────────────────────────────────────────────────────────────
 
 @router.get("/status")
-def guard_status(db: DBSession = Depends(get_db), _: User = Depends(require_any_role)):
-    """Per camera: enabled, state, flags, last alarm, live cpu/mem/disk, retention.
+def guard_status(db: DBSession = Depends(get_db), user: User = Depends(require_any_role)):
+    """Per camera: enabled, state, its sentence, flags, live cpu/mem/disk, retention.
 
     The state here is the RECONCILED one: desired ARMED with a silent worker reports
-    UNAVAILABLE, never ARMED.
+    UNAVAILABLE, never ARMED; `sentence` is the same words `/marina` shows (§5.5.1, TC-GU-15).
+    Any role: nothing here is a picture. The last alarm — a time a person was seen — only for
+    admin (§5.5.5).
     """
     out = []
     for cfg in db.query(GuardConfig).order_by(GuardConfig.camera_id).all():
@@ -134,7 +144,8 @@ def guard_status(db: DBSession = Depends(get_db), _: User = Depends(require_any_
             .order_by(GuardEvent.detected_at_utc.desc())
             .first()
         )
-        state["last_alarm"] = service._event_payload(last) if last else None
+        state["last_alarm"] = (service._event_payload(last) if last else None) \
+            if user.role == "admin" else None
         state["config"] = service.config_payload(cfg)
         state["notifications_enabled"] = settings.guard_notify_enabled
         out.append(state)
@@ -145,13 +156,13 @@ def guard_status(db: DBSession = Depends(get_db), _: User = Depends(require_any_
 
 @router.post("/{camera_id}/enable", status_code=status.HTTP_202_ACCEPTED)
 def guard_enable(camera_id: int, db: DBSession = Depends(get_db),
-                 user: User = Depends(require_control)):
+                 user: User = Depends(require_admin)):
     """Arm guard. 202 + req_id: the worker confirms asynchronously.
 
     State goes ARMING, and becomes ARMED only on the worker's ack — so the UI never shows
     ARMED on the strength of the backend's own intent.
     """
-    cfg = service.get_or_create_config(db, camera_id)
+    cfg = _cfg_or_404(db, camera_id)
     cfg.desired_state = STATE_ARMED
     cfg.suspended_reason = None
     cfg.suspended_at = None
@@ -165,7 +176,7 @@ def guard_enable(camera_id: int, db: DBSession = Depends(get_db),
 
 @router.post("/{camera_id}/disable", status_code=status.HTTP_202_ACCEPTED)
 def guard_disable(camera_id: int, db: DBSession = Depends(get_db),
-                  user: User = Depends(require_control)):
+                  user: User = Depends(require_admin)):
     cfg = _cfg_or_404(db, camera_id)
     cfg.desired_state = STATE_OFF
     cfg.suspended_reason = None
@@ -178,7 +189,7 @@ def guard_disable(camera_id: int, db: DBSession = Depends(get_db),
 
 @router.post("/{camera_id}/rearm", status_code=status.HTTP_202_ACCEPTED)
 def guard_rearm(camera_id: int, db: DBSession = Depends(get_db),
-                user: User = Depends(require_control)):
+                user: User = Depends(require_admin)):
     """Re-arm after a watchdog suspension.
 
     Distinct from `enable` on purpose: this is a human saying "I have looked at it", which
@@ -199,7 +210,7 @@ def guard_rearm(camera_id: int, db: DBSession = Depends(get_db),
 @router.patch("/{camera_id}/config")
 def guard_patch_config(camera_id: int, body: ConfigBody,
                        db: DBSession = Depends(get_db),
-                       user: User = Depends(require_control)):
+                       user: User = Depends(require_admin)):
     """Change detection thresholds at runtime. No redeploy, no restart.
 
     Guard's accuracy is unproven, so every threshold has to be tunable in production. The
@@ -207,7 +218,7 @@ def guard_patch_config(camera_id: int, body: ConfigBody,
     `/status` shows which version is actually running — a silent mismatch between backend and
     worker would make tuning results meaningless.
     """
-    cfg = service.get_or_create_config(db, camera_id)
+    cfg = _cfg_or_404(db, camera_id)
     changes: dict[str, object] = {}
 
     for field in ("conf_threshold", "uncertain_min", "fps", "window_seconds",
@@ -266,9 +277,11 @@ def guard_events(
     camera_id: int | None = None,
     label: str | None = Query(None, pattern=f"^({LABEL_CORRECT}|{LABEL_FALSE_ALARM}|unlabelled)$"),
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_any_role),
+    _: User = Depends(require_admin),
 ):
-    """Alarm log, newest first. `label=unlabelled` is the review queue for the week."""
+    """The event list, newest first: people seen (`kind: person`) and, since 2026-10-16, the
+    guard's pauses and automatic resumes (`kind: paused_cpu | auto_resumed`, §5.5.1 item 3),
+    merged by time. `label=…` filters people only. ADMIN ONLY (§5.5.5)."""
     q = db.query(GuardEvent)
     if camera_id is not None:
         q = q.filter(GuardEvent.camera_id == camera_id)
@@ -276,18 +289,29 @@ def guard_events(
         q = q.filter(GuardEvent.label.is_(None))
     elif label:
         q = q.filter(GuardEvent.label == label)
-    total = q.count()
-    rows = q.order_by(GuardEvent.detected_at_utc.desc()).offset(offset).limit(limit).all()
+    sq = db.query(GuardStateEvent)
+    if camera_id is not None:
+        sq = sq.filter(GuardStateEvent.camera_id == camera_id)
+    with_state = label is None
+    window = offset + limit
+    people = [(e.detected_at_utc, {**service._event_payload(e), "kind": "person",
+                                   "at_utc": iso_z(e.detected_at_utc)})
+              for e in q.order_by(GuardEvent.detected_at_utc.desc()).limit(window).all()]
+    states = [(e.at_utc, {"id": e.id, "kind": e.kind, "camera_id": e.camera_id,
+                          "at_utc": iso_z(e.at_utc), "reason": e.reason})
+              for e in (sq.order_by(GuardStateEvent.at_utc.desc()).limit(window).all()
+                        if with_state else [])]
+    merged = sorted(people + states, key=lambda r: r[0], reverse=True)[offset:window]
     return {
-        "total": total, "limit": limit, "offset": offset,
+        "total": q.count() + (sq.count() if with_state else 0), "limit": limit, "offset": offset,
         "unlabelled": db.query(GuardEvent).filter(GuardEvent.label.is_(None)).count(),
-        "events": [service._event_payload(e) for e in rows],
+        "events": [row for _t, row in merged],
     }
 
 
 @router.get("/events/{event_id}/video")
 def guard_event_video(event_id: int, db: DBSession = Depends(get_db),
-                      _: User = Depends(require_any_role)):
+                      _: User = Depends(require_admin)):
     ev = _event_or_404(db, event_id)
     rec = None
     if ev.event_uuid:
@@ -316,7 +340,7 @@ def guard_event_video(event_id: int, db: DBSession = Depends(get_db),
 
 @router.get("/events/{event_id}/frame")
 def guard_event_frame(event_id: int, db: DBSession = Depends(get_db),
-                      _: User = Depends(require_any_role)):
+                      _: User = Depends(require_admin)):
     """The ANNOTATED frame, with the detection box drawn.
 
     Required by the dashboard from day one: if the first alarms are boxes on gulls, that has
@@ -329,11 +353,12 @@ def guard_event_frame(event_id: int, db: DBSession = Depends(get_db),
 @router.post("/events/{event_id}/label")
 def guard_label_event(event_id: int, body: LabelBody,
                       db: DBSession = Depends(get_db),
-                      user: User = Depends(require_any_role)):
+                      user: User = Depends(require_admin)):
     """Mark an alarm correct or a false alarm. Labelled data from day one.
 
-    Deliberately `require_any_role`: a monitor watching the dashboard is exactly the person
-    who spots a gull, and making them fetch an admin would cost the labels.
+    ADMIN ONLY since 2026-10-16 (owner, §5.5.5): judging what guard saw means looking at a
+    person. Until then any role could label — the consequence, accepted by the owner, is that an
+    unlabelled event keeps its pedestal at rank 7 until an admin looks.
 
     Re-labelling is allowed — a second look is legitimate — and overwrites with the new actor
     and time rather than accumulating history, because the current verdict is what the
@@ -359,7 +384,7 @@ def guard_detections(
     camera_id: int | None = None,
     limit: int = Query(200, ge=1, le=2000),
     db: DBSession = Depends(get_db),
-    _: User = Depends(require_any_role),
+    _: User = Depends(require_admin),
 ):
     """Every logged detection, including below-threshold ones.
 
@@ -393,7 +418,7 @@ def guard_detections(
 
 @router.get("/detections/{detection_id}/frame")
 def guard_detection_frame(detection_id: int, db: DBSession = Depends(get_db),
-                          _: User = Depends(require_any_role)):
+                          _: User = Depends(require_admin)):
     """The frame behind an UNCERTAIN detection — the Phase 2 escalation candidate.
 
     Uncertain frames are rate-limited and evicted before alarm frames, so this legitimately

@@ -145,10 +145,14 @@ export interface SharedFacility {
 }
 
 export interface GuardBlock {
-  /** 'unavailable' is a FAULT and must never render as 'off', which is a decision. */
-  state: 'on' | 'off' | 'paused' | 'unavailable'
+  /** Spec §5.5.1 (2026-10-16): one code per sentence. 'not_answering' is a FAULT and must never
+   *  render as 'off', which is a decision; 'none' = the worker never announced itself;
+   *  'not_measured' = the reading failed (§5.5.6). The words are the server's `sentence`. */
+  state: 'none' | 'not_answering' | 'on' | 'off' | 'paused' | 'not_measured'
   sentence: string
   scope: 'pedestal'
+  /** The automatic-resume budget; null = not measured (§5.5.1 item 3). */
+  auto_resumes: { used: number; max: number } | null
 }
 
 export interface MarinaPedestal {
@@ -229,7 +233,8 @@ export interface BerthDetail extends Berth {
 }
 
 export interface MarinaAlarm {
-  alarm_id: number
+  /** A number for an alarm-table row; "guard-<id>" for a guard event (§5.5.3). */
+  alarm_id: number | string
   pedestal_id: number | null
   cabinet_id: string | null
   status_code: StatusCode
@@ -256,7 +261,9 @@ export const getBerthDetail = (berthId: number) =>
   api.get<BerthDetail>(`/marina/berths/${berthId}`).then((r) => r.data)
 
 export const getMarinaAlarms = () =>
-  api.get<{ alarms: MarinaAlarm[] }>('/marina/alarms').then((r) => r.data)
+  api.get<{ alarms: MarinaAlarm[]; guard?: { measured: boolean; sentence: string | null } }>(
+    '/marina/alarms',
+  ).then((r) => r.data)
 
 export const getBerthAssignments = (pedestalId: number) =>
   api.get<{ pedestal_id: number; assignments: BerthAssignmentRow[] }>(

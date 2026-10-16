@@ -54,17 +54,23 @@ PED = 7
 
 @pytest.fixture(autouse=True)
 def _clean():
-    from app.guard.models import GuardConfig, GuardDetection, GuardEvent, GuardRecording
+    from app.guard.models import (GuardConfig, GuardDetection, GuardEvent, GuardRecording,
+                                  GuardStateEvent)
     from app.guard.service import liveness
 
     liveness.forget(CAM)
     liveness._pending_acks.clear()
     db = _S()
     try:
-        for model in (GuardEvent, GuardDetection, GuardRecording):
+        for model in (GuardEvent, GuardDetection, GuardRecording, GuardStateEvent):
             db.query(model).filter(model.camera_id == CAM).delete(synchronize_session=False)
         db.query(GuardConfig).filter(GuardConfig.camera_id == CAM).delete(
             synchronize_session=False)
+        # 2026-10-16 (spec §5.5.1): a row exists only once the worker has announced itself, and
+        # REST no longer creates one. Every test here starts from that point — the row, desired
+        # OFF, with liveness forgotten (the worker is not "alive" until a test says so). The
+        # no-row case is TC-GU-09 (test_guard_ui_phase1.py).
+        db.add(GuardConfig(camera_id=CAM, pedestal_id=PED, desired_state="OFF"))
         db.commit()
     finally:
         db.close()
@@ -203,12 +209,20 @@ def test_tc_gapi_07_retained_state_is_not_liveness(client, auth_headers, publish
 
 
 def test_tc_gapi_08_off_wins(client, auth_headers, published):
+    """Off wins once the worker confirms it (2026-10-16, §5.5.1): until then the worker's own
+    report stands, so a switch-off still on its way never reads "off" while guard watches."""
     client.post(f"/api/guard/{CAM}/enable", headers=auth_headers)
+    _feed_sync("ack", {"req_id": json.loads(published[-1][1])["req_id"], "state": "ARMED"})
     _feed_sync("state", {"state": "ARMED", "flags": []})
     client.post(f"/api/guard/{CAM}/disable", headers=auth_headers)
+    disarm = json.loads(published[-1][1])
+    assert disarm["cmd"] == "disarm"
+    cam = _status(client, auth_headers)
+    assert cam["state"] == "ARMED" and cam["enabled"] is False, "not confirmed yet"
+    _feed_sync("ack", {"req_id": disarm["req_id"], "accepted": True, "state": "OFF"})
+    _feed_sync("state", {"state": "OFF", "flags": []})
     cam = _status(client, auth_headers)
     assert cam["state"] == "OFF" and cam["enabled"] is False
-    assert json.loads(published[-1][1])["cmd"] == "disarm"
 
 
 def test_tc_gapi_09_rearm_is_distinct_from_enable(client, auth_headers, published):
@@ -391,9 +405,11 @@ def test_tc_gapi_16_labelling_records_actor_and_is_repeatable(client, auth_heade
                        json={"label": "maybe"}).status_code == 422
 
 
-def test_tc_gapi_17_monitor_may_label_but_not_arm(client):
-    """Deliberate split: the person who spots a gull is often the monitor, and making them
-    fetch an admin would cost the labels. Arming is a control action."""
+def test_tc_gapi_17_monitor_may_neither_label_nor_arm(client):
+    """Changed 2026-10-16 (owner, spec §5.5.5): labelling means looking at a person, so it is
+    admin only, like the frame and the recording. Until then a monitor could label ("the person
+    who spots a gull") — the owner's decision replaced that, accepting that an unlabelled event
+    keeps its pedestal at rank 7 until an admin looks. Arming was and stays refused."""
     from app.auth.models import User
     from app.auth.password import hash_password
     from app.auth.tokens import create_access_token
@@ -420,12 +436,16 @@ def test_tc_gapi_17_monitor_may_label_but_not_arm(client):
                         json={"fps": 2}).status_code == 403
 
     _feed_sync("alarm", _alarm("uuid-mon"))
-    eid = client.get("/api/guard/events", headers=mon_headers,
-                     params={"camera_id": CAM}).json()["events"][0]["id"]
+    assert client.get("/api/guard/events", headers=mon_headers).status_code == 403
+    db = _S()
+    try:
+        from app.guard.models import GuardEvent
+        eid = db.query(GuardEvent).filter(GuardEvent.event_uuid == "uuid-mon").one().id
+    finally:
+        db.close()
     r = client.post(f"/api/guard/events/{eid}/label", headers=mon_headers,
                     json={"label": "false_alarm"})
-    assert r.status_code == 200, "a monitor MUST be able to label"
-    assert r.json()["event"]["labelled_by"] == "guardmon@test.local"
+    assert r.status_code == 403, "labelling is admin only since 2026-10-16"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

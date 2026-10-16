@@ -212,3 +212,24 @@ class GuardRecording(Base):
     __table_args__ = (
         UniqueConstraint("file_path", name="uq_guard_recording_path"),
     )
+
+
+class GuardStateEvent(Base):
+    """A pause or an automatic resume — spec §5.5.1 item 3 (owner, 2026-10-16).
+
+    Its own table, never `guard_events`: an unlabelled `guard_events` row is the rank-7 alarm
+    "Someone was seen" (§5.5.3), and a CPU pause is not a person. Written only from LIVE state
+    messages, as every other guard fact.
+    """
+
+    __tablename__ = "guard_state_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    camera_id = Column(Integer, nullable=False, index=True)
+    at_utc = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    kind = Column(String, nullable=False)              # paused_cpu | auto_resumed
+    reason = Column(String, nullable=True)
+
+
+KIND_PAUSED_CPU = "paused_cpu"
+KIND_AUTO_RESUMED = "auto_resumed"

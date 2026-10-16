@@ -1403,6 +1403,7 @@ catalogue id is not in `external_api_config.allowed_endpoints` (`external_api_ga
 403 "Endpoint not allowed"); the direct `/api/ext/...` routes check the same list
 (`ext_pedestal_endpoints.py:102-114`, called at `:394` for the frame and `:473` for the stream).
 So a catalogued camera endpoint gives the ERP nothing unless the cabinet's list names it.
+**Confirmed by both sides, 2026-10-16: the ERP does not call the camera endpoints in Phase 1.**
 
 **What the cabinet's list holds is a cabinet fact and is NOT measured from here.** The owner states
 that the configuration of 2026-10-15 enabled 17 endpoints and no `camera.*` among them. §13 check
@@ -1555,3 +1556,133 @@ routes set one (`customer_sessions.py:159, 183`, `mobile.py:292`; `main.py:880-8
 1. Guard UI (§5.5). 2. The ERP webhook block (§18) — before the weekly report, because without
 the envelope and the two session events the NFC end-to-end test cannot pass. 3. Findings A and B
 (§17.5). 4. This section's API, locally and from the ERP. 5. The weekly report (admin only, §18.6).
+
+
+---
+
+# 18. The ERP webhook — one sender, an envelope, a signature (agreed with the ERP, 2026-10-16)
+
+**NOT BUILT — this is what gets built, as one block, one commit per item (#5, #6, #7, #8, C).**
+The contract text the ERP reads is `docs/erp_session_payload_contract.md`, *Webhook delivery*;
+this section is the cabinet-side specification and the evidence.
+
+## 18.1 The split, agreed 2026-10-16
+
+| # | Who | What |
+|---|---|---|
+| 5 | **cabinet** | the envelope `{event, event_id, data, timestamp}` |
+| 6 | **cabinet** | `telemetry` and `session_ended` leave by webhook — `session_ended` fast, because the ERP bills on it |
+| 7 | **cabinet** | ONE sender with ONE key — the ERP holds one key per cabinet, so one of our two senders always gets 401 |
+| 8 | **cabinet** | HMAC signature on every delivery — the ERP makes it mandatory once the cabinet signs |
+| C | **cabinet** | the reference-photo upload honours the gateway's read-only mode (§17.1); the ERP does not use that path in Phase 1, so closing it breaks nothing |
+| 1, 3, 4, 9 | ERP | `/scan` body from the ERP's own tag → cabinet + outlet mapping (D6.2); the water command only after the session exists (`classify_409`); our event names; `berth_id` int or null, as data for comparison |
+| 2 | — | nobody calls `/scan` yet: expected, NFC is the ERP's phase 7. Not a finding |
+
+## 18.2 Today — two senders, measured from the code
+
+| | Sender A — the session webhook | Sender B — the gateway webhook |
+|---|---|---|
+| Code | `services/erp_webhook.py` `post_erp_event` | `services/webhook_service.py` `dispatch_webhook`, a broadcast hook (`main.py`, `ws_manager.add_broadcast_hook`) |
+| URL | `ERP_WEBHOOK_URL`, `.env` (`config.py:141`) | `external_api_config.webhook_url`, set on `/api-gateway` |
+| Key it sends | `X-API-Key: ERP_API_KEY` — the INBOUND `/api/nfc` key, sent back out (`erp_webhook.py:100`) | `X-API-Key:` the gateway key, `external_api_config.api_key` (`webhook_service.py:94-104`) |
+| Body | FLAT: the 16-key session payload plus `event` (`erp_webhook.py:86`) — no `data`, no id, no time | `{event, data, timestamp}` — no `event_id`; `data` is `message["data"]` or `{}` |
+| Events | `session_activated` (`mqtt_handlers.py:2073`), `telemetry` at most every 60 s (`:2146-2149`), `session_ended` (`:1946-1949`, `:2193-2196`) — **only for a session with an `erp_ref`** (`is_erp_reportable`) | whatever `ws_manager.broadcast()` carries AND `allowed_events` names |
+| Signature | none | none |
+
+**#6, precisely.** `session_telemetry` and `session_ended` reach the websocket through
+`broadcast_to_session` (`mqtt_handlers.py:2131, 2213`), which — unlike `broadcast()` — runs no
+hooks (`websocket_manager.py:85` against `:88-100`), so **sender B never sees them**. Sender A does
+send `telemetry` and `session_ended`, but only for a session carrying an `erp_ref`; with nobody
+calling `/scan` (#2) no session has one, so sender A sends nothing either. Either way the ERP
+receives no session event today.
+
+## 18.3 What is built
+
+**One sender (#7).** One function delivers every webhook: one URL, one key, one signature. It is
+called DIRECTLY from the session code for the three session events — never through the websocket
+broadcast, so which websocket channel a message travels on can never decide what the ERP gets
+(the defect behind #6) — and from the broadcast hook for the catalogued non-session events
+(`berth_occupancy_updated`; later §17's `vessel_match_updated` and guard). **The URL is
+`external_api_config.webhook_url`**, set on `/api-gateway` (§1.3: per-deployment integration
+choices live on that screen, not in `.env`); `ERP_WEBHOOK_URL` is removed. Session events go to
+that URL for every session with an `erp_ref` (the contract's rule, unchanged), without being
+listed in `allowed_events`; the catalogued events go only when listed, as today.
+**Which key: OPEN — §18.7 Q1.**
+
+**The envelope (#5):**
+
+```jsonc
+{
+  "event":     "session_ended",                         // the contract's names (ERP #4)
+  "event_id":  "MAR_KRK_ORM_01:session_ended:847",       // unique per event, STABLE on resend
+  "data":      { /* the 16-key session payload, unchanged */ },
+  "timestamp": "2026-10-16T21:14:03Z"                    // when the EVENT happened, UTC
+}
+```
+
+- **`event_id`** is derived from what the event is about, never random, so a resend of the same
+  event carries the same id: `{cabinet_id}:{event}:{session_id}` for `session_activated` and
+  `session_ended` (each happens once per session); `{cabinet_id}:telemetry:{session_id}:{t}`
+  for telemetry, `t` the epoch second of the reading it carries; `{cabinet_id}:{event}:{subject}:{t}`
+  for the catalogued events (`subject` the berth or camera id, `t` the time of the result).
+- **`timestamp`** is the time of the event, fixed when the event is created; a resend never
+  changes it. The body is serialised ONCE and every attempt sends those same bytes, so the
+  signature of a resend is identical too.
+- **`data`** for session events is `nfc_service.build_session_payload` — the same function as
+  `GET /api/nfc/session/{id}`, so push and pull cannot disagree (pull is the truth).
+
+**The signature (#8):** `X-Signature: sha256=<hex>`, HMAC-SHA256 over the exact raw body bytes
+with the cabinet's key (Q1). The ERP recomputes it over the bytes it received; any change to the
+body fails it.
+
+**Delivery:** `session_ended` is sent the moment the session completes. Each event is attempted
+up to **3 times — at once, after 5 s, after 30 s** — with the identical body; after that, pull
+covers it (`GET /api/nfc/sessions?ended_from=…`). Not persisted across a backend restart.
+*Proposal — the retry schedule is not stated by the ERP.*
+
+**C:** the shared write check of §17.1 — a direct `/api/ext/...` write needs the endpoint's mode
+`bidirectional` and `allow_bidirectional`, as the gateway already requires.
+
+## 18.4 Proof, written first, each failing on today's code
+
+- `telemetry` and `session_ended` for an `erp_ref` session reach a test ERP endpoint, with the
+  sender configured only on `/api-gateway` (fails today: sender B never sees them, sender A uses
+  another URL).
+- The envelope has exactly `event, event_id, data, timestamp`; `data` equals
+  `GET /api/nfc/session/{id}`.
+- A forced resend carries the same `event_id`, `timestamp` and bytes; two different telemetry
+  readings carry different ids.
+- The signature verifies with the key and fails with any other key and with one changed byte.
+- `ERP_WEBHOOK_URL` set alone sends nothing (one sender).
+- `POST /api/ext/.../reference-image` with the endpoint in read-only mode → 403 (today 200).
+
+## 18.5 Authentication, cabinet side — confirmed from the code (for the ERP, 2026-10-16)
+
+`/api/ext/*`: `Authorization: Bearer <JWT>`, role `external_api` (the gateway key from
+rotate-key, also compared with the stored key) or `api_client` (a service-account token from
+`POST /api/auth/service-token`) — `external_api_gateway.py:59-65`, `ext_pedestal_endpoints.py:45-75`.
+`/api/nfc/*` (scan, session, sessions, sessions/ack, session stop): `X-API-Key` equal to the
+cabinet's `ERP_API_KEY` — `auth/erp_api_key.py:21-28`. (`/api/nfc/mode`, `/outlets` and
+`/reconciliation*` are operator screens with an operator JWT, not the ERP's.)
+
+## 18.6 The weekly report — no longer anything to do with the ERP (2026-10-16)
+
+The ERP computes its weekly figures itself from the sessions and the meter history; it needs no
+report from the cabinet. `docs/erp_session_payload_contract.md:216-217` promised the ERP "the
+cabinet's weekly consumption report" — a report that never existed and that nobody needs: the
+sentence is DELETED there (with this date and reason), not fulfilled. **The weekly PDF stays in
+the package as the owner's own request from the start: a report the owner downloads as ADMIN.**
+Its shape (content, grouping, the source of every figure, one page; the source is the session row
+with `consumption_source` and both register readings) is proposed in this spec before anything is
+built.
+
+## 18.7 OPEN — the owner's (and the ERP's) decision
+
+1. **Which key is "the cabinet's key" the ERP holds?** Today sender A sends `ERP_API_KEY` and
+   sender B the gateway key; one of them gets 401, and from here we cannot see which. Proposal:
+   `ERP_API_KEY` — the key the ERP already uses for this cabinet's session channel — as the
+   HMAC key. Whichever it is, the other sender's key stops being sent.
+2. **Does the key itself keep travelling in `X-API-Key` once the body is signed?** Sending the
+   secret in a header is what HMAC replaces (`docs/erp_key_rotation.md` already flags the
+   outbound copy). Proposal: send both in the release that introduces the signature; drop
+   `X-API-Key` from outbound in the next, once the ERP confirms the signature is mandatory.

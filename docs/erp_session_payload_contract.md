@@ -11,7 +11,7 @@ whoever is building the ERP side.
 |---|---|
 | `GET /api/nfc/session/{id}` | one session |
 | `GET /api/nfc/sessions?erp_ref=…` and/or `?ended_from=…&ended_to=…` | paged list — see *Reading sessions* |
-| ERP webhook — `event`: `session_activated` / `telemetry` (at most every 60 s) / `session_ended` | pushed, when `webhook_url` is configured; **only for a session carrying an `erp_ref`**. *Corrected 2026-10-12: this row named `session_created` / `session_updated` / `session_completed`, which the code has never sent.* |
+| ERP webhook — `event`: `session_activated` / `telemetry` (at most every 60 s) / `session_ended` | pushed, when `webhook_url` is configured; **only for a session carrying an `erp_ref`**. *Corrected 2026-10-12: this row named `session_created` / `session_updated` / `session_completed`, which the code has never sent.* **Agreed 2026-10-16, NOT YET BUILT:** wrapped in an envelope and signed — see *Webhook delivery* |
 | `POST /api/nfc/session/{id}/stop` | the stopped session |
 | `POST /api/nfc/sessions/ack` | **not the payload** — acknowledges sessions you billed; see *Acknowledging what you billed* |
 
@@ -213,8 +213,10 @@ When `consumption_source == "register"` those hold by construction. **If they ev
 that is a fault worth raising with us** — two independent records of the same fact are worth
 far more than one, and a record only one side holds is not a check on anything.
 
-The same property is on the cabinet's weekly consumption report: every figure is printed
-beside the two readings it derives from, so it can be recomputed by hand.
+*Deleted 2026-10-16: a sentence here promised "the cabinet's weekly consumption report". No
+such report ever existed, and the ERP does not need one — it computes its weekly figures itself
+from the sessions and the meter history (agreed with the ERP, 2026-10-16). The two register
+readings in every session payload are what make a figure recomputable by hand.*
 
 ---
 
@@ -270,6 +272,25 @@ The key set is pinned by `tests/backend/test_nfc_six_tag_model.py::test_tc_six_1
 If that test fails, this document is updated in the same commit.
 
 ---
+
+## Webhook delivery — agreed 2026-10-16, NOT YET BUILT
+
+What the cabinet will send; until the release that builds it, the webhook is as described above
+(flat body, no signature) and, in practice, not received (cabinet spec `ui_v2_spec.md` §18.2).
+
+- **One sender, one URL, one key.** The URL is the one set on the cabinet's API gateway screen.
+- **Envelope:** `{ "event", "event_id", "data", "timestamp" }`. `data` is the 16-key payload —
+  byte-for-byte what `GET /api/nfc/session/{id}` returns for the same state.
+- **`event_id`** is unique per event and STABLE on resend — deduplicate on it:
+  `{cabinet_id}:session_activated:{session_id}`, `{cabinet_id}:session_ended:{session_id}`,
+  `{cabinet_id}:telemetry:{session_id}:{epoch second of the reading}`.
+- **`timestamp`** is when the event happened (UTC, ISO-8601 `Z`), not when it was sent; a resend
+  repeats it.
+- **Signature:** `X-Signature: sha256=<hex>` — HMAC-SHA256 of the exact raw body bytes with the
+  cabinet's key. Verify over the bytes you received, before parsing.
+- **`session_ended`** is sent the moment the session completes; each event is attempted up to 3
+  times (at once, +5 s, +30 s) with identical bytes. If none arrives, pull: the session is in
+  `GET /api/nfc/sessions?ended_from=…` — pull is the truth, the webhook is the trigger.
 
 ## Authentication
 

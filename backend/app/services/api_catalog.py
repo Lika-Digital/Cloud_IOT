@@ -1,5 +1,16 @@
 """Static catalog of exposable endpoints and push events for the External API Gateway."""
 
+# ── Phase 1: no image and no video to the ERP (owner, 2026-10-16 — GDPR; spec §16.3) ──────────
+# An entry with "image": True returns a frame, a stream, or a stream address. While this is True
+# the code refuses such an endpoint for the ERP: on saving the gateway list (422) AND at request
+# time (403), so a list saved before this rule — cabinet 1 had all four on 2026-10-16 — cannot keep
+# the path open. Lifting it (§16.3): the owner's Phase 2 + GDPR decision written in the spec, then
+# ONE reviewed commit that sets this False and changes tests/backend/test_camera_ban.py with it.
+# Never an .env value, never a switch on a screen.
+PHASE1_NO_IMAGES_TO_ERP = True
+PHASE1_IMAGE_REFUSAL = ("Camera endpoints are not allowed to the ERP in Phase 1 — "
+                        "owner's decision, GDPR")
+
 ENDPOINT_CATALOG = [
     {"id": "pedestals.list",         "path": "/api/pedestals",                       "method": "GET",  "category": "Pedestals",   "allow_bidirectional": False},
     {"id": "pedestals.health",       "path": "/api/pedestals/health",                "method": "GET",  "category": "Health",      "allow_bidirectional": False},
@@ -20,8 +31,8 @@ ENDPOINT_CATALOG = [
     {"id": "alarms.acknowledge",     "path": "/api/alarms/{id}/acknowledge",         "method": "POST", "category": "Alarms",      "allow_bidirectional": True},
     {"id": "berths.list",            "path": "/api/berths",                          "method": "GET",  "category": "Berths",      "allow_bidirectional": False},
     {"id": "diagnostics.run",        "path": "/api/pedestals/{id}/diagnostics/run",  "method": "POST", "category": "Diagnostics", "allow_bidirectional": True},
-    {"id": "camera.snapshot",        "path": "/api/camera/{pedestal_id}/snapshot",   "method": "GET",  "category": "Camera",      "allow_bidirectional": False},
-    {"id": "camera.stream",          "path": "/api/camera/{pedestal_id}/stream",     "method": "GET",  "category": "Camera",      "allow_bidirectional": False},
+    {"id": "camera.snapshot",        "path": "/api/camera/{pedestal_id}/snapshot",   "method": "GET",  "category": "Camera",      "allow_bidirectional": False, "image": True},
+    {"id": "camera.stream",          "path": "/api/camera/{pedestal_id}/stream",     "method": "GET",  "category": "Camera",      "allow_bidirectional": False, "image": True},
     # Per-socket auto-activation (v3.5)
     {"id": "sockets.config_list",    "path": "/api/pedestals/{pedestal_id}/sockets/config",                     "method": "GET",   "category": "Controls", "allow_bidirectional": False},
     {"id": "sockets.config_patch",   "path": "/api/pedestals/{pedestal_id}/sockets/{socket_id}/config",          "method": "PATCH", "category": "Controls", "allow_bidirectional": True},
@@ -62,8 +73,8 @@ ENDPOINT_CATALOG = [
     {"id": "berths.occupancy_ext",   "path": "/api/ext/pedestals/{id}/berths/occupancy", "method": "GET",  "category": "Berths",    "allow_bidirectional": False},
     # v3.16 — ERP pushes a reference/match image to an EXISTING berth (NUC owns sector creation).
     {"id": "berths.push_image_ext",  "path": "/api/ext/pedestals/{pedestal_id}/berths/{berth_id}/reference-image", "method": "POST", "category": "Berths", "allow_bidirectional": True},
-    {"id": "camera.frame_ext",       "path": "/api/ext/pedestals/{id}/camera/frame",     "method": "GET",  "category": "Camera",    "allow_bidirectional": False},
-    {"id": "camera.stream_ext",      "path": "/api/ext/pedestals/{id}/camera/stream",    "method": "GET",  "category": "Camera",    "allow_bidirectional": False},
+    {"id": "camera.frame_ext",       "path": "/api/ext/pedestals/{id}/camera/frame",     "method": "GET",  "category": "Camera",    "allow_bidirectional": False, "image": True},
+    {"id": "camera.stream_ext",      "path": "/api/ext/pedestals/{id}/camera/stream",    "method": "GET",  "category": "Camera",    "allow_bidirectional": False, "image": True},
     # v3.8 — Breaker Management API (direct ext routes, not gateway-proxied).
     # Category groups them in the API Gateway UI per D14.
     {"id": "breakers.pedestal_list_ext",    "path": "/api/ext/pedestals/{pedestal_id}/breakers",                            "method": "GET",  "category": "Breaker Management", "allow_bidirectional": False},
@@ -125,3 +136,11 @@ EVENT_CATALOG = [
     {"id": "meter_load_auto_stop",     "name": "Meter Load Auto-Stop",        "category": "Load Monitoring"},
     {"id": "meter_load_auto_stop_acknowledged", "name": "Auto-Stop Acknowledged", "category": "Load Monitoring"},
 ]
+
+
+_BY_ID = {e["id"]: e for e in ENDPOINT_CATALOG}
+
+
+def refused_for_erp(endpoint_id: str) -> bool:
+    """True when the ERP may not use this endpoint whatever the stored list says (Phase 1)."""
+    return bool(PHASE1_NO_IMAGES_TO_ERP and _BY_ID.get(endpoint_id, {}).get("image"))

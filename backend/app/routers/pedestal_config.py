@@ -427,8 +427,9 @@ def get_health(
     allowed_eps = json.loads(ext_cfg.allowed_endpoints or "[]") if ext_cfg else []
     enabled_ids = {e["id"] for e in allowed_eps}
     berths_enabled     = "berths.occupancy_ext" in enabled_ids
-    cam_frame_enabled  = "camera.frame_ext"     in enabled_ids
-    cam_stream_enabled = "camera.stream_ext"    in enabled_ids
+    from ..services.api_catalog import refused_for_erp
+    cam_frame_enabled  = "camera.frame_ext"     in enabled_ids and not refused_for_erp("camera.frame_ext")
+    cam_stream_enabled = "camera.stream_ext"    in enabled_ids and not refused_for_erp("camera.stream_ext")
 
     # Berth count per pedestal (user DB)
     user_db = UserSessionLocal()

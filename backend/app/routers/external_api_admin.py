@@ -19,7 +19,7 @@ from ..auth.models import User
 from ..config import settings
 from ..database import get_db
 from ..models.external_api import ExternalApiConfig
-from ..services.api_catalog import ENDPOINT_CATALOG, EVENT_CATALOG
+from ..services.api_catalog import ENDPOINT_CATALOG, EVENT_CATALOG, PHASE1_IMAGE_REFUSAL, refused_for_erp
 from ..time_utils import iso_z
 
 logger = logging.getLogger(__name__)
@@ -118,8 +118,14 @@ def _make_internal_admin_jwt() -> str | None:
 
 @router.get("/catalog")
 def get_catalog(_: User = Depends(require_admin)):
-    """Return the full endpoint and event catalogs."""
-    return {"endpoints": ENDPOINT_CATALOG, "events": EVENT_CATALOG}
+    """Return the full endpoint and event catalogs.
+
+    Each endpoint carries `refused_reason`: a sentence when the ERP may not use it at all (Phase 1,
+    §16.3) — the screen shows that sentence instead of a tickbox — else null.
+    """
+    endpoints = [{**e, "refused_reason": PHASE1_IMAGE_REFUSAL if refused_for_erp(e["id"]) else None}
+                 for e in ENDPOINT_CATALOG]
+    return {"endpoints": endpoints, "events": EVENT_CATALOG}
 
 
 @router.get("/config")
@@ -167,6 +173,9 @@ def update_config(
                 status_code=400,
                 detail=f"Endpoint '{e.id}' is read-only and cannot be set to bidirectional",
             )
+        # Phase 1 (spec §16.3): no image or video to the ERP — refused, not silently dropped.
+        if refused_for_erp(e.id):
+            raise HTTPException(status_code=422, detail=f"{e.id}: {PHASE1_IMAGE_REFUSAL}")
 
     cfg = _get_or_create_config(db)
     cfg.allowed_endpoints    = json.dumps([e.model_dump() for e in body.allowed_endpoints])

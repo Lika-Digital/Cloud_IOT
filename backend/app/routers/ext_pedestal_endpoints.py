@@ -42,6 +42,15 @@ _EP_WATER      = "water.status_ext"        # live-ish water valve totals
 
 # ── Auth + config helpers ─────────────────────────────────────────────────────
 
+def _phase1_refusal(endpoint_id: str):
+    """403 for an endpoint Phase 1 refuses to the ERP (no image, no video — spec §16.3), whatever
+    the stored list says. None when it is not refused."""
+    from ..services.api_catalog import PHASE1_IMAGE_REFUSAL, refused_for_erp
+    if refused_for_erp(endpoint_id):
+        return JSONResponse({"detail": PHASE1_IMAGE_REFUSAL}, status_code=403)
+    return None
+
+
 def _check_ext_auth(request: Request):
     """
     Validate external API Bearer JWT (same logic as gateway router).
@@ -100,8 +109,12 @@ def _check_ext_auth(request: Request):
 
 
 def _endpoint_enabled(endpoint_id: str) -> bool:
-    """Return True if the endpoint ID is in the allowed_endpoints list."""
+    """Return True if the endpoint ID is in the allowed_endpoints list (never for an endpoint
+    Phase 1 refuses to the ERP — spec §16.3)."""
     from ..models.external_api import ExternalApiConfig
+    from ..services.api_catalog import refused_for_erp
+    if refused_for_erp(endpoint_id):
+        return False
 
     db = SessionLocal()
     try:
@@ -390,6 +403,9 @@ async def ext_camera_frame(pedestal_id: str, request: Request):
     _, err = _check_ext_auth(request)
     if err:
         return err
+    refused = _phase1_refusal(_EP_CAM_FRAME)
+    if refused:
+        return refused
 
     if not _endpoint_enabled(_EP_CAM_FRAME):
         return JSONResponse(
@@ -469,6 +485,9 @@ async def ext_camera_stream(pedestal_id: str, request: Request):
     _, err = _check_ext_auth(request)
     if err:
         return err
+    refused = _phase1_refusal(_EP_CAM_STREAM)
+    if refused:
+        return refused
 
     if not _endpoint_enabled(_EP_CAM_STREAM):
         return JSONResponse(

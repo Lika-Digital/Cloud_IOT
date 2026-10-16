@@ -1286,6 +1286,7 @@ fails with the `.xml` moved away and with it corrupted, and the real script on a
 | 17 | Reproduce the `/api/ext/*` 401 — seen so far only on the cabinet | `read -s EXT_KEY` (the gateway key), then `curl -s -w '\n%{http_code}\n' -H "Authorization: Bearer $EXT_KEY" http://localhost/api/ext/pedestals/1/status` | A MEASUREMENT, not pass/fail: record the code and the body. `401` confirms D17; `200` means it does not reproduce after the upgrade | RECORD | ☐ |
 | 17b | **Phase 1: no camera endpoint is allowed to the ERP** (§16.3, owner 2026-10-16 — GDPR) | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3,json;c=sqlite3.connect('file:/opt/cloud-iot/backend/pedestal.db?mode=ro',uri=True);r=c.execute('SELECT allowed_endpoints FROM external_api_config WHERE id=1').fetchone();ids=sorted(e['id'] for e in json.loads(r[0] or '[]')) if r else [];print(len(ids));print(ids);print([i for i in ids if i.startswith('camera.')])"` . **Then the ERP's calls (2026-10-16 it reports calling `camera.frame_ext` and `camera.stream_ext`):** `journalctl -u cloud-iot-backend --since "14 days ago" -o cat \| grep -E 'GET /api/ext/pedestals/[^ ]+/camera/(frame\|stream)' \| grep -oE '" [0-9]{3}' \| sort \| uniq -c` | RECORD the count and the list (the owner states 17 on 2026-10-15). The last line `[]`. The ERP's camera calls: every one `503` (dead calls). **No access lines at all = the access log is off: RECORD as unproven, not as a pass** | A `camera.*` id in the list = an image path to the ERP is open against the Phase 1 decision: tell the owner; it is removed on `/api-gateway` by the owner's decision, not on the pier | ☐ |
 | 17d | **Restore the ERP's list** (§16.3b) — 17b FIRST, then this, then 17b AGAIN | Copy `scripts/fix_gateway_allowed_endpoints.py` from the release; dry run: `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 fix_gateway_allowed_endpoints.py --db /opt/cloud-iot/backend/pedestal.db`; then the same with `--apply --backup /opt/cloud-iot/backend/pedestal.db.pre-gateway-$(date -u +%Y%m%dT%H%M%SZ)`. **And, to answer how 14.10 failed:** `sudo ls -la /var/backups/cloud-iot-erp/ /tmp/krk/ 2>&1; sudo grep -h krk_gateway_config /root/.bash_history /home/*/.bash_history 2>/dev/null` | The dry run lists 23 now and the diff; `--apply` ends with the 17b reading: `17`, the 17 ids, `[]`. RECORD the three listings: a `pedestal-*.db` under `/var/backups/cloud-iot-erp/` = an `--apply` got as far as the backup; none and no history line = it was never run with `--apply` | Any `camera.*` after = STOP, tell the owner. Exit 4 = the row read back differs from the target: restore from the backup (§13.11 procedure) | ☐ |
+| 17e | **After the upgrade: the code refuses camera endpoints to the ERP** (§16.3) | `read -s EXT_KEY` (the gateway key); `for p in pedestals/1/camera/frame pedestals/1/camera/stream camera/1/snapshot; do echo "$p $(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $EXT_KEY" http://localhost/api/ext/$p)"; done`; then on `/api-gateway` as admin: the four camera endpoints | Every line `403`; on the screen the four carry "Camera endpoints are not allowed to the ERP in Phase 1 — owner's decision, GDPR" and no tickbox | `200` on any = the upgrade did not bring this code (§13.2): remove the camera ids with 17d at once, and tell the owner | ☐ |
 | 17c | **What occupancy says on the cabinet today** (§17.5 A — before the fix) | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;c=sqlite3.connect('file:/opt/cloud-iot/backend/data/users.db?mode=ro',uri=True);print([r[1] for r in c.execute('PRAGMA table_info(berths)')]);print(c.execute('SELECT * FROM berths').fetchall())"`; `/opt/cloud-iot/backend/.venv/bin/pip list 2>/dev/null \| grep -ci openvino` | RECORD every berth's occupancy fields and the last analysis time, and the openvino count (`0` expected, G.4). Occupied on a berth seen EMPTY at the time = finding A on the cabinet | RECORD — the fix is §17.5 A, not on the pier | ☐ |
 
 ## 13.9 Migration — the four populations
@@ -1502,8 +1503,18 @@ that decision — the same way the §9 limit is changed (TC-UIR-10); (3) the rel
 says so in its notes, and an admin then enables the endpoints on `/api-gateway`. Never an `.env`
 value, never a flag on the screen: lifting it is a reviewed code change, like any other rule.
 
-**Order (owner, 2026-10-16, after 17b was measured):** this code ban is built in the SAME job as the
-cabinet's list repair (§16.3b), before the guard UI. Negative control: saving a list with
+**BUILT+PROVEN on dev 2026-10-16** (same commit as §16.3b). `test_camera_ban.py` TC-CB-01..07 — all
+eight fail on the code before; mutants caught: no request-time check in the gateway (04), no check
+on saving (02), the frame route without its refusal (03). On the old code TC-CB-04's request was
+PROXIED to the camera route (the hole, reproduced). The existing camera-route tests keep testing
+the routes' own logic behind the ban with an explicit `phase2_images` fixture. The screen:
+`api_gateway.spec.ts` TC-UIG-01/02, both failing on the old page — a refused endpoint has its
+sentence and no tickbox; an older stored list holding one is offered for saving and saved without
+it. **Found on the way:** the dev/e2e proxy matched `'/api'` as a string prefix, so the PAGE
+`/api-gateway` was sent to the backend and never loaded in dev or e2e; now `'/api/'`, as nginx on the
+cabinet (`location /api/`) — production was not affected. **Order (owner, 2026-10-16, after 17b
+was measured):** this code ban is built in the SAME job as the cabinet's list repair (§16.3b),
+before the guard UI. Negative control: saving a list with
 `camera.frame_ext` is refused, and a request to that endpoint with such a list already stored is
 refused.
 
@@ -1551,7 +1562,12 @@ it landed. A change without both is not done.
 
 ### 16.3b Restoring the cabinet's list — `scripts/fix_gateway_allowed_endpoints.py`
 
-**NOT BUILT — this is what gets built, before the guard UI (owner, 2026-10-16).**
+**BUILT+PROVEN on dev 2026-10-16 — to be RUN on the cabinet (§13 17d).** Standard library only, so
+it runs beside the code the cabinet has now (`main`), before the upgrade. `test_fix_gateway_list.py`
+TC-FGW-01..07, on a throwaway database holding the measured 23: with no script 8 of 9 fail (the
+ninth checks the fixture is the 23); mutants caught — `camera.*`/`usage.*` written when targeted
+(07), `--apply` without a backup (02), an id the catalogue lacks written (05). Dry run against
+`main`'s own catalogue: 23 → 17, ADD the five missing, REMOVE the eleven, nothing else.
 
 - **Target:** the 14.10 list — the 17 ids `pedestals.health`, `pedestals.list`,
   `pedestals.status_ext`, `berths.list`, `sessions.active`, `sessions.pending`, `alarms.active`,

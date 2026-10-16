@@ -10,7 +10,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': {
+      // '/api/', with the slash, as nginx on the cabinet (`location /api/`): a bare '/api' is a
+      // string prefix and also caught the PAGE /api-gateway, which then never loaded in dev or e2e.
+      '/api/': {
         target: apiTarget,
         changeOrigin: true,
       },

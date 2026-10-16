@@ -167,7 +167,14 @@ export default function ApiGateway() {
       const [cat, cfg] = await Promise.all([getCatalog(), getConfig()])
       setCatalog(cat)
       setConfig(cfg)
-      setLocalEndpoints(cfg.allowed_endpoints ?? [])
+      // A refused endpoint (Phase 1, no images — spec §16.3) is never kept in the list being
+      // edited: an older stored list may hold one, and saving it back would be refused.
+      const refused = new Set(cat.endpoints.filter((e) => e.refused_reason).map((e) => e.id))
+      const stored = cfg.allowed_endpoints ?? []
+      const kept = stored.filter((e) => !refused.has(e.id))
+      setLocalEndpoints(kept)
+      // A stored list that held one is unsaved work: Save stays available to write it back clean.
+      setEndpointsDirty(kept.length !== stored.length)
       setWebhookEnabled(!!cfg.webhook_url)
       setWebhookUrl(cfg.webhook_url ?? '')
       setLocalEvents(cfg.allowed_events ?? [])
@@ -437,16 +444,25 @@ export default function ApiGateway() {
                     : null
                   return (
                     <div key={ep.id} className="flex items-center gap-3 py-2 border-b border-gray-800 last:border-0">
-                      <input
-                        type="checkbox"
-                        checked={enabled}
-                        onChange={() => toggleEndpoint(ep.id, ep.allow_bidirectional)}
-                        className="w-4 h-4 rounded accent-blue-500"
-                      />
+                      {ep.refused_reason ? (
+                        <span className="w-4 h-4" aria-hidden="true" />
+                      ) : (
+                        <input
+                          type="checkbox"
+                          checked={enabled}
+                          onChange={() => toggleEndpoint(ep.id, ep.allow_bidirectional)}
+                          className="w-4 h-4 rounded accent-blue-500"
+                        />
+                      )}
                       <div className="flex-1 min-w-0">
-                        <span className="text-sm text-gray-300">{ep.id}</span>
+                        <span className={ep.refused_reason ? 'text-sm text-gray-500' : 'text-sm text-gray-300'}>{ep.id}</span>
+                        {ep.refused_reason && (
+                          <span className="ml-2 text-xs text-gray-500 italic" data-testid={`refused-${ep.id}`}>
+                            {ep.refused_reason}
+                          </span>
+                        )}
                         <span className="ml-2 text-xs text-gray-600 font-mono">{ep.method} {ep.path}</span>
-                        {isExtDirect && !enabled && (
+                        {isExtDirect && !enabled && !ep.refused_reason && (
                           <span className="ml-2 text-xs text-yellow-600/80 italic">
                             Function not available — not enabled
                           </span>

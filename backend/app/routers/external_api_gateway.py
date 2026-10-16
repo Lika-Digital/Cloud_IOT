@@ -292,6 +292,17 @@ async def gateway(request: Request, path: str) -> Response:
             matched_mode = allowed_map[ep["id"]]
             break
 
+    # Phase 1 (spec §16.3): an image endpoint is refused even when an older stored list names it.
+    from ..services.api_catalog import PHASE1_IMAGE_REFUSAL, refused_for_erp
+    if matched_ep is not None and refused_for_erp(matched_ep["id"]):
+        _audit("warning", "ext-api/gateway",
+               f"Denied {request.method} /api/{path}: {matched_ep['id']} — Phase 1, no images", request)
+        return Response(
+            content=json.dumps({"detail": PHASE1_IMAGE_REFUSAL}),
+            status_code=403,
+            media_type="application/json",
+        )
+
     if matched_ep is None:
         _audit("warning", "ext-api/gateway",
                f"Denied {request.method} /api/{path}: endpoint not allowed", request)

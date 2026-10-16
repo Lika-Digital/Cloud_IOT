@@ -82,6 +82,20 @@ def _ext_headers() -> dict:
     return {"Authorization": f"Bearer {_make_ext_jwt()}"}
 
 
+# ── Phase 2 readiness ─────────────────────────────────────────────────────────
+
+@pytest.fixture
+def phase2_images(monkeypatch):
+    """The camera routes' own logic, tested as it will run once Phase 2 lifts the ban.
+
+    Since 2026-10-16 (spec §16.3) the code refuses every camera endpoint to the ERP while
+    `PHASE1_NO_IMAGES_TO_ERP` is True — that ban is tested, ON, in test_camera_ban.py. The tests
+    that take this fixture check what the routes do behind the ban (JPEG, 503 reasons, stream URL),
+    so they lift it for their own duration only, explicitly, never for the module.
+    """
+    monkeypatch.setattr("app.services.api_catalog.PHASE1_NO_IMAGES_TO_ERP", False)
+
+
 # ── DB setup helpers ──────────────────────────────────────────────────────────
 
 def _setup_gateway_config(enabled_ep_ids: list[str]) -> None:
@@ -256,7 +270,7 @@ def test_berths_occupancy_null_when_not_analyzed(client):
 # TC-EP-04  Camera frame returns valid JPEG when stream reachable
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_camera_frame_returns_jpeg(client):
+def test_camera_frame_returns_jpeg(client, phase2_images):
     """TC-EP-04  Returns 200 image/jpeg with mock frame bytes."""
     pid = _get_test_pedestal_id()
     _setup_gateway_config(["camera.frame_ext"])
@@ -279,7 +293,7 @@ def test_camera_frame_returns_jpeg(client):
 # TC-EP-05  Camera frame returns 503 when stream unreachable
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_camera_frame_503_when_unreachable(client):
+def test_camera_frame_503_when_unreachable(client, phase2_images):
     """TC-EP-05  Returns 503 with reason when camera_reachable=0."""
     pid = _get_test_pedestal_id()
     _setup_gateway_config(["camera.frame_ext"])
@@ -292,7 +306,7 @@ def test_camera_frame_503_when_unreachable(client):
     assert "Stream unreachable" in data["reason"] or "unreachable" in data["reason"].lower()
 
 
-def test_camera_frame_503_on_grab_failure(client):
+def test_camera_frame_503_on_grab_failure(client, phase2_images):
     """TC-EP-05  Returns 503 with 'Failed to capture' when ffmpeg/grab fails."""
     pid = _get_test_pedestal_id()
     _setup_gateway_config(["camera.frame_ext"])
@@ -313,7 +327,7 @@ def test_camera_frame_503_on_grab_failure(client):
 # TC-EP-06  Camera stream returns RTSP URL and reachable=true
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_camera_stream_returns_url_and_reachable(client):
+def test_camera_stream_returns_url_and_reachable(client, phase2_images):
     """TC-EP-06  Returns 200 with stream_url and reachable=true."""
     pid = _get_test_pedestal_id()
     _setup_gateway_config(["camera.stream_ext"])
@@ -332,7 +346,7 @@ def test_camera_stream_returns_url_and_reachable(client):
 # TC-EP-07  Camera stream returns 503 when no camera configured
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_camera_stream_503_when_not_configured(client):
+def test_camera_stream_503_when_not_configured(client, phase2_images):
     """TC-EP-07  Returns 503 when camera_stream_url is None."""
     pid = _get_test_pedestal_id()
     _setup_gateway_config(["camera.stream_ext"])
@@ -354,7 +368,7 @@ def test_camera_stream_503_when_not_configured(client):
     "camera/frame",
     "camera/stream",
 ])
-def test_returns_503_not_enabled_when_toggled_off(client, path_suffix):
+def test_returns_503_not_enabled_when_toggled_off(client, path_suffix, phase2_images):
     """TC-EP-08  503 with reason='Not enabled' when endpoint ID not in allowed_endpoints."""
     pid = _get_test_pedestal_id()
     # Enable none of the ext endpoints

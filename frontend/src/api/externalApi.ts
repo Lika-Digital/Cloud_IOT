@@ -25,6 +25,8 @@ export interface EndpointCatalogItem {
   method: string
   category: string
   allow_bidirectional: boolean
+  /** A sentence when the ERP may not use this endpoint at all (Phase 1, no images — spec §16.3). */
+  refused_reason?: string | null
 }
 
 export interface EventCatalogItem {

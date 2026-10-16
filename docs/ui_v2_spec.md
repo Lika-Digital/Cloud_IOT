@@ -1971,7 +1971,7 @@ is. It may NOT have `customer_name` — the ERP has its own customer records. Th
 gateway's, not a deleted field); TC-GS-02 with a camera password set, no response of ANY catalogue
 GET endpoint through the gateway, and no `/api/ext` route, contains it — the assertion names the
 endpoint, never the value; TC-GS-03 `sessions.active` through the gateway has `customer_id`,
-`nfc_user_id`, `erp_ref` and no `customer_name`. All fail on the old gateway.
+`nfc_user_id`, `erp_ref` and no `customer_name`. All fail on the old gateway. **BUILT 2026-10-16:** `services/ext_scrub.py`, an ASGI middleware on `/api/ext/` (the gateway and the direct routes): the four keys dropped wherever they occur, and any URL's `user:password@` cut from every string — two layers. All three tests failed on the old gateway (the address passed, the password leaked only through `berths.list`, the name passed); the mutant that lets `camera_stream_url` through is caught by TC-GS-01 (TC-GS-02 still held: the second layer cut the password).
 
 ### 16.3b Restoring the cabinet's list — `scripts/fix_gateway_allowed_endpoints.py`
 

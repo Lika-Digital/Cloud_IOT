@@ -843,6 +843,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(SecurityMiddleware)
+# §16.3d (owner, 2026-10-16): the camera credentials and the customer's name never leave through
+# /api/ext — one filter on every response there, the gateway's and the direct routes' alike.
+from .services.ext_scrub import ExtResponseScrubber  # noqa: E402
+app.add_middleware(ExtResponseScrubber)
 
 
 # ─── Global exception handler ────────────────────────────────────────────────

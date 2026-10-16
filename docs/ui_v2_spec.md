@@ -58,7 +58,8 @@ Evidence is a test, a commit or a path, never a claim.
 |---|---|---|
 | CORE `/api/marina/berths`, berth detail, status sentences and precedence | BUILT+PROVEN | `test_marina_core.py` TC-MC-01..14, `test_marina_core_shape.py` |
 | `outlet_silent` (rank 2.5) | BUILT+PROVEN on dev, cabinet fact pending | block 3, 2026-10-12: a socket is silent when the fresher of its meter telemetry (`meter_load_updated_at`, every 5 s) and its status message (`socket_states.updated_at`) is missing or older than 60 s; the power state is then `unknown`, not `idle`. `test_outlet_silent.py` TC-OS-01..05 (02/03 failed on the code before). That idle sockets really report every 5 s is checked on the cabinet: §13.6b 11i |
-| Guard on `/marina` | BUILT+PROVEN on dev; **owner's decision pending** | block 3, 2026-10-12: `services/guard_state.py` reads `guard.service.effective_state` per pedestal (worst camera wins; desired ARMED + silent worker stays UNAVAILABLE). `test_marina_guard_state.py` TC-MGS-01..06 (01/02/04/05 failed on the code before — every pedestal said "unavailable"). **Open:** a pedestal with NO guard configured (cabinet 1 today) still reads "Guard unavailable" — a fault sentence for something not installed. Whether it should say "No guard on this pedestal" is the owner's call |
+| Guard on `/marina` | BUILT+PROVEN on dev; **owner's decision pending** | block 3, 2026-10-12: `services/guard_state.py` reads `guard.service.effective_state` per pedestal (worst camera wins; desired ARMED + silent worker stays UNAVAILABLE). `test_marina_guard_state.py` TC-MGS-01..06 (01/02/04/05 failed on the code before — every pedestal said "unavailable"). **Decided 2026-10-16 (owner):** "No guard on this pedestal" with no row — superseded by the "Guard UI" row below |
+| **Guard UI — four sentences, arm, a visible alarm, playback** (owner, 2026-10-16) | **NOT BUILT** — spec §5.5 | §5.5.1 sentences, the row created on the worker's announce, re-arm after a worker restart, a missed ack as "not answering"; §5.5.2 Arm / Switch off, admin only (button and API); §5.5.3 rank 7 and `/marina/alarms` from guard events, the legacy `unauthorized_entry` separated; §5.5.4 playback, admin only (button and API). **Open (§5.5.5):** who sees the list and frame, who labels. When the button lands, `guard_operator_runbook.md:3-6` ("no screen, curl") is corrected in the same commit |
 | Row controls (power, water, light) | BUILT+PROVEN on dev 2026-10-15; cabinet 11l | The server decides: each facility carries `action` (on/off/null) and ONE `unavailable_reason` — `no_socket`, `no_contact`, `standalone`, `read_only`, `state_unknown`, `nothing_plugged`, `needs_scan` (`routers/marina.py`, `Gate`/`_offer`). A control is offered only when its endpoint will accept it: "Turn on" power only for a plug waiting (`pending`; with nothing plugged the endpoint 409s), water only with a live NFC reservation (§15), read by a query that does not write. `ControlledLine.tsx`: one sentence per reason, no control element in its place; a confirm before anything that ends a session or switches the shared light ("This light covers berths 1, 2, 3 and 4…"); after a tap it says "Sent" — not "done" — and a refusal shows the server's sentence, a missing answer says it is not known whether it switched. **Two defects fixed by it:** a smart-mode pedestal out of contact said "The pedestal is switching this itself" (`unavailable_reason` was always `standalone`), and a read-only `monitor` got `available: true` for endpoints that 403 it — both shown on the old code. Proof: `test_row_controls.py` TC-RC-01..07 all failed on the old code; TC-RC-06 taps every offered action against its real endpoint (accepted) and both facility refusals (refused), so the offer cannot drift from the endpoint; mutants caught — the reservation read via `get_live_pending`, which writes (TC-RC-04); "Turn on" offered on an idle socket (TC-RC-03, TC-RC-06). `marina.spec.ts` TC-UIRC-01..04 failed on the old pages; TC-UIR-03 is no longer vacuous (TC-UIRC-01 is its positive control). The water 409 now reads as a sentence first (`controls.py`; TC-RC-07). **Open, not fixed here:** `mqtt_client.publish` drops a command when the broker is disconnected and returns nothing, so the endpoint still answers `sent` — and a `stop` completes the DB session while the socket stays on. Changing it changes what the ERP receives: the owner's decision |
 | TC-UIR-01 (no raw colour classes) | BUILT+PROVEN, with exemptions | `test_ui_rule_colours.py` (block 3, 2026-10-12): no status hue (red/green/amber/yellow/orange/emerald/lime/rose on a colour utility) in `pages/marina/**`, `components/marina/**` outside `Status.tsx`, whose exported `TONE` is the only palette. Measured with that pattern: 29 lines, 2 of them in `Status.tsx` (the earlier "32" used a pattern that was not recorded). Fixed now: MarinaGuard, MarinaAlarms, MarinaWater. Exempt per file until block 4: MarinaDashboard, BerthDetail, MarinaSetup — the gate fails when block 4 is marked DONE below while any is still exempt |
 | Block 4 — UI v2 remainder | DONE on dev 2026-10-15; cabinet checks 11k–11p | Row controls, L3 history, nav of 4 (Analytics already out — see the "Block 4 (part)" row below; do not redo), `<PhaseBlock>`, wizard step 3, §9 splits, `/marina` on the websocket — each has its own row. `EXEMPT_UNTIL_BLOCK_4` is empty, so TC-UIR-01c holds. **This row is the deadline of TC-UIR-01's exemptions** — `test_ui_rule_colours.py` reads it; setting it to DONE with exemptions left fails the gate |
@@ -342,17 +343,21 @@ wording stays editable.
 
 ### Guard state mapping — fixed here, written once
 
+*Updated 2026-10-16 (owner): "No guard on this pedestal" and "Guard not answering" — §5.5.1 is
+the full rule. NOT BUILT yet; the code still says "Guard unavailable" for both.*
+
 | Backend | Marina sees |
 |---|---|
+| no `guard_config` row for the pedestal | **No guard on this pedestal** |
 | `ARMED`, `ALARM`, `RECORDING` | **Guard on** |
 | `ARMING` | **Guard on** (brief "starting…") |
-| `OFF` | **Guard off** |
-| `SUSPENDED_CPU`, `NO_DISK`, stalled ring | **Guard paused** + plain reason |
+| `OFF`, worker alive and reporting OFF | **Guard off** |
+| `SUSPENDED_CPU`, stalled ring | **Guard paused** + plain reason (`no_disk` is a flag, not a state — `watchdog.py:50`) |
 | `limited_visibility` while armed | **Guard paused — too dark to see** |
-| `UNAVAILABLE` | **Guard unavailable** |
+| `UNAVAILABLE`, or any desired state with the worker silent, unacknowledged, or reporting OFF while desired ARMED | **Guard not answering** |
 
-**`UNAVAILABLE` must never render as "Guard off".** Off is a decision someone made; unavailable
-is a fault. The entire liveness design — LWT plus heartbeat plus in-memory `worker_seen_at` —
+**`UNAVAILABLE` must never render as "Guard off"** — and since 2026-10-16 neither may a dead
+worker that was switched off. Off is a decision someone made; not answering is a fault. The entire liveness design — LWT plus heartbeat plus in-memory `worker_seen_at` —
 exists to keep those apart, and collapsing them in the UI throws that away at the last step.
 
 ---
@@ -609,9 +614,129 @@ field added to the admin payload appears on the marina screen without anyone dec
 
 ## 5.5 L2 — Guard
 
-Per pedestal, not per berth. Four states from the mapping in §3, event list with annotated
-frame, recording, and the **correct / false alarm** control (`require_any_role`, so it is
-available to whoever is actually looking).
+**Rewritten 2026-10-16 from the owner's answers. NOT BUILT — this is what gets built (§0.2 row
+"Guard UI").** Until 2026-10-16 this section listed an event list, frames, recording and labels
+in one sentence, said nothing of arming, and nothing of it was built: guard was operated by curl.
+
+Per pedestal, not per berth (one camera per pedestal).
+
+```
+┌────────────────────────────────────────────────────────┐
+│  ‹ Back to marina                         GUARD        │
+├────────────────────────────────────────────────────────┤
+│  Pedestal MAR_KRK_ORM_01        ● Guard on             │
+│                                 [ Switch off ]  admin  │
+│                                                        │
+│  Recent                                                │
+│   16 Oct 21:14   Person seen — needs checking          │
+│                  [ ▶ Play recording · 42 s ]   admin   │
+│                  [ Correct ]  [ False alarm ]          │
+│   15 Oct 03:02   Person seen — marked false alarm      │
+│                  Recording deleted after 14 days       │
+└────────────────────────────────────────────────────────┘
+```
+
+### 5.5.1 The sentences — owner, 2026-10-16
+
+| Condition (backend) | Sentence |
+|---|---|
+| No `guard_config` row for any camera of this pedestal | **"No guard on this pedestal"** |
+| A row exists and the worker is not answering — **whatever was switched on or off**: never heard (installed, not started), heartbeat older than the timeout, Last Will received, a command not acknowledged within the ack timeout, **or** desired ARMED while the worker reports OFF | **"Guard not answering"** |
+| Desired ARMED, worker alive and ARMED / ALARM / RECORDING / ARMING | **"Guard on"** |
+| Desired OFF, worker alive and reporting OFF | **"Guard off"** |
+| Desired SUSPENDED_CPU; or `limited_visibility` while armed | **"Guard paused — …"** with its plain reason, as in §3 (unchanged; the owner's four do not remove it) |
+
+**"Not answering" never reads as "off"** (§3). Today it does in two ways, both fixed in the same
+build, because without them that rule is only text:
+
+1. **Re-arm after a worker restart.** A worker that restarts while guard is armed comes up OFF
+   (`guard_worker/__main__.py:305-308`) and nothing sends it the arm again: the backend
+   publishes a command only from the four REST handlers (`guard/router.py:159, 174, 194, 252`).
+   `effective_state` then returns the worker's OFF (`guard/service.py:253`) and `/marina`
+   says "Guard off". The worker's own comment says the announce exists "so the backend can push
+   the desired state" (`__main__.py:305-307`) — the backend half was never written. **Built:**
+   when a worker announces itself (a LIVE state message, not a retained replay) reporting OFF
+   while the desired state is ARMED, the backend sends the arm once; until the worker
+   acknowledges it, the sentence is "Guard not answering". Desired SUSPENDED_CPU is never
+   re-armed this way — a guard the watchdog suspended must not rearm itself by restarting (the
+   same comment).
+2. **A missed acknowledgement.** `check_overdue_acks` only rebroadcasts
+   (`guard/service.py:651-665`) and `effective_state` never looks at pending commands.
+   **Built:** a command not acknowledged within the ack timeout makes the state UNAVAILABLE with
+   reason "the guard worker did not acknowledge", as `guard_b1_design.md:256` already specified.
+
+**The row is created when the worker first announces itself** (owner, 2026-10-16), desired OFF,
+from a LIVE state message only — a retained replay never creates a row (the v3.40 lesson,
+`guard/service.py:22-31`). **The state message does not carry `pedestal_id` today** (only the
+alarm does, `guard_worker/__main__.py:576, 631`; state: `:334-343`), so the worker adds
+`GUARD_PEDESTAL_ID` to it — a worker change, part of this build. Until now
+the row appeared only on the first REST enable or config change (`get_or_create_config`), so a
+freshly installed, running guard read "Guard unavailable" and `/api/guard/status` listed no camera
+(§13.6c F.5 could not pass as written).
+
+### 5.5.2 Arm and switch off — ADMIN ONLY (owner, 2026-10-16)
+
+One button per pedestal on `/marina/guard`: **"Arm"** when the sentence is "Guard off",
+**"Switch off"** when it is "Guard on" or "Guard paused". **No button** with "No guard on this
+pedestal" or "Guard not answering" — there is nothing a tap could do; the sentence stands alone
+(Rule 6: absent, not disabled). After a tap the button says **"Sent"**, and the sentence follows
+the worker's acknowledgement — "Guard on" appears only when the worker confirms (ARMING → ARMED);
+no acknowledgement within the timeout gives "Guard not answering".
+
+**Admin in the button AND in the API**, not only in the menu: the button renders only for admin,
+and `POST /api/guard/{camera_id}/enable | disable | rearm` and `PATCH /api/guard/{camera_id}/config`
+become `require_admin` (today `require_control`, `guard/router.py:146-202`), as smart mode is
+backend-enforced (§4.9). *Derived from the owner's decision that control is admin only, not
+stated by the owner in these words — it is what makes the decision hold for a `monitor_control`
+account with curl.* The ERP's channel is §17, not this role.
+
+### 5.5.3 A guard alarm is visible — owner, 2026-10-16
+
+- **Rank 7 reads guard EVENTS directly**, not the alarm table: a pedestal with any `guard_events`
+  row whose `label` is NULL gives every berth of that pedestal **"Someone was seen — needs
+  checking"** (one camera per pedestal; §5.3 says the events are the cabinet's). Until now rank 7
+  read `active_alarms` rows of type "guard"/"unauthorized" (`routers/marina.py:480-489, 564-571`),
+  which guard never writes — dead text.
+- **`/marina/alarms` lists guard events** beside the other alarms: "Someone was seen — needs
+  checking" while unlabelled (active), and resolved once labelled.
+- **The legacy customer alarm is separated.** `POST /api/customer/alarms/trigger` writes an
+  `active_alarms` row of type `unauthorized_entry` (`customer_alarms.py:15, 45`); today that row
+  turns the berth into "Someone was seen — needs checking" (`routers/marina.py:488-489`), which
+  is not guard. After the build it has no entry in the §3 table, so by §3's own rule it renders
+  as unknown / "Something needs checking" — never the guard sentence.
+
+### 5.5.4 Recording playback — ADMIN ONLY (owner, 2026-10-16: recordings are personal data)
+
+Per event, admin only: **"▶ Play recording · N s"** plays the clip in the page (HTML `<video>`
+from `GET /api/guard/events/{id}/video`). When there is no clip, the row says why in words:
+"No recording — there was no space to record" (`video_skipped`, `no_disk`), "No recording — it
+could not be assembled" (`assembly_failed`), "Recording deleted after 14 days" (410 from the
+endpoint). **The API is admin too:** `GET /api/guard/events/{id}/video` becomes `require_admin`
+(today `require_any_role`, `guard/router.py:288-290`) — a button hidden from staff with the file
+still served to them would be the menu-only rule the owner rejected.
+
+**Cabinet fact, not known from here:** the clip is a stream copy of the camera's own codec
+(`guard_worker/capture.py:252, 313`, `-c:v copy`). If the camera sends H.265, a browser may not
+play it. A §13.6c check added with the build reads the codec of the first real clip; if it is not H.264 the page offers the file as a download
+instead, and that is reported to the owner, not re-encoded on the cabinet.
+
+**Second cabinet fact: can the backend read the clip at all?** The backend runs as `cloud-iot`
+and serves the file; the worker writes it as `guard`. From the code: the installer creates the
+directories with the default mode (`install-guard.sh:87-94`, `mkdir -p`, then
+`chown guard:guard`, no `chmod`) and the unit sets no `UMask` (`cloud-iot-guard.service:24-25`),
+so directories 755 and files 644 — readable by others. **Read from the code, not measured.** The
+guard docs say otherwise (`guard:cloud-iot`, mode 2750 — corrected in the docs commit). The same
+§13.6c check reads it as `cloud-iot`.
+
+### 5.5.5 OPEN — the owner's decision, nothing of it built until answered
+
+1. **Who sees the event list and the annotated frame?** The frame (`/events/{id}/frame`) is a
+   picture of a person — the same class of personal data as the recording. Proposal: staff see
+   the list (time, "Person seen", label state) and no picture; frame and clip admin only.
+2. **Who labels correct / false alarm?** Today any role (`guard/router.py:329-349`,
+   `guard_b1_design.md:443-446`, "whoever is watching the screen"). With the recording admin
+   only, staff would label without seeing what was seen. Proposal: admin only, like the
+   recording. Consequence: an unlabelled event keeps its pedestal at rank 7 until an admin looks.
 
 **DECIDED — notifications stay off.** Your standing instruction: off until you have watched a
 week. **There is no built-and-disabled notification path** that could be switched on by
@@ -745,7 +870,7 @@ Every widget, its source, and what it does when the source is absent.
 | `<FacilityLine>` water | `water{}` | CORE; live from WS `water_reading` | as above |
 | `<SharedNote>` | `shared_with_berths` | CORE | renders nothing when `[]` |
 | `<LightToggle>` | `light{}` | CORE; `POST /api/controls/pedestal/{id}/led` | sentence, no control |
-| `<GuardBadge>` | `guard{}` | CORE, mapped per §3 | **"Guard unavailable"**, never "off" |
+| `<GuardBadge>` | `guard{}` | CORE, mapped per §3 | **"No guard on this pedestal"** with no row; **"Guard not answering"**, never "off", for a silent worker (§5.5.1) |
 | `<AttentionFilter>` | `status`, `status_rank` | client-side over CORE | — |
 | `<BerthDetail>` | one berth + EXTENDED | `GET /api/marina/berths/{id}` | back to L1 with a sentence |
 | `<OutletSpec>` | `rated_amps`, `phases`, `rated_liters_per_min` | `GET /api/nfc/outlets/{cabinet}` | "Not reported by this cabinet yet" |
@@ -754,7 +879,7 @@ Every widget, its source, and what it does when the source is absent.
 | `<ConsumptionHistory>` | interval rows | `GET /api/pedestals/{id}/usage/history` | "No readings yet" |
 | `<VesselMatch>` | `vessel_matches`, photos | existing occupancy endpoints | hidden unless `vessel_match_configured` |
 | `<AlarmList>` | marina-scoped alarms | **new** `GET /api/marina/alarms` | "No alarms" |
-| `<GuardEvents>` | guard events + review control | existing guard endpoints | "No events" |
+| `<GuardEvents>` | guard events; Arm / Switch off; playback; labels (§5.5) | `GET /api/guard/status`, `GET /api/guard/events`, `POST /api/guard/{id}/enable|disable` (admin), `GET /api/guard/events/{id}/video` (admin), `POST /api/guard/events/{id}/label` | "No events" — **NOT BUILT** |
 | `<SetupWizard>` | outlets + current mapping | `GET /api/nfc/outlets/{cabinet}`, `GET/PUT /api/marina/berth-assignments` | step 2 falls back to the canonical six, with the warning |
 
 **DECIDED — live values arrive by websocket; structure arrives by REST.**
@@ -1050,7 +1175,7 @@ in the shell as `TOK=...` and nowhere else; it is never written into this list o
 | 11f | The broadcast without identity | Logged in as that user: DevTools → Network → WS → `/ws` → Messages. Wait for a `session_*` or `water_reading` frame (or plug in on an NFC socket), then search the frames for `customer_id`, `nfc_user_id`, `erp_ref` | Frames arrive; none of the three strings in them. **No session frame in the window = unproven, RECORD it as such — not a pass** | RECORD | ☐ |
 | 11h | Customers, Contracts, report files, reviews, service orders and the berth calendar are admin only | `for u in /api/chat/unread-count /api/contracts/templates /api/admin/contracts /api/pedestals/1/usage/reports /api/admin/reviews/ /api/admin/service-orders/ /api/admin/berths/calendar/1; do echo "$u $(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOK" https://marina2.lika.solutions$u)"; done`; and in the UI as that user: no Billing, Customers or Contracts in the menu, no "Download report" in a socket's usage history | Every line `403` (was `200`); the three menu items and the button absent | RECORD | ☐ |
 | 11i | Idle sockets keep reporting, so `outlet_silent` does not fire on a healthy cabinet (block 3) | With nothing plugged in: `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;c=sqlite3.connect('/opt/cloud-iot/backend/pedestal.db');print(c.execute('SELECT socket_id,meter_load_updated_at FROM socket_configs WHERE pedestal_id=1 ORDER BY 1').fetchall())"`, wait 15 s, run it again; then open `/marina` | Every socket's timestamp moved forward between the two runs (telemetry every 5 s, idle included); no berth row says "This outlet has not reported recently" | RECORD — if an idle socket's timestamp does NOT move, every idle berth will show that sentence: tell the owner before R1; the rule's input, not the rule, is wrong for this firmware | ☐ |
-| 11j | The guard line says what the guard service says (block 3) | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;c=sqlite3.connect('/opt/cloud-iot/backend/pedestal.db');print(c.execute('SELECT camera_id,pedestal_id,desired_state FROM guard_config').fetchall())"`; then `/marina` | No rows (guard not deployed on cabinet 1): the line reads "Guard unavailable", as before — pending the owner's decision on wording. With rows: the line matches `/api/guard/status` for that pedestal (worst camera) | RECORD | ☐ |
+| 11j | The guard line says what the guard service says (block 3) | `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;c=sqlite3.connect('/opt/cloud-iot/backend/pedestal.db');print(c.execute('SELECT camera_id,pedestal_id,desired_state FROM guard_config').fetchall())"`; then `/marina` | No rows (guard not deployed on cabinet 1): before the Guard UI build the line reads "Guard unavailable"; **after it, "No guard on this pedestal"** (§5.5.1). With rows: the line matches `/api/guard/status` for that pedestal (worst camera) | RECORD | ☐ |
 | 11k | **`<PhaseBlock>` on the real three-phase socket** (block 4, 2026-10-15) — only Q1 on cabinet 1 sends `currentAmpsL1..L3`, so only the cabinet proves the block renders from real telemetry | With a session running on Q1 (any load): open the berth assigned to Q1 at `/marina/berth/<id>`, wait ≤ 15 s; then `sudo -u cloud-iot /opt/cloud-iot/backend/.venv/bin/python3 -c "import sqlite3;c=sqlite3.connect('file:/opt/cloud-iot/backend/pedestal.db?mode=ro',uri=True);print(c.execute('SELECT meter_current_l1,meter_current_l2,meter_current_l3,meter_load_updated_at FROM socket_configs WHERE pedestal_id=1 AND socket_id=1').fetchone())"`. **Control:** the same page for a berth on Q3 or Q4 | Q1's berth shows "Phase 1 / 2 / 3" with the three values the query returns (to 2 decimals); the Q3/Q4 berth shows NO phase block. All three query values NULL while Q1 draws = the firmware does not send per-phase keys: the block is correctly absent, RECORD it | RECORD — a block on Q3/Q4, or a phase shown as 0 A where the query has NULL, is a defect: report before R1 | ☐ |
 | 11l | **Row controls do what they offer** (block 4, 2026-10-15) | (a) As a `monitor` account: `/marina` → every Power, water and Light line reads "View only: your account cannot switch outlets" and has NO button. (b) As admin or `monitor_control`, nothing plugged into Q2: its berth says "Nothing is plugged in", no button. (c) Water with no scan: V1 and V2 say "Water opens after the customer scans their card at the valve", no button. (d) Light: tap "Turn off" → the confirm names the berths → Cancel → nothing sent (`journalctl -u cloud-iot-backend --since "2 min ago" -o cat \| grep -c 'opta/cmd/led'` unchanged); then confirm → the LED goes off within ~15 s, and "Turn on" brings it back. (e) Power: plug a test load into a socket in a test session (NOT a customer's) → "Turn on" → it goes active; "Turn off" → confirm → the session ends | Each as written. (d) and (e) change state on the cabinet: do them with the owner present | RECORD — any button on a line whose sentence says it cannot be switched, or a tap the endpoint refuses on the first try, is a defect: report before R1 | ☐ |
 | 11m | **L3 history says what the staff report says** (block 4, 2026-10-15) | As a `monitor`: open a berth on Q4 → History → "‹ Earlier" to 2026-09. Then download "Monthly report (.txt)" for the same month on the same screen | The screen's session count for Q4 equals the report's Q4 rows; each figure and its label (`meter reading` / `estimated…` / `—`) match; the screen's total equals the report's Q4 subtotal, or BOTH say no total. Then V1 → History: same check against the report's V1 section | RECORD — any difference between the screen and the file for the same session is a defect: report before R1 | ☐ |
@@ -1095,7 +1220,7 @@ fails with the `.xml` moved away and with it corrupted, and the real script on a
 | F.2 | The filter as installed | `systemctl show cloud-iot-guard -p IPAddressAllow -p IPAddressDeny` | Allow `127.0.0.0/8 ::1/128 172.18.0.0/16 192.168.1.0/24` (any order), Deny `0.0.0.0/0 ::/0` | STOP guard | ☐ |
 | F.3 | **Blockade or fault?** — the camera and the broker from OUTSIDE the filter, then from INSIDE it | Outside: `timeout 5 bash -c '</dev/tcp/192.168.1.191/554' && echo camera-open`; `timeout 5 bash -c '</dev/tcp/127.0.0.1/1883' && echo broker-open`. Inside the same filter: `sudo systemd-run --wait --pipe -q -p IPAddressDeny=any -p 'IPAddressAllow=127.0.0.0/8 ::1/128 172.18.0.0/16 192.168.1.0/24' bash -c "timeout 5 bash -c '</dev/tcp/192.168.1.191/554' && echo camera-open; timeout 5 bash -c '</dev/tcp/127.0.0.1/1883' && echo broker-open"` (`systemd-run -p` does not take the word `localhost` — measured — hence the prefixes) | Both lines both times | Open outside, closed inside = **the filter**, not the device: do not touch the camera, tell the owner. Closed outside too = the device or the broker — the filter is not the cause | ☐ |
 | F.4 | Start | `sudo systemctl enable --now cloud-iot-guard`; wait 15 s; `systemctl is-active cloud-iot-guard`; `journalctl -u cloud-iot-guard -n 20 --no-pager -o cat \| grep -c 'MQTT connected'` | `active`, `1` or more | Exit 2 = no camera URL (F.1); exit 4 = no instance id (G.5); `cannot reach the MQTT broker` = run F.3 before anything else | ☐ |
-| F.5 | The backend hears ITS worker | Logged in as admin: `/api/guard/status` | The camera's `worker_alive: true`, `state` `OFF` (it starts OFF and waits) | `worker_alive: false` while F.4 passed: the instance ids differ, or the backend was not restarted after G.5 | ☐ |
+| F.5 | The backend hears ITS worker | Logged in as admin: `/api/guard/status` | **Only after the Guard UI build** (the row is created on the worker's announce, §5.5.1): the camera listed, `worker_alive: true`, `state` `OFF` (it starts OFF and waits); `/marina` says "Guard off". **Before that build** the list is EMPTY until the first enable — that is the old code, not a failure; F.5 cannot pass on it as written until 2026-10-16 said | Camera listed with `worker_alive: false` while F.4 passed: the instance ids differ, or the backend was not restarted after G.5 | ☐ |
 | F.6 | The camera password is in no log | `sudo journalctl -u cloud-iot-guard --no-pager \| grep -cF -f <(sudo sed -n 's\|^GUARD_STREAM_URL=rtsp://[^:/@]*:\([^@]*\)@.*\|\1\|p' /opt/cloud-iot/guard/guard.env)` — the password is read into a pipe, never an argument; then the same with `/var/log/cloud-iot/guard-install.log` as the input | `0` both times | STOP guard — record WHERE it appeared, not the value | ☐ |
 
 ## 13.7 Water and D6.1

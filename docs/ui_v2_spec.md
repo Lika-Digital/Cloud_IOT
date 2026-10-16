@@ -59,7 +59,7 @@ Evidence is a test, a commit or a path, never a claim.
 | CORE `/api/marina/berths`, berth detail, status sentences and precedence | BUILT+PROVEN | `test_marina_core.py` TC-MC-01..14, `test_marina_core_shape.py` |
 | `outlet_silent` (rank 2.5) | BUILT+PROVEN on dev, cabinet fact pending | block 3, 2026-10-12: a socket is silent when the fresher of its meter telemetry (`meter_load_updated_at`, every 5 s) and its status message (`socket_states.updated_at`) is missing or older than 60 s; the power state is then `unknown`, not `idle`. `test_outlet_silent.py` TC-OS-01..05 (02/03 failed on the code before). That idle sockets really report every 5 s is checked on the cabinet: §13.6b 11i |
 | Guard on `/marina` | BUILT+PROVEN on dev; **owner's decision pending** | block 3, 2026-10-12: `services/guard_state.py` reads `guard.service.effective_state` per pedestal (worst camera wins; desired ARMED + silent worker stays UNAVAILABLE). `test_marina_guard_state.py` TC-MGS-01..06 (01/02/04/05 failed on the code before — every pedestal said "unavailable"). **Decided 2026-10-16 (owner):** "No guard on this pedestal" with no row — superseded by the "Guard UI" row below |
-| **Guard UI — four sentences, arm, a visible alarm, playback** (owner, 2026-10-16; second order the same day) | **NOT BUILT — spec written, waiting on §5.5.8 Q1–Q3** | §5.5.1 S1..S4 with the 15 s boundary and the 5 s ack, the row created on the worker's announce (REST no longer creates one), the two known faults (worker restart, lost ack); §5.5.2 Arm / Switch off, admin only (button and API, two tests); §5.5.3 rank 7 and `/marina/alarms` from guard events, the legacy `unauthorized_entry` separated; §5.5.4 playback; §5.5.5 list, frame, recording, labels admin only; §5.5.6 "Not measured"; §5.5.7 TC-GU-01..13, each failing on the old code. When the button lands, `guard_operator_runbook.md:3-6` ("no screen, curl") is corrected in the same commit. After `main`: DOC.4 (§13.12) |
+| **Guard UI — four sentences, arm, a visible alarm, playback** (owner, 2026-10-16; second order the same day) | **NOT BUILT — Q1–Q3 answered 2026-10-16; Q4–Q5 open (§5.5.8)** | §5.5.1 S1..S4 with the 15 s boundary and the 5 s ack, the row created on the worker's announce (REST no longer creates one), the two known faults (worker restart, lost ack); §5.5.2 Arm / Switch off, admin only (button and API, two tests); §5.5.3 rank 7 and `/marina/alarms` from guard events, the legacy `unauthorized_entry` separated; §5.5.4 playback; §5.5.5 list, frame, recording, labels admin only; §5.5.6 "Not measured"; §5.5.7 TC-GU-01..16, each failing on the old code; §4.11 smart mode is consumption only (TC-SM-01/02, SM-Q1..Q4 open). When the button lands, `guard_operator_runbook.md:3-6` ("no screen, curl") is corrected in the same commit. After `main`: DOC.4 (§13.12) |
 | Row controls (power, water, light) | BUILT+PROVEN on dev 2026-10-15; cabinet 11l | The server decides: each facility carries `action` (on/off/null) and ONE `unavailable_reason` — `no_socket`, `no_contact`, `standalone`, `read_only`, `state_unknown`, `nothing_plugged`, `needs_scan` (`routers/marina.py`, `Gate`/`_offer`). A control is offered only when its endpoint will accept it: "Turn on" power only for a plug waiting (`pending`; with nothing plugged the endpoint 409s), water only with a live NFC reservation (§15), read by a query that does not write. `ControlledLine.tsx`: one sentence per reason, no control element in its place; a confirm before anything that ends a session or switches the shared light ("This light covers berths 1, 2, 3 and 4…"); after a tap it says "Sent" — not "done" — and a refusal shows the server's sentence, a missing answer says it is not known whether it switched. **Two defects fixed by it:** a smart-mode pedestal out of contact said "The pedestal is switching this itself" (`unavailable_reason` was always `standalone`), and a read-only `monitor` got `available: true` for endpoints that 403 it — both shown on the old code. Proof: `test_row_controls.py` TC-RC-01..07 all failed on the old code; TC-RC-06 taps every offered action against its real endpoint (accepted) and both facility refusals (refused), so the offer cannot drift from the endpoint; mutants caught — the reservation read via `get_live_pending`, which writes (TC-RC-04); "Turn on" offered on an idle socket (TC-RC-03, TC-RC-06). `marina.spec.ts` TC-UIRC-01..04 failed on the old pages; TC-UIR-03 is no longer vacuous (TC-UIRC-01 is its positive control). The water 409 now reads as a sentence first (`controls.py`; TC-RC-07). **Open, not fixed here:** `mqtt_client.publish` drops a command when the broker is disconnected and returns nothing, so the endpoint still answers `sent` — and a `stop` completes the DB session while the socket stays on. Changing it changes what the ERP receives: the owner's decision |
 | TC-UIR-01 (no raw colour classes) | BUILT+PROVEN, with exemptions | `test_ui_rule_colours.py` (block 3, 2026-10-12): no status hue (red/green/amber/yellow/orange/emerald/lime/rose on a colour utility) in `pages/marina/**`, `components/marina/**` outside `Status.tsx`, whose exported `TONE` is the only palette. Measured with that pattern: 29 lines, 2 of them in `Status.tsx` (the earlier "32" used a pattern that was not recorded). Fixed now: MarinaGuard, MarinaAlarms, MarinaWater. Exempt per file until block 4: MarinaDashboard, BerthDetail, MarinaSetup — the gate fails when block 4 is marked DONE below while any is still exempt |
 | Block 4 — UI v2 remainder | DONE on dev 2026-10-15; cabinet checks 11k–11p | Row controls, L3 history, nav of 4 (Analytics already out — see the "Block 4 (part)" row below; do not redo), `<PhaseBlock>`, wizard step 3, §9 splits, `/marina` on the websocket — each has its own row. `EXEMPT_UNTIL_BLOCK_4` is empty, so TC-UIR-01c holds. **This row is the deadline of TC-UIR-01's exemptions** — `test_ui_rule_colours.py` reads it; setting it to DONE with exemptions left fails the gate |
@@ -448,6 +448,83 @@ assumes either.
 ### 4.9 Smart mode is admin-only and backend-enforced
 It does not appear in the wizard, and the endpoint refuses the role regardless of what renders.
 
+### 4.11 Smart mode is consumption only; the camera is security (owner, 2026-10-16)
+
+**DECIDED (owner):** smart mode concerns consumption only — power, water, light, sockets, valves.
+The camera is security. The three camera functions — berth occupancy, the boat-to-photo match, and
+guard — work whatever smart mode says, locally and through the API, and are configured from their
+own menus, never from the smart mode screen. Smart mode itself stays as decided: switched only from
+the admin screen (`POST /api/pedestals/{cabinet_id}/smartmode`, `require_admin`,
+`routers/pedestal_config.py:336-341`).
+
+**Every smart-mode check in the code, read 2026-10-16 (`grep smart_mode` over `backend/app` and
+`frontend/src`):**
+
+| Where | What it forbids with smart mode OFF |
+|---|---|
+| `routers/controls.py:324-339` `_require_smart_mode`, called at `:679` and `:778` | `POST /api/controls/pedestal/{id}/socket/{Q}/cmd` and `…/water/{V}/cmd` → 409 |
+| `routers/external_api_gateway.py:126-142, 169-176, 329-353` | through the gateway, every write in `_CONTROL_PEDESTAL_RESOLVER` → 409: `controls.allow/deny/stop`, `controls.socket_approve/socket_reject`, `controls.socket_cmd/water_cmd`, `controls.reset`, `controls.led`, `diagnostics.run`, `sockets.config_patch`, `valves.config_patch`, `led_schedule.upsert/delete/test` |
+| `routers/ext_breaker_endpoints.py:184-193` | `POST /api/ext/…/breaker/reset` → 409 |
+| `routers/nfc.py:563-564` | an NFC scan is refused |
+| `services/mqtt_handlers.py:586-597` | (OFF only) clears a stale "awaiting activation" marker |
+| `services/mqtt_handlers.py:609`, `:754` | adopting a live electricity / water session the cabinet reports |
+| `services/mqtt_handlers.py:1289, 1323` | with ON, standalone sessions are closed and control handed back; with OFF they are tracked |
+| `services/mqtt_handlers.py:1590` | socket auto-activate |
+| `services/mqtt_handlers.py:1761` | valve auto-open |
+| `services/mqtt_handlers.py:849-863` | not a gate: stores the value the cabinet reports (`smartMode`) |
+| `routers/marina.py:464-511, 549-566`; `services/marina_status.py:138` | the row controls are not offered; the berth reads "This pedestal is running on its own" (rank 2, §3) |
+| `routers/pedestal_config.py:417` | not a gate: `/api/pedestals/health` reports it |
+| `frontend/…/PedestalControlCenter.tsx:277-325, 604-642` | the admin control panel greys socket and valve controls |
+| `frontend/…/PedestalView.tsx:441-450`, `PedestalOverview.tsx:62-65` | admin dashboard badge "Smart Mode: ON/OFF" |
+| `frontend/…/PedestalBlock.tsx:38` | the marina page's standalone line |
+
+**The three camera functions — none is conditioned by smart mode today** (read, not assumed):
+occupancy and match run through `POST /api/admin/berths/{id}/analyze` (`routers/berths.py:393`),
+`services/berth_analyzer.py` (its only skip is `is_rtsp_suspended`, `:244-245`),
+`GET /api/ext/pedestals/{id}/berths/occupancy` (`ext_pedestal_endpoints.py:162`) and
+`POST /api/ext/…/reference-image` (`:225`); guard through `guard/router.py` and the worker. None of
+these files reads `smart_mode`, and none of their ids is in the gateway's resolver, so the gateway's
+gate passes them. **Nothing to remove.** Kept so by TC-SM-01.
+
+**The other direction — consumption commands that are NOT behind the check** (for the owner, not
+changed — §4.11 Q):
+- **Locally (REST, the admin dashboard), with smart mode OFF these are accepted:**
+  `POST /api/controls/{session}/allow`, `/deny`, `/stop` (`controls.py:176, 217, 260` — allow
+  switches the outlet on), `/sockets/{p}/{s}/approve`, `/reject` (`:352, 408` — approve switches
+  on), `/pedestal/{id}/led` (`:479`, light), `/pedestal/{id}/reset` (`:443`, restarts the cabinet),
+  `POST /api/pedestals/{p}/sockets/{s}/breaker/reset` (`routers/breakers.py:218`). The gateway
+  refuses all of them for the ERP; the dashboard does not.
+- **Automatic, no check:** the LED schedule fires `opta/cmd/led` (`services/led_scheduler.py:127`);
+  a plug pulled out sends stop (`mqtt_handlers.py:1887-1912`); a stale pending socket is
+  auto-rejected (`mqtt_handlers.py:4160-4195`).
+- **Gated although not consumption:** `diagnostics.run` through the gateway (it also checks the
+  camera) — 409 for the ERP with smart mode OFF.
+
+**Tests (owner):**
+- **TC-SM-01** — smart mode OFF: occupancy/match (`POST /api/admin/berths/{id}/analyze`,
+  `GET /api/ext/…/berths/occupancy`, `POST /api/ext/…/reference-image` through the direct route and
+  through the gateway) and guard (`/api/guard/status`, enable, disable) answer as with smart mode
+  ON — never 409. It fails if a smart-mode check is added to any of them: shown with a mutant that
+  adds `_require_smart_mode` to the analyze route, and one that adds `berths.push_image_ext` to the
+  gateway's resolver.
+- **TC-SM-02** — smart mode OFF: the socket and valve commands still answer 409, locally and
+  through the gateway — the existing rule, untouched (`test_direct_socket_cmd_409_when_smart_mode_off`
+  and its valve twin are kept; TC-SM-02 adds the gateway path and asserts no `opta/cmd` was sent).
+
+**§4.11 Q — OPEN, for the owner before any change:**
+- **SM-Q1** — "no other view sees it": does that mean the SWITCH (today only the admin control
+  panel has it; `MarinaSetup.tsx:25` says so) — or also the STATE? Today the marina page shows the
+  consequence ("This pedestal is running on its own", §3 rank 2), the admin dashboard shows a badge,
+  and `/api/pedestals/health` — which is in the ERP's list (§16.3b) — carries `smart_mode`. My
+  reading: the switch. If it is the state, §3 rank 2 changes and that touches UI 2.0.
+- **SM-Q2** — "the ERP gets it only if configured as an option through the API": today there is no
+  catalogue id for smart mode at all (`api_catalog.py`), so the ERP cannot switch it; it can READ it
+  through `pedestals.health`. Is reading allowed, or must it become its own id?
+- **SM-Q3** — the consumption commands above that the dashboard accepts with smart mode OFF: put
+  them behind `_require_smart_mode` (409), as socket and valve commands are?
+- **SM-Q4** — `diagnostics.run` is refused to the ERP with smart mode OFF, although it is not
+  consumption: take it out of the gate?
+
 ### 4.10 The simulator — rewritten 2026-10-02
 Deleted 2026-03-15. **Rewritten 2026-10-02** against `opta/*` (`a8386c0`,
 `simulator/pedestal_simulator.py`), tested by `tests/backend/test_simulator.py`. *Corrected
@@ -667,7 +744,20 @@ sentence that is not a guard state at all: the reading itself failed (§5.5.6).
 | S2 | A row exists, and the worker is not answering — **whatever was switched on or off**: no LIVE message from it within **15 s** (below), never heard since the backend started, Last Will received, a command not acknowledged within **5 s**, **or** desired ARMED while the worker reports OFF and no command is waiting for its acknowledgement | **"Guard not answering"** |
 | S3 | A row exists, the worker answers, desired ARMED, worker reports ARMED / ALARM / RECORDING / ARMING, no acknowledgement overdue | **"Guard on"** |
 | S4 | A row exists, the worker answers, desired OFF, worker reports OFF, no acknowledgement overdue | **"Guard off"** |
-| — | Desired SUSPENDED_CPU; or `limited_visibility` while S3 holds | **"Guard paused — …"** — **OPEN, owner (§5.5.8 Q1):** the owner's order names four; this one exists in the code and in §3 today |
+| S5 | A row exists, the worker answers, no acknowledgement overdue, and guard is armed but not looking: desired SUSPENDED_CPU (or the worker reports SUSPENDED_CPU); or S3 holds with `limited_visibility`; or the worker reports a state the backend has no reason for (below) | **"Guard paused — processor overloaded"** / **"Guard paused — too dark to see"** / **"Guard paused — reason not reported"**. Never "Guard paused" alone |
+| — | **OPEN (§5.5.8 Q4):** desired OFF, the worker answers and reports ARMED / ALARM / RECORDING / ARMING, nothing waiting or overdue | not decided — the code keeps today's answer ("Guard off") until the owner decides |
+
+**S5 — DECIDED (owner, 2026-10-16, third message): a fifth sentence, the reason always in it.**
+The owner's reason, for the record: a paused guard is armed and its worker is alive, but it is not
+looking — neither "on" nor "off" is true. The owner gave the sentences in Croatian ("Guard
+pauziran — procesor preopterećen", "— previše tamno", "— razlog nije javljen"); the screens are in
+English, so the strings are the English ones in the table. **"Reason not reported"** is reachable
+only through a state the backend does not know as on, off or a known pause — today `NO_DISK`, which
+the worker never sends (`no_disk` is a flag, `guard_worker/watchdog.py:50`) and which the old code
+rendered as "there is no space to record" (`routers/marina.py:349-351`), or any state a later
+worker adds. With a dead worker, S2 wins over S5: a paused guard whose worker is gone is not
+answering. *Derived, not said by the owner: a `no_disk` flag alone does not pause — detection
+continues without recording (`guard/router.py:303-304`), so it stays S3.*
 
 **The boundary for S2 — 15 seconds, measured from the last LIVE message.** The worker publishes
 `health` every 5 s in every state, OFF included (`guard_worker/__main__.py:95, 719`); the backend
@@ -723,6 +813,25 @@ guard rows (measured 2026-10-15), so nothing there changes meaning.
    acknowledges a later command or reports a state that matches the desired one. While a command
    is waiting and not yet overdue, the sentence is computed from the worker's reported state alone
    and the button says "Sent" (§5.5.2) — so a tap never flashes S2 for the second an ack takes.
+3. **Auto-resume after a CPU suspension — DECIDED (owner, 2026-10-16, third message), and a
+   CORRECTION of the premise I gave the owner.** The rule: a LIVE state ARMED while desired is
+   SUSPENDED_CPU sets desired back to ARMED and the sentence is "Guard on". The owner's reason: the
+   pause was not asked for by a human but by the worker, and the worker lifted it — the last human
+   wish was "on", so this returns to it; the opposite of §5.5.8 Q4, where a human asked for off.
+   Only a LIVE message — a retained or replayed one never lifts a pause (the S1 rule; TC-GU-16
+   fails if an old message does). Every pause and every automatic resume is written to the event
+   list, and `/marina/guard` shows how many automatic resumes are left in 24 h (limit 2,
+   `guard_worker/watchdog.py:65-67`) — otherwise a cabinet that keeps overloading looks healthy
+   while its budget drains. Budget spent and the worker still paused: "Guard paused — processor
+   overloaded", unchanged.
+   **CORRECTION, read from the worker after the question was asked:** I told the owner the worker
+   "resumes watching on its own and reports ARMED". It does not. The watchdog decides to resume
+   (`watchdog.py:444-455`, event `resumed_cpu`, the budget spent) and sets ITS state ARMED, but the
+   worker's loop acts only on `suspended_cpu` (`guard_worker/__main__.py:711-716`): capture stays
+   stopped, the worker's own state stays SUSPENDED_CPU, and that is what it publishes. So today an
+   automatic resume spends the budget and resumes nothing — the "budget drains silently" the owner
+   named is happening already, and the decided rule above never fires. **OPEN (§5.5.8 Q5)** whether
+   the worker is fixed to actually re-arm on `resumed_cpu` in this build.
 
 ### 5.5.2 Arm and switch off — ADMIN ONLY (owner, 2026-10-16)
 
@@ -762,6 +871,9 @@ shown by a mutant that renders the button for every role.
   as unknown / "Something needs checking" — never the guard sentence.
 
 ### 5.5.4 Recording playback — ADMIN ONLY (owner, 2026-10-16: recordings are personal data)
+
+**The list (DECIDED, owner 2026-10-16, third message):** every event retention still keeps
+(14 days), newest first, 50 per page; pauses and automatic resumes in the same list (§5.5.1 item 3).
 
 Per event, admin only: **"▶ Play recording · N s"** plays the clip in the page (HTML `<video>`
 from `GET /api/guard/events/{id}/video`). When there is no clip, the row says why in words:
@@ -819,10 +931,12 @@ the other case: the reading itself did not happen —
 - the backend could not compute the guard state (an exception in `_guard_block`; today that reads
   "Guard unavailable", `routers/marina.py:333-334`) → `state: "not_measured"`, sentence
   **"Not measured"**;
-- the page could not reach the backend → every guard line reads **"Not measured"**; below it, in
-  small text, "Last reading HH:MM — <that sentence>" (§5.5.8 Q3). Today the page keeps showing the
-  old sentence with a banner (`MarinaGuard.tsx:114-120`), so "Guard on" can stand for a reading
-  that failed;
+- the page could not reach the backend → every guard line reads **"Not measured"**, and below it
+  the last reading with its time IN the sentence: **"last seen 15:42: Guard on"** (DECIDED, owner
+  2026-10-16, third message — never the bare "Guard on", or an old state looks like a
+  measurement). No reading since the page opened: "Not measured" alone. No button. Today the page
+  keeps showing the old sentence with a banner (`MarinaGuard.tsx:114-120`), so "Guard on" can
+  stand for a reading that failed;
 - the event list or a count could not be read → **"Not measured"**, never "No events" and never
   `0` — on `/marina/guard`, in `/marina/alarms`, and in the nav badge.
 
@@ -847,22 +961,33 @@ Shown with the old code checked out and with a mutant per fix, as for every test
 | TC-GU-10 | **Alarm from guard events (§5.5.3):** an unlabelled `guard_events` row → rank 7 on every berth of its pedestal and a row in `/marina/alarms`; labelled → resolved; a customer `unauthorized_entry` alarm does NOT give the guard sentence | Rank 7 reads `active_alarms` only; the customer alarm gives the guard sentence |
 | TC-GU-11 | **Admin only, API (§5.5.5):** `/events`, `/events/{id}/frame`, `/events/{id}/video`, `/detections`, `/detections/{id}/frame`, `POST /events/{id}/label` → 403 for `monitor_control` and `monitor`; `/status` 200 for them | All are `require_any_role` |
 | TC-GU-12 | **Playback and labels (e2e):** admin sees the list, plays the clip in `<video>`, marks Correct / False alarm; the three no-clip sentences; staff see neither list nor buttons | None of it exists |
+| TC-GU-14 | **S5** the same way as TC-GU-01..04: each paused sentence exactly for its condition, with its reason; a paused state is never "Guard on" or "Guard off"; never "Guard paused" alone | A suspended guard whose worker died reads "paused" (must be S2); the wording is "the pedestal is busy"; `NO_DISK` has an invented reason |
+| TC-GU-15 | **One state, one answer, two places (owner, third message):** in the same state — the worker-restart state first, then the whole grid — the sentence `GET /api/guard/status` gives for the camera equals the sentence `GET /api/marina/berths` gives for its pedestal, which the page renders verbatim | `/api/guard/status` has no sentence; it says `enabled: true` where the screen says "Guard off" |
+| TC-GU-16 | **A pause is lifted only by a live message:** desired SUSPENDED_CPU, a LIVE state ARMED → desired ARMED, "Guard on", a resume row in the event list; the same message RETAINED → nothing changes | No rule exists; the backend keeps SUSPENDED_CPU either way (fails on the live half) |
 | TC-GU-13 | **Not measured (§5.5.6):** the backend's guard read raising → "Not measured"; the page with the backend unreachable → "Not measured" and no button; the event count unreadable → "Not measured", not 0 | The backend says "Guard unavailable"; the page keeps the old sentence |
 
 The cabinet-only part — the clip's codec, and whether `cloud-iot` can read guard's files — is a
 §13.6c row in the build commit (§5.5.4).
 
-### 5.5.8 OPEN — the owner's answer before the code starts
+### 5.5.8 The owner's answers, and what is still open
 
-- **Q1 — "Guard paused".** The order names four sentences. The code and §3 have a fifth: "Guard
-  paused — the pedestal is busy" (the watchdog suspended guard for CPU) and "Guard paused — too
-  dark to see". Neither is on, off or not answering. **Proposal: keep it as a fifth sentence**,
-  with its own test of the TC-GU-01..04 shape (TC-GU-14). If it is to go, the owner says which of
-  the four each case becomes.
-- **Q2 — how many recent events.** The order says "the last alarms". **Proposal:** every event
-  retention still keeps (14 days), newest first, 50 per page.
-- **Q3 — the page when the server cannot be reached.** **Proposal** as §5.5.6: "Not measured",
-  with the last reading and its time in small text below. The alternative is "Not measured" alone.
+**Answered (owner, 2026-10-16, third message):** Q1 — "Guard paused" stays as S5 with its reason
+in the sentence (§5.5.1). Q2 — 14 days, newest first, 50 per page (§5.5.4). Q3 — "Not measured",
+the last reading below with its time in the sentence (§5.5.6). The rest of §5.5 accepted as
+written, the 15 s boundary, the 404 without a row and the TC-GU-08 mutant included. Added: TC-GU-15
+(the API and the screen give the same sentence).
+
+**OPEN:**
+- **Q4 — switched off, but the worker says it is watching.** Desired OFF, worker alive and
+  reporting ARMED / ALARM / RECORDING / ARMING, no command waiting or overdue. Reachable: a lost
+  switch-off whose overdue mark was then cleared by a backend restart (the mark is in memory).
+  Proposal: "Guard not answering" (reason: it is on although it was switched off), and the backend
+  sends the switch-off once — the mirror of the re-arm. *Asked 2026-10-16; the answer that came back
+  was about smart mode (§4.11); the auto-resume answer calls this case "the opposite, where a human
+  asked for off", which points at the proposal but does not decide it.*
+- **Q5 — auto-resume does not work in the worker** (§5.5.1 item 3, the correction). Fix it in this
+  build (on `resumed_cpu` the worker re-arms capture and reports ARMED, so the decided rule
+  fires), or leave the worker and record that the budget is spent without effect?
 
 ## 5.6 Control-panel wizard — 3 steps, admin, once per pedestal
 

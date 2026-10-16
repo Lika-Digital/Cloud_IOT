@@ -1,9 +1,45 @@
 #!/usr/bin/env bash
-# Installed by scripts/install_git_hooks.sh — edit there, not here, or the change is lost.
+# Tracked hook (core.hooksPath = .githooks, set by scripts/install_git_hooks.sh).
 REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT" || exit 1
+
+# ── Which gate: decided by tests/gate_path.sh, mechanically (owner, 2026-10-16) ──
+# Only .md staged -> the docs-only check; anything else -> the full commit gate. No bypass flag.
+DECISION="$(bash "$REPO_ROOT/tests/gate_path.sh")" || { echo "❌  gate_path.sh failed — commit aborted."; exit 1; }
+GATE_PATH="$(printf '%s\n' "$DECISION" | sed -n 's/^GATE_PATH=//p')"
+GATE_REASON="$(printf '%s\n' "$DECISION" | sed -n 's/^GATE_REASON=//p')"
+DOC_TESTS="$(printf '%s\n' "$DECISION" | sed -n 's/^GATE_DOC_TESTS=//p')"
 
 echo ""
-echo "🔍 Pre-commit: fast gate (pytest + bandit + gap checks)"
+if [ "$GATE_PATH" = "docs" ]; then
+    # A document is not automatically harmless: these tests READ .md files.
+    if [ -z "$DOC_TESTS" ]; then
+        echo "❌  GATE PATH: docs-only, but NO test that reads a .md file was found."
+        echo "    At least TC-UIR-01c reads docs/ui_v2_spec.md — the selection is broken. Commit aborted."
+        exit 1
+    fi
+    PY="backend/.venv/Scripts/python.exe"
+    [ -f "$PY" ] || PY="backend/.venv/bin/python"
+    # shellcheck disable=SC2086
+    N=$("$PY" -m pytest $DOC_TESTS --collect-only -q -p no:cacheprovider 2>/dev/null | grep -c '::')
+    echo "🔍 GATE PATH: ${GATE_REASON} — running ${N} test(s) that read spec files:"
+    for f in $DOC_TESTS; do echo "      $f"; done
+    echo ""
+    # shellcheck disable=SC2086
+    "$PY" -m pytest $DOC_TESTS -q -p no:cacheprovider
+    EXIT_CODE=$?
+    echo ""
+    if [ $EXIT_CODE -ne 0 ] || [ "$N" -eq 0 ]; then
+        echo "❌  Commit aborted — a test that reads the documentation failed (or none ran)."
+        exit 1
+    fi
+    echo "✅  GATE PATH: docs-only — ${N} test(s) that read spec files passed. The full gate did NOT run (no file other than .md changed)."
+    echo ""
+    exit 0
+fi
+
+echo "🔍 GATE PATH: ${GATE_REASON}"
+echo "   Pre-commit: fast gate (pytest + bandit + gap checks)"
 echo ""
 
 GATE_LEVEL=fast bash "$REPO_ROOT/tests/run_tests.sh"
@@ -20,6 +56,6 @@ if [ $EXIT_CODE -ne 0 ]; then
 fi
 
 echo ""
-echo "✅  Fast gate passed — committing."
+echo "✅  Fast gate passed — committing. (GATE PATH: ${GATE_REASON})"
 echo ""
 exit 0

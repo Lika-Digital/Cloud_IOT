@@ -438,6 +438,38 @@ use whatever broker answers on `localhost:1883`. A broker is a protocol peer, so
 still exercises our code — unless it has authentication or ACLs, in which case the failure would
 again describe someone else's setup.
 
+## 18. Which commit gate runs is decided by the hook, from the file list — never by the committer
+
+*The owner's words (2026-10-16):*
+
+> Pravilo mora biti mehaničko, ne tvoja procjena. Odluku donosi hook, ne ti pri svakom commitu.
+
+*Translation by Claude:* the rule must be mechanical, not your judgement; the hook decides, not you
+at each commit.
+
+Five documentation-only commits on 2026-10-16 each ran the ~10-minute commit gate over code nobody
+had touched. Now `tests/gate_path.sh` reads `git diff --cached --name-only --no-renames`: ONLY
+`.md` files → the docs-only check; any other file, or nothing staged → the full commit gate. No
+exceptions, no bypass flag. `--no-renames` because a rename `a.py → a.md` would otherwise list only
+the new name and pass code as documentation.
+
+**A document is not automatically harmless.** Some tests read `.md` files, so the docs-only check
+runs every test file whose source names a `.md` file in a string literal — the same mechanical
+rule each time, so a new test that reads a document joins without anyone listing it. Found
+2026-10-16, searching every test for a `.md` file it opens: ONE test reads one — TC-UIR-01c reads
+the "Block 4" row of `docs/ui_v2_spec.md` §0.2 (`test_ui_rule_colours.py`, run as a whole file, 5
+tests; plus `test_gate_path.py` itself, which names `.md` files in its fixtures). TC-UIR-01's
+exemptions and the §9 size limits are constants in the test, not read from the spec.
+
+The hook prints the path and why: "docs-only: all N changed file(s) are .md — running N test(s)
+that read spec files", or "full gate: N changed file(s) that are not .md: …". A green that hides
+which checks ran is rule 10's failure. **The push gate is unchanged** — always the full gate.
+
+Enforced: `tests/backend/test_gate_path.py` TC-GATE-01..07 stage real files in a throwaway git
+repository and run the real script. TC-GATE-02 is the owner's negative control (one `.md` + one
+`.py` → full gate). Mutants caught: without `--no-renames` (TC-GATE-04), a case-insensitive `.md`
+match (TC-GATE-05), an empty list treated as docs-only (TC-GATE-03); with no script, 6 of 7 fail.
+
 ## Appendix — things that look like over-engineering and are not
 
 One line each on what they prevent, for whoever maintains this next. Each looks like needless

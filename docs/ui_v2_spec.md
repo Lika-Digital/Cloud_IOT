@@ -2350,7 +2350,7 @@ refused (D30).
 
 | # | What | Status |
 |---|---|---|
-| M6 | sub-streams `profile2`/`profile3` | **not measured** — 16.5.1 |
+| M6 | sub-streams `profile2`/`profile3`, and the keyframe interval (16.5.10 §5) | **not measured** — 16.5.1 |
 | M7 | camera privacy masks: supported, how many, sensor-wide or per profile | **not measured** |
 | M8 | uplink cabinet → VPS over Tailscale | **not measured** |
 | M9 | CPU of transcode (only if M6 finds no sub-stream), hardware path | **not measured** |
@@ -2378,6 +2378,105 @@ privacy is about people, and the masks and the framing handle them. Two conseque
 
 **Latency — ANSWERED (owner, 2026-10-16): sub-second is not a requirement. HLS, 8–12 s to the
 phone.** Not to be asked again.
+
+### 16.5.10 THE CONTRACT with the ERP — `camera.live_*` (R35), agreed 2026-10-17
+
+**Source:** the ERP's eight questions, `docs/inputs/pitanja_ormaru_kamera_v1.md` (copied as
+received, `384d343`); my answers; the owner's decisions of 2026-10-17. **[OWNER]** marks what the
+owner changed or added to my answer; everything else is my answer, accepted by the owner. **Where
+this section and 16.5.4 differ, this section holds.** NOT BUILT; the order stays: the upgrade, the
+key, closing the attack surface, R22–R23 and the NFC e2e, then the masks and D32.
+
+**1. Paths, bodies, gateway mode**
+- `POST /api/ext/pedestals/{id}/berths/{bid}/camera/live` `{viewer_ref}` (start) ·
+  `POST /api/ext/pedestals/{id}/camera/live/keepalive` `{viewer_refs: [...]}` ·
+  `POST /api/ext/pedestals/{id}/camera/live/stop` `{viewer_ref}` ·
+  `GET /api/ext/pedestals/{id}/camera/live/status`.
+- **[OWNER] The paths are NOT renamed** to the ERP's `…/camera/live/start`: `{bid}` in the path is
+  what the viewing log needs; the ERP's proposal came with an empty body, which makes the log
+  impossible; cosmetics are not worth a spec change. `{bid}` and `viewer_ref` stay.
+- **[OWNER] Mode: `bidirectional` for start, keepalive and stop; `monitor` for status.** No
+  exception for a POST in monitor mode — it would be the first hole in a rule that holds
+  everywhere today; such holes have already cost us (the gateway list). **Condition:** when
+  bidirectional goes ON, `allowed_endpoints` may hold ONLY these three live POSTs and nothing
+  else that controls; 17b before and after, per §13.0. **Consequence:** Tuesday's read test stays
+  all `monitor`; bidirectional comes only with D32.
+- Smart mode is not a condition (§4.11).
+
+**2. What `live_start` returns; idempotency**
+- `{"state": "starting"|"live", "playlist": "camera/live/index.m3u8", "expires_in_s": <until the
+  stop without a keepalive, ≤ 30, moved by each keepalive>, "remaining_s": <until the 10-minute
+  cap>}` — the playlist path RELATIVE, the ERP rewrites it. Two deadlines, two fields: one number
+  for two deadlines is an ambiguity paid for later.
+- A second `start` on a running camera: **200, the same stream, no restart, and the 10-minute cap
+  does NOT move** (owner, confirmed). The viewing log gets a row for the new `viewer_ref`.
+
+**3. `live_status` — stable keys** (a key may be added, none renamed)
+`starting` · `live` · `stopped_idle` (30 s without a keepalive) · `stopped_limit` (the 10-minute
+cap) · `stopped` (an explicit stop) · `camera_unreachable` · `not_enabled` · `failed` (with
+`reason`, the camera address cut out); plus `started_at`, `remaining_s`, `privacy_mask` (7).
+**`live` is MEASURED — ffmpeg alive and its newest segment fresh — never assumed.**
+
+**4. A new start after the cap; looping**
+- A new `start` straight after `stopped_limit` is allowed.
+- `429` with `Retry-After` is the shape; **[OWNER] `Retry-After: 30`**.
+- **[OWNER] THE RULE: the cabinet NEVER restarts ffmpeg by itself — only on a new `live_start`.**
+  That is the real protection against a loop, not a backoff.
+
+**5. Stream parameters**
+- **[OWNER] The owner's target stands until M6 and M8 measure: 854×480 or 640×360, 15 fps,
+  400–800 kbit/s.** The ERP's 1280×720 at 0.8 Mbit/s is NOT accepted as a fact. No transcoding
+  beyond what the camera gives.
+- M6 also reads the camera's **keyframe interval** (stream copy cannot insert keyframes, so the
+  segment length follows the camera's GOP).
+- H.264 without audio (the camera's `pcm_alaw` dropped); MPEG-TS, fixed; a playlist of 6 segments.
+
+**6. One camera per cabinet** — confirmed from the data model (one `camera_stream_url` per
+pedestal; guard keys the camera by the pedestal); cabinet 1: one camera, 192.168.1.191. No camera →
+`not_enabled`. Cabinet 2's camera is measured when it is installed. **The picture shows every
+berth of the cabinet, and the ERP must tell its user so in that sentence** (D32-Q1).
+
+**7. Privacy masks (R37)**
+- **On the camera, not on the cabinet** (the owner's decision; stricter than the ERP asked: masked
+  before the picture reaches the cabinet).
+- **[OWNER] `privacy_mask` is neither true nor false — it says WHERE WE KNOW IT FROM:**
+  `read_from_camera` | `confirmed_by_admin` (with the date and the admin's name) | `unknown`. A bare
+  `true` hides whether it is a measurement or a claim — the defect hunted since the start.
+  **`unknown` is NEVER read as masked.** Read automatically if M7 shows that ONVIF reports the
+  masks; otherwise an admin's confirmation, recorded.
+- **[OWNER] No stream to anyone — staff included — before the masks.** The masks come before D32
+  and the ban is not lifted while the picture shows people outside the berth: nobody watches before
+  the masks stand and their §13 check has passed. A temporary exception here would become
+  permanent.
+
+**8. Errors**
+- Stable keys in the body, never text: `{"error": "<key>", ...}`.
+- No `409 camera_busy` (one shared stream — a second start does not conflict).
+- One shape for the live routes: `403 not_enabled` (the id not in the gateway list).
+- `503 camera_unreachable`; `429` with `Retry-After: 30`.
+- The playlist and the segments demand the token; nothing running → `404`, **never an empty list
+  with 200** (TC-LV-01).
+- Rule H holds for these routes: a machine credential through the tunnel → `403`.
+
+**The viewing log under the ERP's model — [OWNER] decided with two additions.** The ERP pulls each
+segment once and shares it, and stops only when its last viewer leaves; so `keepalive` carries the
+current `viewer_refs` every 10 s and the cabinet closes the row of every ref that disappeared.
+- **[OWNER] The resolution is 10 s: durations in the log are accurate to ±10 s and must not be read
+  as exact** — part of the log's definition.
+- **[OWNER] If the keepalive stops altogether,** every open row is closed at the time of the stop,
+  with its reason (`heartbeat_lost`, `max_duration`, `stopped`).
+
+**Tests added to 16.5.4a by this contract** (each must fail on the code before the build):
+TC-LV-13 `live_start` answers both deadlines; a second start on a live camera → 200, the same
+process, `remaining_s` not reset · TC-LV-14 `live_status` gives only the keys above (an unknown key
+fails the test); `live` with a dead process or a stale segment fails it · TC-LV-15 after ffmpeg
+exits nothing starts it again until a new `live_start` (by pid, over 2 minutes); a start right
+after a `failed` → `429`, `Retry-After: 30` · TC-LV-16 `privacy_mask` is one of the three sources;
+`unknown` → no stream starts for anyone · TC-LV-17 keepalive lists: a ref that disappears gets its
+row closed within one keepalive; keepalive gone → every open row closed with the stop's reason ·
+TC-LV-18 the three POSTs are `bidirectional` in the catalogue and refused in `monitor`; `status`
+works in `monitor`; a gateway list holding the three live POSTs and any other control id is
+rejected on save.
 
 ## 16.4 Phase 2 — a DIRECTION, NOT a decided architecture; the measurement decides
 

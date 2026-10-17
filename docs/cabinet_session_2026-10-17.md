@@ -282,6 +282,10 @@ Then two read-only D32 measurements (spec §16.5):
   variable, never shown): `read -s CAMURL` (e.g. `rtsp://user:pass@192.168.1.191:554`, no profile),
   then `for p in profile1 profile2 profile3; do echo "== $p"; timeout 15 ffprobe -v error -rtsp_transport tcp -select_streams v:0 -show_entries stream=codec_name,profile,width,height,r_frame_rate,bit_rate -of default=nw=1 "$CAMURL/$p" 2>&1 | sed -E "s#rtsp://[^ ]*#<url>#g" | head -8; done; unset CAMURL`
   → RECORD per profile.
+  **The keyframe interval** (the contract, spec §16.5.10 §5 — stream copy cannot insert keyframes;
+  the camera sends no packet timestamps, measured 2026-09-27, so frames are counted, not timed):
+  `read -s CAMURL`, then `for p in profile1 profile2 profile3; do echo "== $p"; timeout 25 ffprobe -v error -rtsp_transport tcp -select_streams v:0 -show_entries frame=key_frame -of csv=p=0 -read_intervals "%+12" "$CAMURL/$p" 2>/dev/null | awk '$1==1{if(n)print n; n=0} {n++}' | sort | uniq -c | head -5; done; unset CAMURL`
+  → RECORD per profile: the frames between keyframes (the GOP); in seconds = frames ÷ that profile's fps.
 **R1 (§13.10) and §13.7 rows 13/13a do NOT run today** — they need `ERP_API_KEY`, which E.15
 emptied; they run in the NFC e2e session with the new per-cabinet key.
 
